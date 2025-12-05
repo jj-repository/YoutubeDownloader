@@ -1,0 +1,322 @@
+name: Build Executables
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            output_name: YTVidDownloader
+            artifact_name: YTVidDownloader-Linux.tar.gz
+            setup_script: setup.sh
+          - os: windows-latest
+            output_name: YTVidDownloader.exe
+            artifact_name: YTVidDownloader-Windows.zip
+            setup_script: setup.bat
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller yt-dlp
+
+    - name: Build executable (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        pyinstaller --onefile --name YTVidDownloader --windowed downloader.py
+
+    - name: Build executable (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        pyinstaller --onefile --name YTVidDownloader --windowed --icon=NONE downloader.py
+
+    - name: Create release package (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        mkdir -p release
+        cp dist/YTVidDownloader release/
+        cat > release/README.txt << 'EOF'
+        ===================================
+          YTVidDownloader - Quick Start
+        ===================================
+
+        This is a simple YouTube video downloader with quality options.
+
+        SETUP (Only once):
+        ==================
+
+        1. Install required system packages:
+
+           For Arch Linux / Manjaro / CachyOS:
+           -----------------------------------
+           sudo pacman -S ffmpeg yt-dlp
+
+           For Ubuntu / Debian:
+           --------------------
+           sudo apt install ffmpeg yt-dlp
+
+           For Fedora:
+           -----------
+           sudo dnf install ffmpeg yt-dlp
+
+           For other Linux distributions:
+           -------------------------------
+           - Install ffmpeg from your package manager
+           - Install yt-dlp from your package manager or:
+             pip install yt-dlp
+
+        HOW TO RUN:
+        ===========
+
+        Just double-click "YTVidDownloader" or run it from terminal:
+           ./YTVidDownloader
+
+        HOW TO USE:
+        ===========
+
+        1. Paste a YouTube URL in the text field
+        2. Select video quality (240p to 1440p) or choose audio-only
+        3. Click "Download"
+        4. Watch the progress bar
+        5. Files are saved to your Downloads folder by default
+
+        - You can change the save location with the "Change" button
+        - Click "Stop" to cancel a download in progress
+
+        FEATURES:
+        =========
+
+        - Video download in multiple qualities (240p, 360p, 480p, 720p, 1080p, 1440p)
+        - Audio-only extraction in M4A format
+        - Space-efficient encoding (H.264 video, AAC audio)
+        - Real-time download progress
+        - No file size limits
+
+        TROUBLESHOOTING:
+        ================
+
+        If the app doesn't start:
+        - Make sure you installed ffmpeg and yt-dlp (see SETUP above)
+        - Try running from terminal to see error messages
+
+        If downloads fail:
+        - Check your internet connection
+        - Make sure the YouTube URL is valid
+        - Some videos may not be available in all qualities
+
+        Enjoy!
+        EOF
+        cat > release/setup.sh << 'EOF'
+        #!/bin/bash
+
+        echo "=================================="
+        echo "  YTVidDownloader Setup"
+        echo "=================================="
+        echo ""
+
+        # Detect Linux distribution
+        if [ -f /etc/os-release ]; then
+            . /etc/os-release
+            DISTRO=$ID
+        else
+            echo "Cannot detect Linux distribution"
+            DISTRO="unknown"
+        fi
+
+        # Check if ffmpeg is installed
+        if command -v ffmpeg &> /dev/null; then
+            echo "✓ ffmpeg is installed"
+        else
+            echo "✗ ffmpeg is NOT installed"
+            NEED_FFMPEG=1
+        fi
+
+        # Check if yt-dlp is installed
+        if command -v yt-dlp &> /dev/null; then
+            echo "✓ yt-dlp is installed"
+        else
+            echo "✗ yt-dlp is NOT installed"
+            NEED_YTDLP=1
+        fi
+
+        echo ""
+
+        if [ -z "$NEED_FFMPEG" ] && [ -z "$NEED_YTDLP" ]; then
+            echo "All dependencies are installed! You're ready to go."
+            echo ""
+            echo "Run YTVidDownloader with: ./YTVidDownloader"
+            exit 0
+        fi
+
+        echo "Missing dependencies need to be installed."
+        echo ""
+
+        # Provide installation commands based on distro
+        case $DISTRO in
+            arch|manjaro|cachyos|endeavouros)
+                echo "To install missing packages, run:"
+                [ -n "$NEED_FFMPEG" ] && [ -n "$NEED_YTDLP" ] && echo "  sudo pacman -S ffmpeg yt-dlp"
+                [ -n "$NEED_FFMPEG" ] && [ -z "$NEED_YTDLP" ] && echo "  sudo pacman -S ffmpeg"
+                [ -z "$NEED_FFMPEG" ] && [ -n "$NEED_YTDLP" ] && echo "  sudo pacman -S yt-dlp"
+                ;;
+            ubuntu|debian|linuxmint|pop)
+                echo "To install missing packages, run:"
+                [ -n "$NEED_FFMPEG" ] && [ -n "$NEED_YTDLP" ] && echo "  sudo apt install ffmpeg yt-dlp"
+                [ -n "$NEED_FFMPEG" ] && [ -z "$NEED_YTDLP" ] && echo "  sudo apt install ffmpeg"
+                [ -z "$NEED_FFMPEG" ] && [ -n "$NEED_YTDLP" ] && echo "  sudo apt install yt-dlp"
+                ;;
+            fedora|rhel|centos)
+                echo "To install missing packages, run:"
+                [ -n "$NEED_FFMPEG" ] && [ -n "$NEED_YTDLP" ] && echo "  sudo dnf install ffmpeg yt-dlp"
+                [ -n "$NEED_FFMPEG" ] && [ -z "$NEED_YTDLP" ] && echo "  sudo dnf install ffmpeg"
+                [ -z "$NEED_FFMPEG" ] && [ -n "$NEED_YTDLP" ] && echo "  sudo dnf install yt-dlp"
+                ;;
+            *)
+                echo "Your distribution: $DISTRO"
+                echo "Please install the missing packages using your package manager:"
+                [ -n "$NEED_FFMPEG" ] && echo "  - ffmpeg"
+                [ -n "$NEED_YTDLP" ] && echo "  - yt-dlp"
+                ;;
+        esac
+
+        echo ""
+        echo "After installing dependencies, run: ./YTVidDownloader"
+        EOF
+        chmod +x release/setup.sh release/YTVidDownloader
+        tar -czf YTVidDownloader-Linux.tar.gz -C release .
+
+    - name: Create release package (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path release
+        Copy-Item dist\YTVidDownloader.exe release\
+
+        @"
+        ===================================
+          YTVidDownloader - Quick Start
+        ===================================
+
+        This is a simple YouTube video downloader with quality options.
+
+        SETUP (Only once):
+        ==================
+
+        1. Install ffmpeg:
+           - Download from: https://github.com/BtbN/FFmpeg-Builds/releases
+           - Extract ffmpeg.exe to the same folder as YTVidDownloader.exe
+           OR
+           - Install via winget: winget install ffmpeg
+           OR
+           - Install via chocolatey: choco install ffmpeg
+
+        2. Install yt-dlp:
+           - Download from: https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe
+           - Put yt-dlp.exe in the same folder as YTVidDownloader.exe
+           OR
+           - Install via winget: winget install yt-dlp
+           OR
+           - Install via pip: pip install yt-dlp
+
+        HOW TO RUN:
+        ===========
+
+        Just double-click "YTVidDownloader.exe"
+
+        HOW TO USE:
+        ===========
+
+        1. Paste a YouTube URL in the text field
+        2. Select video quality (240p to 1440p) or choose audio-only
+        3. Click "Download"
+        4. Watch the progress bar
+        5. Files are saved to your Downloads folder by default
+
+        - You can change the save location with the "Change" button
+        - Click "Stop" to cancel a download in progress
+
+        FEATURES:
+        =========
+
+        - Video download in multiple qualities (240p, 360p, 480p, 720p, 1080p, 1440p)
+        - Audio-only extraction in M4A format
+        - Space-efficient encoding (H.264 video, AAC audio)
+        - Real-time download progress
+        - No file size limits
+
+        TROUBLESHOOTING:
+        ================
+
+        If the app doesn't start:
+        - Make sure you installed ffmpeg and yt-dlp (see SETUP above)
+        - Windows Defender might block it - click "More info" then "Run anyway"
+
+        If downloads fail:
+        - Check your internet connection
+        - Make sure the YouTube URL is valid
+        - Some videos may not be available in all qualities
+        - Ensure ffmpeg and yt-dlp are in PATH or same folder
+
+        Enjoy!
+        "@ | Out-File -FilePath release\README.txt -Encoding UTF8
+
+        Compress-Archive -Path release\* -DestinationPath YTVidDownloader-Windows.zip
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.os }}-executable
+        path: ${{ matrix.artifact_name }}
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          ubuntu-latest-executable/YTVidDownloader-Linux.tar.gz
+          windows-latest-executable/YTVidDownloader-Windows.zip
+        body: |
+          ## YTVidDownloader ${{ github.ref_name }}
+
+          Multi-platform YouTube video downloader with GUI.
+
+          ### Downloads
+          - **Windows**: Download `YTVidDownloader-Windows.zip`
+          - **Linux**: Download `YTVidDownloader-Linux.tar.gz`
+
+          ### Features
+          - Multiple quality options (240p to 1440p)
+          - Audio-only extraction (M4A/AAC)
+          - Real-time progress bar
+          - Space-efficient encoding
+          - Stop/cancel functionality
+
+          ### Setup
+          See README.txt in the downloaded archive for installation instructions.
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
