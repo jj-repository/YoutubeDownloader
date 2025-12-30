@@ -267,6 +267,27 @@ TRANSLATIONS = {
         # Download timeout messages
         'timeout_download_absolute': 'Download timeout (60 min limit exceeded)',
         'timeout_download_stalled': 'Download stalled (no progress for 10 minutes)',
+
+        # Additional status messages
+        'status_duration_timeout': 'Duration fetch timed out',
+        'status_invalid_duration_format': 'Invalid duration format',
+        'status_duration_fetch_failed': 'Failed to fetch duration',
+        'status_processing_complete': 'Processing complete!',
+        'status_processing_failed': 'Processing failed',
+        'status_processing_local': 'Processing local file...',
+        'status_preparing_download': 'Preparing download...',
+        'status_extracting_audio': 'Extracting audio...',
+        'status_merging': 'Merging video and audio...',
+        'status_processing_ffmpeg': 'Processing with ffmpeg...',
+        'status_post_processing': 'Post-processing...',
+        'status_file_exists': 'File already exists, skipping...',
+        'status_playlist_downloading': 'Downloading playlist...',
+        'status_playlist_complete': 'Playlist download complete!',
+        'status_playlist_failed': 'Playlist download failed',
+        'error_ffmpeg_not_found': 'ffmpeg not found. Please ensure it is installed.',
+        'error_ytdlp_not_found': 'yt-dlp not found. Please ensure it is installed.',
+        'error_failed_clear_history': 'Failed to clear history: {error}',
+        'status_auto_download_stopped': 'Auto-download stopped',
     },
 
     'de': {
@@ -439,6 +460,27 @@ TRANSLATIONS = {
         # Download timeout messages
         'timeout_download_absolute': 'Download-Zeitüberschreitung (60 Min. Limit überschritten)',
         'timeout_download_stalled': 'Download ins Stocken geraten (10 Minuten kein Fortschritt)',
+
+        # Additional status messages
+        'status_duration_timeout': 'Zeitüberschreitung beim Abrufen der Dauer',
+        'status_invalid_duration_format': 'Ungültiges Dauerformat',
+        'status_duration_fetch_failed': 'Dauer konnte nicht abgerufen werden',
+        'status_processing_complete': 'Verarbeitung abgeschlossen!',
+        'status_processing_failed': 'Verarbeitung fehlgeschlagen',
+        'status_processing_local': 'Lokale Datei wird verarbeitet...',
+        'status_preparing_download': 'Download wird vorbereitet...',
+        'status_extracting_audio': 'Audio wird extrahiert...',
+        'status_merging': 'Video und Audio werden zusammengeführt...',
+        'status_processing_ffmpeg': 'Verarbeitung mit ffmpeg...',
+        'status_post_processing': 'Nachbearbeitung...',
+        'status_file_exists': 'Datei existiert bereits, überspringe...',
+        'status_playlist_downloading': 'Playlist wird heruntergeladen...',
+        'status_playlist_complete': 'Playlist-Download abgeschlossen!',
+        'status_playlist_failed': 'Playlist-Download fehlgeschlagen',
+        'error_ffmpeg_not_found': 'ffmpeg nicht gefunden. Bitte stellen Sie sicher, dass es installiert ist.',
+        'error_ytdlp_not_found': 'yt-dlp nicht gefunden. Bitte stellen Sie sicher, dass es installiert ist.',
+        'error_failed_clear_history': 'Verlauf konnte nicht gelöscht werden: {error}',
+        'status_auto_download_stopped': 'Automatischer Download gestoppt',
     },
 
     'pl': {
@@ -611,6 +653,27 @@ TRANSLATIONS = {
         # Download timeout messages
         'timeout_download_absolute': 'Limit czasu pobierania (przekroczono limit 60 min)',
         'timeout_download_stalled': 'Pobieranie wstrzymane (brak postępu przez 10 minut)',
+
+        # Additional status messages
+        'status_duration_timeout': 'Limit czasu pobierania czasu trwania',
+        'status_invalid_duration_format': 'Nieprawidłowy format czasu trwania',
+        'status_duration_fetch_failed': 'Nie udało się pobrać czasu trwania',
+        'status_processing_complete': 'Przetwarzanie zakończone!',
+        'status_processing_failed': 'Przetwarzanie nie powiodło się',
+        'status_processing_local': 'Przetwarzanie pliku lokalnego...',
+        'status_preparing_download': 'Przygotowywanie pobierania...',
+        'status_extracting_audio': 'Wyodrębnianie audio...',
+        'status_merging': 'Łączenie wideo i audio...',
+        'status_processing_ffmpeg': 'Przetwarzanie za pomocą ffmpeg...',
+        'status_post_processing': 'Przetwarzanie końcowe...',
+        'status_file_exists': 'Plik już istnieje, pomijanie...',
+        'status_playlist_downloading': 'Pobieranie playlisty...',
+        'status_playlist_complete': 'Pobieranie playlisty zakończone!',
+        'status_playlist_failed': 'Pobieranie playlisty nie powiodło się',
+        'error_ffmpeg_not_found': 'ffmpeg nie został znaleziony. Upewnij się, że jest zainstalowany.',
+        'error_ytdlp_not_found': 'yt-dlp nie został znaleziony. Upewnij się, że jest zainstalowany.',
+        'error_failed_clear_history': 'Nie udało się wyczyścić historii: {error}',
+        'status_auto_download_stopped': 'Automatyczne pobieranie zatrzymane',
     }
 }
 
@@ -935,7 +998,7 @@ class YouTubeDownloader:
             else:
                 text_widget.insert('1.0', tr('history_empty'))
         except Exception as e:
-            text_widget.insert('1.0', f"Error loading history: {e}")
+            text_widget.insert('1.0', tr('history_load_error', error=str(e)))
 
         text_widget.config(state='disabled')  # Make read-only
 
@@ -958,7 +1021,7 @@ class YouTubeDownloader:
                     text_widget.insert('1.0', tr('history_empty'))
                     text_widget.config(state='disabled')
                 except Exception as e:
-                    messagebox.showerror(tr('error_title'), f"Failed to clear history: {e}")
+                    messagebox.showerror(tr('error_title'), tr('error_failed_clear_history', error=str(e)))
 
         ttk.Button(button_frame, text=tr('btn_copy_all'), command=copy_all).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text=tr('warning_clear_history_title'), command=clear_history).pack(side=tk.LEFT, padx=5)
@@ -2128,7 +2191,7 @@ class YouTubeDownloader:
             stopped = True
             logger.info("Clipboard auto-downloads stopped by user")
         if stopped:
-            self.update_clipboard_status("Downloads stopped by user", "orange")
+            self.update_clipboard_status(tr('status_downloads_stopped'), "orange")
             self.clipboard_stop_btn.config(state='disabled')
 
     def _auto_download_single_url(self, url):
@@ -2163,7 +2226,7 @@ class YouTubeDownloader:
         # Check if stopped during download
         if not self.clipboard_auto_downloading:
             self.root.after(0, lambda: self._update_url_status(url, 'pending'))
-            self.root.after(0, lambda: self.update_clipboard_status("Auto-download stopped", "orange"))
+            self.root.after(0, lambda: self.update_clipboard_status(tr('status_auto_download_stopped'), "orange"))
             return
 
         # Schedule all UI updates and next download in a single callback to ensure order
@@ -2356,7 +2419,7 @@ class YouTubeDownloader:
 
         self.is_fetching_duration = True
         self.fetch_duration_btn.config(state='disabled')
-        self.update_status("Fetching video duration...", "blue")
+        self.update_status(tr('status_fetching_duration'), "blue")
 
         # Submit to thread pool
         self.thread_pool.submit(self.fetch_video_duration, url)
@@ -2421,7 +2484,7 @@ class YouTubeDownloader:
                 # Fetch estimated file size
                 self._fetch_file_size(url)
 
-                self.update_status("Duration fetched successfully", "green")
+                self.update_status(tr('status_duration_fetched'), "green")
 
                 # Trigger initial preview update
                 self.root.after(100, self.update_previews)
@@ -2432,16 +2495,16 @@ class YouTubeDownloader:
         except subprocess.TimeoutExpired:
             error_msg = tr('error_request_timeout')
             messagebox.showerror(tr('error_title'), error_msg)
-            self.update_status("Duration fetch timed out", "red")
+            self.update_status(tr('status_duration_timeout'), "red")
             logger.error("Timeout fetching video duration")
         except ValueError as e:
             error_msg = tr('error_invalid_duration', error=str(e))
             messagebox.showerror(tr('error_title'), error_msg)
-            self.update_status("Invalid duration format", "red")
+            self.update_status(tr('status_invalid_duration_format'), "red")
             logger.error(f"Duration parsing error: {e}")
         except Exception as e:
             messagebox.showerror(tr('error_title'), tr('error_fetch_duration_failed', error=str(e)))
-            self.update_status("Failed to fetch duration", "red")
+            self.update_status(tr('status_duration_fetch_failed'), "red")
             logger.exception(f"Unexpected error fetching duration: {e}")
 
         finally:
@@ -2536,7 +2599,7 @@ class YouTubeDownloader:
                 filepath
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFPROBE_TIMEOUT, check=True)
             duration_seconds = float(result.stdout.strip())
             self.video_duration = int(duration_seconds)
 
@@ -2563,7 +2626,7 @@ class YouTubeDownloader:
             self.video_info_label.config(text=f"File: {video_title}")
             logger.info(f"Local file duration: {self.video_duration}s")
 
-            self.update_status("Duration fetched successfully", "green")
+            self.update_status(tr('status_duration_fetched'), "green")
 
             # Trigger initial preview update
             self.root.after(100, self.update_previews)
@@ -2571,16 +2634,16 @@ class YouTubeDownloader:
         except subprocess.CalledProcessError as e:
             error_msg = tr('error_read_video_failed', error=(e.stderr if e.stderr else str(e)))
             messagebox.showerror(tr('error_title'), error_msg)
-            self.update_status("Failed to read file", "red")
+            self.update_status(tr('error_read_file_failed', error=''), "red")
             logger.error(f"ffprobe error: {e}")
         except ValueError as e:
             error_msg = tr('error_invalid_video_format')
             messagebox.showerror(tr('error_title'), error_msg)
-            self.update_status("Invalid file format", "red")
+            self.update_status(tr('error_invalid_video_format'), "red")
             logger.error(f"Duration parsing error: {e}")
         except Exception as e:
             messagebox.showerror(tr('error_title'), tr('error_read_file_failed', error=str(e)))
-            self.update_status("Failed to read file", "red")
+            self.update_status(tr('error_read_file_failed', error=''), "red")
             logger.exception(f"Unexpected error reading local file: {e}")
         finally:
             self.is_fetching_duration = False
@@ -3075,7 +3138,7 @@ class YouTubeDownloader:
                         '-g',
                         self.current_video_url
                     ]
-                    return subprocess.run(get_url_cmd, capture_output=True, text=True, timeout=15, check=True)
+                    return subprocess.run(get_url_cmd, capture_output=True, text=True, timeout=STREAM_FETCH_TIMEOUT, check=True)
 
                 result = self.retry_network_operation(_get_stream_url, f"Get stream URL for frame at {timestamp}s")
                 video_url = result.stdout.strip().split('\n')[0]
@@ -3091,7 +3154,7 @@ class YouTubeDownloader:
                     '-y',
                     temp_file
                 ]
-                return subprocess.run(cmd, capture_output=True, timeout=15, check=True)
+                return subprocess.run(cmd, capture_output=True, timeout=STREAM_FETCH_TIMEOUT, check=True)
 
             self.retry_network_operation(_extract_frame, f"Extract frame at {timestamp}s")
 
@@ -3442,7 +3505,7 @@ class YouTubeDownloader:
 
             with self.download_lock:
                 self.is_downloading = False
-            self.update_status("Download stopped", "orange")
+            self.update_status(tr('status_download_stopped'), "orange")
             self.download_btn.config(state='normal')
             self.stop_btn.config(state='disabled')
             self.progress['value'] = 0
@@ -3462,12 +3525,12 @@ class YouTubeDownloader:
             trim_enabled = self.trim_enabled_var.get()
             audio_only = (quality == "none")
 
-            self.update_status("Starting download...", "blue")
+            self.update_status(tr('status_starting_download'), "blue")
 
             # Check if trimming is enabled and validate
             if trim_enabled:
                 if self.video_duration <= 0:
-                    self.update_status("Please fetch video duration first", "red")
+                    self.update_status(tr('error_fetch_duration_first'), "red")
                     self.download_btn.config(state='normal')
                     self.stop_btn.config(state='disabled')
                     self.is_downloading = False
@@ -3477,7 +3540,7 @@ class YouTubeDownloader:
                 end_time = int(self.end_time_var.get())
 
                 if start_time >= end_time:
-                    self.update_status("Invalid time range", "red")
+                    self.update_status(tr('error_invalid_time_range'), "red")
                     self.download_btn.config(state='normal')
                     self.stop_btn.config(state='disabled')
                     self.is_downloading = False
@@ -3536,7 +3599,7 @@ class YouTubeDownloader:
                 cmd.append(url)
             else:
                 if quality == "none":
-                    self.update_status("Please select a video quality", "red")
+                    self.update_status(tr('error_select_quality'), "red")
                     self.download_btn.config(state='normal')
                     self.stop_btn.config(state='disabled')
                     self.is_downloading = False
@@ -3645,27 +3708,27 @@ class YouTubeDownloader:
                             self.last_progress_time = time.time()  # Update progress timestamp
                         elif 'Destination' in line:
                             # yt-dlp is starting download
-                            self.update_status("Starting download...", "blue")
+                            self.update_status(tr('status_starting_download'), "blue")
                             self.last_progress_time = time.time()
 
                     # Look for different download phases
                     elif '[info]' in line and 'Downloading' in line:
-                        self.update_status("Preparing download...", "blue")
+                        self.update_status(tr('status_preparing_download'), "blue")
                         self.last_progress_time = time.time()
                     elif '[ExtractAudio]' in line:
-                        self.update_status("Extracting audio...", "blue")
+                        self.update_status(tr('status_extracting_audio'), "blue")
                         self.last_progress_time = time.time()
                     elif '[Merger]' in line or 'Merging' in line:
-                        self.update_status("Merging video and audio...", "blue")
+                        self.update_status(tr('status_merging'), "blue")
                         self.last_progress_time = time.time()
                     elif '[ffmpeg]' in line:
-                        self.update_status("Processing with ffmpeg...", "blue")
+                        self.update_status(tr('status_processing_ffmpeg'), "blue")
                         self.last_progress_time = time.time()
                     elif 'Post-processing' in line or 'Postprocessing' in line:
-                        self.update_status("Post-processing...", "blue")
+                        self.update_status(tr('status_post_processing'), "blue")
                         self.last_progress_time = time.time()
                     elif 'has already been downloaded' in line:
-                        self.update_status("File already exists, skipping...", "orange")
+                        self.update_status(tr('status_file_exists'), "orange")
                         self.last_progress_time = time.time()
             except (BrokenPipeError, IOError) as e:
                 if self.is_downloading:
@@ -3676,7 +3739,7 @@ class YouTubeDownloader:
 
             if self.current_process.returncode == 0 and self.is_downloading:
                 self.update_progress(100)
-                self.update_status("Download complete!", "green")
+                self.update_status(tr('status_download_complete'), "green")
                 logger.info(f"Download completed successfully: {url}")
 
                 # Enable upload button with the most recent file
@@ -3684,7 +3747,7 @@ class YouTubeDownloader:
                 self._enable_upload_button(latest_file)
 
             elif self.is_downloading:
-                self.update_status("Download failed", "red")
+                self.update_status(tr('status_download_failed'), "red")
                 logger.error(f"Download failed with return code {self.current_process.returncode}")
 
         except FileNotFoundError as e:
@@ -3720,12 +3783,12 @@ class YouTubeDownloader:
             trim_enabled = self.trim_enabled_var.get()
             audio_only = (quality == "none")
 
-            self.update_status("Processing local file...", "blue")
+            self.update_status(tr('status_processing_local'), "blue")
 
             # Validate trimming
             if trim_enabled:
                 if self.video_duration <= 0:
-                    self.update_status("Please fetch video duration first", "red")
+                    self.update_status(tr('error_fetch_duration_first'), "red")
                     self.download_btn.config(state='normal')
                     self.stop_btn.config(state='disabled')
                     self.is_downloading = False
@@ -3735,7 +3798,7 @@ class YouTubeDownloader:
                 end_time = int(self.end_time_var.get())
 
                 if start_time >= end_time:
-                    self.update_status("Invalid time range", "red")
+                    self.update_status(tr('error_invalid_time_range'), "red")
                     self.download_btn.config(state='normal')
                     self.stop_btn.config(state='disabled')
                     self.is_downloading = False
@@ -3781,7 +3844,7 @@ class YouTubeDownloader:
             else:
                 # Video processing
                 if quality == "none":
-                    self.update_status("Please select a video quality", "red")
+                    self.update_status(tr('error_select_quality'), "red")
                     self.download_btn.config(state='normal')
                     self.stop_btn.config(state='disabled')
                     self.is_downloading = False
@@ -3833,7 +3896,7 @@ class YouTubeDownloader:
 
             if self.current_process.returncode == 0 and self.is_downloading:
                 self.update_progress(100)
-                self.update_status("Processing complete!", "green")
+                self.update_status(tr('status_processing_complete'), "green")
                 logger.info(f"Local file processed: {output_file}")
 
                 # Enable upload button
@@ -3841,12 +3904,12 @@ class YouTubeDownloader:
 
             elif self.is_downloading:
                 stderr = self.current_process.stderr.read() if self.current_process.stderr else ""
-                self.update_status("Processing failed", "red")
+                self.update_status(tr('status_processing_failed'), "red")
                 logger.error(f"ffmpeg failed: {stderr}")
 
         except FileNotFoundError as e:
             if self.is_downloading:
-                self.update_status("ffmpeg not found. Please ensure it is installed.", "red")
+                self.update_status(tr('error_ffmpeg_not_found'), "red")
                 logger.error(f"ffmpeg not found: {e}")
         except Exception as e:
             if self.is_downloading:
@@ -3874,7 +3937,7 @@ class YouTubeDownloader:
                 # Use default: index-title format
                 output_template = '%(playlist_index)s-%(title)s.%(ext)s'
 
-            self.update_status("Downloading playlist...", "blue")
+            self.update_status(tr('status_playlist_downloading'), "blue")
             logger.info(f"Starting playlist download: {url}")
 
             if audio_only:
@@ -3905,7 +3968,7 @@ class YouTubeDownloader:
             else:
                 # Video playlist
                 if quality == "none":
-                    self.update_status("Please select a video quality", "red")
+                    self.update_status(tr('error_select_quality'), "red")
                     self.download_btn.config(state='normal')
                     self.stop_btn.config(state='disabled')
                     self.is_downloading = False
@@ -3965,7 +4028,7 @@ class YouTubeDownloader:
                             if 'Downloading item' in line:
                                 self.update_status(line.strip(), "blue")
                             else:
-                                self.update_status(f"Downloading playlist... {progress:.1f}%", "blue")
+                                self.update_status(tr('status_downloading_playlist', progress=f"{progress:.1f}"), "blue")
                     except (ValueError, AttributeError):
                         pass
 
@@ -3973,16 +4036,16 @@ class YouTubeDownloader:
 
             if self.current_process.returncode == 0 and self.is_downloading:
                 self.update_progress(100)
-                self.update_status("Playlist download complete!", "green")
+                self.update_status(tr('status_playlist_complete'), "green")
                 logger.info(f"Playlist downloaded successfully: {url}")
                 # Note: Upload is disabled for playlists
             elif self.is_downloading:
-                self.update_status("Playlist download failed", "red")
+                self.update_status(tr('status_playlist_failed'), "red")
                 logger.error(f"Playlist download failed with return code {self.current_process.returncode}")
 
         except FileNotFoundError as e:
             if self.is_downloading:
-                self.update_status("yt-dlp not found. Please ensure it is installed.", "red")
+                self.update_status(tr('error_ytdlp_not_found'), "red")
                 logger.error(f"yt-dlp not found: {e}")
         except Exception as e:
             if self.is_downloading:
