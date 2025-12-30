@@ -90,6 +90,547 @@ CLIPBOARD_URL_LIST_HEIGHT = 12  # Height for clipboard URL list (reduced from 20
 # File paths for persistence
 UPLOAD_HISTORY_FILE = Path.home() / ".youtubedownloader" / "upload_history.txt"
 CLIPBOARD_URLS_FILE = Path.home() / ".youtubedownloader" / "clipboard_urls.json"
+CONFIG_FILE = Path.home() / ".youtubedownloader" / "config.json"
+
+# Internationalization (i18n) - Multi-language support
+CURRENT_LANGUAGE = 'en'  # Default language
+
+# Translation strings for English, German, and Polish
+TRANSLATIONS = {
+    'en': {
+        # Window & Language
+        'window_title': 'YoutubeDownloader',
+        'language': 'Language',
+        'info_language_changed_title': 'Language Changed',
+        'info_language_changed_msg': 'Language has been changed. Please restart the application for changes to take effect.',
+
+        # Tabs
+        'tab_trimmer': 'Trimmer',
+        'tab_clipboard': 'Clipboard Mode',
+        'tab_uploader': 'Uploader',
+
+        # Common buttons
+        'btn_download': 'Download',
+        'btn_stop': 'Stop',
+        'btn_browse': 'Browse',
+        'btn_change': 'Change',
+        'btn_open_folder': 'Open Folder',
+        'btn_upload': 'Upload to Catbox.moe',
+        'btn_copy_url': 'Copy URL',
+        'btn_clear_all': 'Clear All',
+        'btn_add_files': 'Add Files',
+        'btn_close': 'Close',
+        'btn_copy_all': 'Copy All',
+
+        # Trimmer tab
+        'label_youtube_url': 'YouTube URL or Local File:',
+        'btn_browse_local': 'Browse Local File',
+        'label_video_quality': 'Video Quality:',
+        'quality_audio_only': 'none (Audio only)',
+        'label_trim_video': 'Trim Video:',
+        'label_volume': 'Volume:',
+        'btn_reset_volume': 'Reset to 100%',
+        'checkbox_enable_trimming': 'Enable video trimming',
+        'btn_fetch_duration': 'Fetch Video Duration',
+        'label_start_time': 'Start Time:',
+        'label_end_time': 'End Time:',
+        'label_preview': 'Preview',
+        'label_loading': 'Loading...',
+        'label_error': 'Error',
+        'label_selected_duration': 'Selected Duration: 00:00:00',
+        'label_save_to': 'Save to:',
+        'label_output_filename': 'Output filename:',
+        'hint_filename': '(Optional - leave empty for auto-generated name)',
+        'label_upload_section': 'Upload to Streaming Site:',
+        'btn_view_history': 'View Upload History',
+        'checkbox_auto_upload': 'Auto-upload after download/trim completes',
+        'label_upload_url': 'Upload URL:',
+        'label_mode_local': 'Mode: Local File | {filename}',
+        'label_mode_youtube': 'Mode: YouTube Download',
+
+        # Clipboard Mode tab
+        'header_clipboard_mode': 'Clipboard Mode',
+        'desc_clipboard_mode': 'Copy YouTube URLs (Ctrl+C) to automatically detect and download them.',
+        'label_download_mode': 'Download Mode:',
+        'checkbox_auto_download': 'Auto-download (starts immediately)',
+        'header_settings': 'Settings',
+        'label_quality': 'Quality:',
+        'label_detected_urls': 'Detected URLs',
+        'label_url_count': '({count} URL{s})',
+        'btn_download_all': 'Download All',
+        'label_current_download': 'Current Download:',
+        'label_completed_total': 'Completed: {done}/{total} videos',
+
+        # Uploader tab
+        'header_upload_file': 'Upload Local File',
+        'desc_upload_file': 'Upload local video files to Catbox.moe streaming service.',
+        'label_file_queue': 'File Queue:',
+        'label_file_count': '({count} file{s})',
+
+        # Status messages
+        'status_ready': 'Ready',
+        'status_fetching_duration': 'Fetching video duration...',
+        'status_duration_fetched': 'Duration fetched successfully',
+        'status_starting_download': 'Starting download...',
+        'status_downloading': 'Downloading... {progress}%',
+        'status_download_complete': 'Download complete!',
+        'status_download_stopped': 'Download stopped',
+        'status_download_failed': 'Download failed',
+        'status_processing': 'Processing... {progress}%',
+        'status_uploading': 'Uploading...',
+        'status_upload_complete': 'Upload complete!',
+        'status_upload_failed': 'Upload failed',
+        'status_url_copied': 'URL copied to clipboard!',
+        'status_all_downloads_complete': 'All downloads complete! ({count} videos)',
+        'status_completed_failed': 'Completed: {completed} | Failed: {failed}',
+        'status_downloads_stopped': 'Downloads stopped by user',
+        'status_all_uploads_complete': 'All uploads complete! ({count} files)',
+        'status_preparing_download': 'Preparing download...',
+        'status_extracting_audio': 'Extracting audio...',
+        'status_merging': 'Merging video and audio...',
+        'status_processing_ffmpeg': 'Processing with ffmpeg...',
+        'status_post_processing': 'Post-processing...',
+        'status_file_exists': 'File already exists, skipping...',
+        'status_downloading_playlist': 'Downloading playlist... {progress}%',
+        'status_processing_local': 'Processing local file...',
+        'status_auto_downloading': 'Auto-downloading: {url}...',
+        'status_auto_download_complete': 'Auto-download complete: {url}...',
+        'status_auto_download_failed': 'Auto-download failed: {url}...',
+        'status_uploading_file': 'Uploading {current}/{total}: {filename}...',
+
+        # Error messages
+        'error_title': 'Error',
+        'error_enter_url': 'Please enter a YouTube URL or select a local file',
+        'error_file_not_found': 'File not found:\n{path}',
+        'error_invalid_url': 'Invalid URL',
+        'error_not_youtube_url': 'Not a YouTube URL. Please enter a valid YouTube link.',
+        'error_invalid_youtube_short': 'Invalid YouTube short URL',
+        'error_valid_youtube_url': 'Valid YouTube URL',
+        'error_valid_youtube_shorts': 'Valid YouTube Shorts URL',
+        'error_valid_youtube_embed': 'Valid YouTube embed URL',
+        'error_valid_youtube_playlist': 'Valid YouTube Playlist URL',
+        'error_unrecognized_youtube': 'Unrecognized YouTube URL format',
+        'error_missing_video_id': 'Missing video ID in URL',
+        'error_invalid_url_format': 'Invalid URL format',
+        'error_url_empty': 'URL is empty',
+        'error_missing_dependencies': 'yt-dlp or ffmpeg is not installed.\n\nInstall with:\npip install yt-dlp\n\nand install ffmpeg from your package manager',
+        'error_no_file_to_upload': 'No file available to upload. Please download/process a video first.',
+        'error_file_too_large_title': 'File Too Large',
+        'error_file_too_large': 'File size ({size} MB) exceeds Catbox.moe\'s 200MB limit.\nPlease trim the video or use a lower quality setting.',
+        'error_request_timeout': 'Request timed out. Please check your internet connection.',
+        'error_invalid_duration': 'Invalid duration format received: {error}',
+        'error_fetch_duration_failed': 'Failed to fetch video duration:\n{error}',
+        'error_read_video_failed': 'Failed to read video file:\n{error}',
+        'error_invalid_video_format': 'Invalid video file format',
+        'error_read_file_failed': 'Failed to read file:\n{error}',
+        'error_path_not_exist': 'Path does not exist: {path}',
+        'error_path_not_directory': 'Path is not a directory: {path}',
+        'error_path_not_writable': 'Path is not writable:\n{path}\n\n{error}',
+        'error_failed_open_folder': 'Failed to open folder:\n{error}',
+        'error_select_quality': 'Please select a video quality',
+        'error_fetch_duration_first': 'Please fetch video duration first',
+        'error_invalid_time_range': 'Invalid time range',
+
+        # Info messages
+        'info_copied': 'Copied',
+        'info_history_copied': 'History copied to clipboard!',
+        'info_upload_complete_title': 'Upload Complete',
+        'info_upload_complete': 'File uploaded successfully!\n\nURL: {url}\n\nThe URL has been copied to your clipboard.',
+        'info_upload_failed_title': 'Upload Failed',
+        'info_upload_failed': 'Failed to upload file:\n\n{error}',
+        'info_skipped_file': 'Skipped: {filename}\nFile size ({size} MB) exceeds 200MB limit.',
+
+        # Warning messages
+        'warning_clear_history_title': 'Clear History',
+        'warning_clear_history': 'Are you sure you want to clear all upload history?',
+        'warning_cannot_clear_title': 'Cannot Clear',
+        'warning_cannot_clear_downloading': 'Cannot clear URLs while downloads are in progress.',
+        'warning_cannot_clear_uploading': 'Cannot clear queue while uploads are in progress.',
+        'warning_no_urls_title': 'No URLs',
+        'warning_no_urls': 'No pending URLs to download.',
+        'warning_no_files_title': 'No Files',
+        'warning_no_files': 'No files in queue. Please add files first.',
+        'warning_playlist_detected': 'Playlist detected - Trimming and upload disabled for playlists',
+
+        # History window
+        'window_history_title': 'Upload Link History',
+        'history_empty': 'No upload history yet.',
+        'history_load_error': 'Error loading history: {error}',
+
+        # File dialogs
+        'dialog_select_video_files': 'Select Video Files',
+        'dialog_video_files': 'Video files',
+        'dialog_audio_files': 'Audio files',
+        'dialog_all_files': 'All files',
+        'dialog_select_video': 'Select a video file',
+
+        # Download timeout messages
+        'timeout_download_absolute': 'Download timeout (60 min limit exceeded)',
+        'timeout_download_stalled': 'Download stalled (no progress for 10 minutes)',
+    },
+
+    'de': {
+        # Window & Language
+        'window_title': 'YoutubeDownloader',
+        'language': 'Sprache',
+        'info_language_changed_title': 'Sprache geändert',
+        'info_language_changed_msg': 'Die Sprache wurde geändert. Bitte starten Sie die Anwendung neu, damit die Änderungen wirksam werden.',
+
+        # Tabs
+        'tab_trimmer': 'Trimmer',
+        'tab_clipboard': 'Zwischenablage-Modus',
+        'tab_uploader': 'Uploader',
+
+        # Common buttons
+        'btn_download': 'Herunterladen',
+        'btn_stop': 'Stopp',
+        'btn_browse': 'Durchsuchen',
+        'btn_change': 'Ändern',
+        'btn_open_folder': 'Ordner öffnen',
+        'btn_upload': 'Auf Catbox.moe hochladen',
+        'btn_copy_url': 'URL kopieren',
+        'btn_clear_all': 'Alles löschen',
+        'btn_add_files': 'Dateien hinzufügen',
+        'btn_close': 'Schließen',
+        'btn_copy_all': 'Alles kopieren',
+
+        # Trimmer tab
+        'label_youtube_url': 'YouTube URL oder lokale Datei:',
+        'btn_browse_local': 'Lokale Datei durchsuchen',
+        'label_video_quality': 'Videoqualität:',
+        'quality_audio_only': 'keine (Nur Audio)',
+        'label_trim_video': 'Video zuschneiden:',
+        'label_volume': 'Lautstärke:',
+        'btn_reset_volume': 'Auf 100% zurücksetzen',
+        'checkbox_enable_trimming': 'Videozuschnitt aktivieren',
+        'btn_fetch_duration': 'Videodauer abrufen',
+        'label_start_time': 'Startzeit:',
+        'label_end_time': 'Endzeit:',
+        'label_preview': 'Vorschau',
+        'label_loading': 'Laden...',
+        'label_error': 'Fehler',
+        'label_selected_duration': 'Ausgewählte Dauer: 00:00:00',
+        'label_save_to': 'Speichern unter:',
+        'label_output_filename': 'Ausgabedateiname:',
+        'hint_filename': '(Optional - leer lassen für automatisch generierten Namen)',
+        'label_upload_section': 'Auf Streaming-Seite hochladen:',
+        'btn_view_history': 'Upload-Verlauf anzeigen',
+        'checkbox_auto_upload': 'Automatischer Upload nach Download/Zuschnitt',
+        'label_upload_url': 'Upload URL:',
+        'label_mode_local': 'Modus: Lokale Datei | {filename}',
+        'label_mode_youtube': 'Modus: YouTube Download',
+
+        # Clipboard Mode tab
+        'header_clipboard_mode': 'Zwischenablage-Modus',
+        'desc_clipboard_mode': 'YouTube URLs kopieren (Strg+C), um sie automatisch zu erkennen und herunterzuladen.',
+        'label_download_mode': 'Download-Modus:',
+        'checkbox_auto_download': 'Automatischer Download (startet sofort)',
+        'header_settings': 'Einstellungen',
+        'label_quality': 'Qualität:',
+        'label_detected_urls': 'Erkannte URLs',
+        'label_url_count': '({count} URL{s})',
+        'btn_download_all': 'Alle herunterladen',
+        'label_current_download': 'Aktueller Download:',
+        'label_completed_total': 'Abgeschlossen: {done}/{total} Videos',
+
+        # Uploader tab
+        'header_upload_file': 'Lokale Datei hochladen',
+        'desc_upload_file': 'Lokale Videodateien auf Catbox.moe-Streaming-Dienst hochladen.',
+        'label_file_queue': 'Dateiwarteschlange:',
+        'label_file_count': '({count} Datei{s})',
+
+        # Status messages
+        'status_ready': 'Bereit',
+        'status_fetching_duration': 'Videodauer wird abgerufen...',
+        'status_duration_fetched': 'Dauer erfolgreich abgerufen',
+        'status_starting_download': 'Download wird gestartet...',
+        'status_downloading': 'Herunterladen... {progress}%',
+        'status_download_complete': 'Download abgeschlossen!',
+        'status_download_stopped': 'Download gestoppt',
+        'status_download_failed': 'Download fehlgeschlagen',
+        'status_processing': 'Verarbeitung... {progress}%',
+        'status_uploading': 'Hochladen...',
+        'status_upload_complete': 'Upload abgeschlossen!',
+        'status_upload_failed': 'Upload fehlgeschlagen',
+        'status_url_copied': 'URL in Zwischenablage kopiert!',
+        'status_all_downloads_complete': 'Alle Downloads abgeschlossen! ({count} Videos)',
+        'status_completed_failed': 'Abgeschlossen: {completed} | Fehlgeschlagen: {failed}',
+        'status_downloads_stopped': 'Downloads vom Benutzer gestoppt',
+        'status_all_uploads_complete': 'Alle Uploads abgeschlossen! ({count} Dateien)',
+        'status_preparing_download': 'Download wird vorbereitet...',
+        'status_extracting_audio': 'Audio wird extrahiert...',
+        'status_merging': 'Video und Audio werden zusammengeführt...',
+        'status_processing_ffmpeg': 'Verarbeitung mit ffmpeg...',
+        'status_post_processing': 'Nachbearbeitung...',
+        'status_file_exists': 'Datei existiert bereits, überspringe...',
+        'status_downloading_playlist': 'Playlist wird heruntergeladen... {progress}%',
+        'status_processing_local': 'Lokale Datei wird verarbeitet...',
+        'status_auto_downloading': 'Automatischer Download: {url}...',
+        'status_auto_download_complete': 'Automatischer Download abgeschlossen: {url}...',
+        'status_auto_download_failed': 'Automatischer Download fehlgeschlagen: {url}...',
+        'status_uploading_file': 'Hochladen {current}/{total}: {filename}...',
+
+        # Error messages
+        'error_title': 'Fehler',
+        'error_enter_url': 'Bitte geben Sie eine YouTube URL ein oder wählen Sie eine lokale Datei',
+        'error_file_not_found': 'Datei nicht gefunden:\n{path}',
+        'error_invalid_url': 'Ungültige URL',
+        'error_not_youtube_url': 'Keine YouTube URL. Bitte geben Sie einen gültigen YouTube-Link ein.',
+        'error_invalid_youtube_short': 'Ungültige YouTube Kurz-URL',
+        'error_valid_youtube_url': 'Gültige YouTube URL',
+        'error_valid_youtube_shorts': 'Gültige YouTube Shorts URL',
+        'error_valid_youtube_embed': 'Gültige YouTube Einbettungs-URL',
+        'error_valid_youtube_playlist': 'Gültige YouTube Playlist URL',
+        'error_unrecognized_youtube': 'Nicht erkanntes YouTube URL-Format',
+        'error_missing_video_id': 'Fehlende Video-ID in URL',
+        'error_invalid_url_format': 'Ungültiges URL-Format',
+        'error_url_empty': 'URL ist leer',
+        'error_missing_dependencies': 'yt-dlp oder ffmpeg ist nicht installiert.\n\nInstallieren mit:\npip install yt-dlp\n\nund ffmpeg über Ihren Paketmanager installieren',
+        'error_no_file_to_upload': 'Keine Datei zum Hochladen verfügbar. Bitte zuerst ein Video herunterladen/verarbeiten.',
+        'error_file_too_large_title': 'Datei zu groß',
+        'error_file_too_large': 'Dateigröße ({size} MB) überschreitet Catbox.moe\'s 200MB-Limit.\nBitte schneiden Sie das Video zu oder verwenden Sie eine niedrigere Qualitätseinstellung.',
+        'error_request_timeout': 'Zeitüberschreitung der Anfrage. Bitte überprüfen Sie Ihre Internetverbindung.',
+        'error_invalid_duration': 'Ungültiges Dauerformat erhalten: {error}',
+        'error_fetch_duration_failed': 'Fehler beim Abrufen der Videodauer:\n{error}',
+        'error_read_video_failed': 'Fehler beim Lesen der Videodatei:\n{error}',
+        'error_invalid_video_format': 'Ungültiges Videodateiformat',
+        'error_read_file_failed': 'Fehler beim Lesen der Datei:\n{error}',
+        'error_path_not_exist': 'Pfad existiert nicht: {path}',
+        'error_path_not_directory': 'Pfad ist kein Verzeichnis: {path}',
+        'error_path_not_writable': 'Pfad ist nicht beschreibbar:\n{path}\n\n{error}',
+        'error_failed_open_folder': 'Ordner konnte nicht geöffnet werden:\n{error}',
+        'error_select_quality': 'Bitte wählen Sie eine Videoqualität',
+        'error_fetch_duration_first': 'Bitte rufen Sie zuerst die Videodauer ab',
+        'error_invalid_time_range': 'Ungültiger Zeitbereich',
+
+        # Info messages
+        'info_copied': 'Kopiert',
+        'info_history_copied': 'Verlauf in Zwischenablage kopiert!',
+        'info_upload_complete_title': 'Upload abgeschlossen',
+        'info_upload_complete': 'Datei erfolgreich hochgeladen!\n\nURL: {url}\n\nDie URL wurde in Ihre Zwischenablage kopiert.',
+        'info_upload_failed_title': 'Upload fehlgeschlagen',
+        'info_upload_failed': 'Fehler beim Hochladen der Datei:\n\n{error}',
+        'info_skipped_file': 'Übersprungen: {filename}\nDateigröße ({size} MB) überschreitet 200MB-Limit.',
+
+        # Warning messages
+        'warning_clear_history_title': 'Verlauf löschen',
+        'warning_clear_history': 'Möchten Sie wirklich den gesamten Upload-Verlauf löschen?',
+        'warning_cannot_clear_title': 'Kann nicht löschen',
+        'warning_cannot_clear_downloading': 'URLs können während laufender Downloads nicht gelöscht werden.',
+        'warning_cannot_clear_uploading': 'Warteschlange kann während laufender Uploads nicht gelöscht werden.',
+        'warning_no_urls_title': 'Keine URLs',
+        'warning_no_urls': 'Keine ausstehenden URLs zum Herunterladen.',
+        'warning_no_files_title': 'Keine Dateien',
+        'warning_no_files': 'Keine Dateien in der Warteschlange. Bitte fügen Sie zuerst Dateien hinzu.',
+        'warning_playlist_detected': 'Playlist erkannt - Zuschneiden und Upload für Playlists deaktiviert',
+
+        # History window
+        'window_history_title': 'Upload-Link-Verlauf',
+        'history_empty': 'Noch kein Upload-Verlauf vorhanden.',
+        'history_load_error': 'Fehler beim Laden des Verlaufs: {error}',
+
+        # File dialogs
+        'dialog_select_video_files': 'Videodateien auswählen',
+        'dialog_video_files': 'Videodateien',
+        'dialog_audio_files': 'Audiodateien',
+        'dialog_all_files': 'Alle Dateien',
+        'dialog_select_video': 'Wählen Sie eine Videodatei',
+
+        # Download timeout messages
+        'timeout_download_absolute': 'Download-Zeitüberschreitung (60 Min. Limit überschritten)',
+        'timeout_download_stalled': 'Download ins Stocken geraten (10 Minuten kein Fortschritt)',
+    },
+
+    'pl': {
+        # Window & Language
+        'window_title': 'YoutubeDownloader',
+        'language': 'Język',
+        'info_language_changed_title': 'Język zmieniony',
+        'info_language_changed_msg': 'Język został zmieniony. Uruchom ponownie aplikację, aby zmiany zaczęły obowiązywać.',
+
+        # Tabs
+        'tab_trimmer': 'Przycinanie',
+        'tab_clipboard': 'Tryb schowka',
+        'tab_uploader': 'Przesyłanie',
+
+        # Common buttons
+        'btn_download': 'Pobierz',
+        'btn_stop': 'Zatrzymaj',
+        'btn_browse': 'Przeglądaj',
+        'btn_change': 'Zmień',
+        'btn_open_folder': 'Otwórz folder',
+        'btn_upload': 'Prześlij do Catbox.moe',
+        'btn_copy_url': 'Kopiuj URL',
+        'btn_clear_all': 'Wyczyść wszystko',
+        'btn_add_files': 'Dodaj pliki',
+        'btn_close': 'Zamknij',
+        'btn_copy_all': 'Kopiuj wszystko',
+
+        # Trimmer tab
+        'label_youtube_url': 'URL YouTube lub plik lokalny:',
+        'btn_browse_local': 'Przeglądaj plik lokalny',
+        'label_video_quality': 'Jakość wideo:',
+        'quality_audio_only': 'brak (Tylko audio)',
+        'label_trim_video': 'Przytnij wideo:',
+        'label_volume': 'Głośność:',
+        'btn_reset_volume': 'Resetuj do 100%',
+        'checkbox_enable_trimming': 'Włącz przycinanie wideo',
+        'btn_fetch_duration': 'Pobierz czas trwania wideo',
+        'label_start_time': 'Czas rozpoczęcia:',
+        'label_end_time': 'Czas zakończenia:',
+        'label_preview': 'Podgląd',
+        'label_loading': 'Ładowanie...',
+        'label_error': 'Błąd',
+        'label_selected_duration': 'Wybrany czas trwania: 00:00:00',
+        'label_save_to': 'Zapisz do:',
+        'label_output_filename': 'Nazwa pliku wyjściowego:',
+        'hint_filename': '(Opcjonalne - pozostaw puste dla automatycznej nazwy)',
+        'label_upload_section': 'Prześlij na stronę streamingową:',
+        'btn_view_history': 'Zobacz historię przesyłania',
+        'checkbox_auto_upload': 'Automatyczne przesyłanie po pobraniu/przycięciu',
+        'label_upload_url': 'URL przesyłania:',
+        'label_mode_local': 'Tryb: Plik lokalny | {filename}',
+        'label_mode_youtube': 'Tryb: Pobieranie YouTube',
+
+        # Clipboard Mode tab
+        'header_clipboard_mode': 'Tryb schowka',
+        'desc_clipboard_mode': 'Kopiuj URL YouTube (Ctrl+C), aby automatycznie wykrywać i pobierać je.',
+        'label_download_mode': 'Tryb pobierania:',
+        'checkbox_auto_download': 'Automatyczne pobieranie (rozpoczyna natychmiast)',
+        'header_settings': 'Ustawienia',
+        'label_quality': 'Jakość:',
+        'label_detected_urls': 'Wykryte URL',
+        'label_url_count': '({count} URL{s})',
+        'btn_download_all': 'Pobierz wszystkie',
+        'label_current_download': 'Bieżące pobieranie:',
+        'label_completed_total': 'Ukończono: {done}/{total} filmów',
+
+        # Uploader tab
+        'header_upload_file': 'Prześlij plik lokalny',
+        'desc_upload_file': 'Przesyłaj lokalne pliki wideo do usługi streamingowej Catbox.moe.',
+        'label_file_queue': 'Kolejka plików:',
+        'label_file_count': '({count} plik{s})',
+
+        # Status messages
+        'status_ready': 'Gotowy',
+        'status_fetching_duration': 'Pobieranie czasu trwania wideo...',
+        'status_duration_fetched': 'Czas trwania pobrany pomyślnie',
+        'status_starting_download': 'Rozpoczynanie pobierania...',
+        'status_downloading': 'Pobieranie... {progress}%',
+        'status_download_complete': 'Pobieranie zakończone!',
+        'status_download_stopped': 'Pobieranie zatrzymane',
+        'status_download_failed': 'Pobieranie nie powiodło się',
+        'status_processing': 'Przetwarzanie... {progress}%',
+        'status_uploading': 'Przesyłanie...',
+        'status_upload_complete': 'Przesyłanie zakończone!',
+        'status_upload_failed': 'Przesyłanie nie powiodło się',
+        'status_url_copied': 'URL skopiowany do schowka!',
+        'status_all_downloads_complete': 'Wszystkie pobierania zakończone! ({count} filmów)',
+        'status_completed_failed': 'Ukończono: {completed} | Niepowodzenie: {failed}',
+        'status_downloads_stopped': 'Pobierania zatrzymane przez użytkownika',
+        'status_all_uploads_complete': 'Wszystkie przesyłania zakończone! ({count} plików)',
+        'status_preparing_download': 'Przygotowywanie pobierania...',
+        'status_extracting_audio': 'Wyodrębnianie audio...',
+        'status_merging': 'Łączenie wideo i audio...',
+        'status_processing_ffmpeg': 'Przetwarzanie za pomocą ffmpeg...',
+        'status_post_processing': 'Przetwarzanie końcowe...',
+        'status_file_exists': 'Plik już istnieje, pomijanie...',
+        'status_downloading_playlist': 'Pobieranie playlisty... {progress}%',
+        'status_processing_local': 'Przetwarzanie pliku lokalnego...',
+        'status_auto_downloading': 'Automatyczne pobieranie: {url}...',
+        'status_auto_download_complete': 'Automatyczne pobieranie zakończone: {url}...',
+        'status_auto_download_failed': 'Automatyczne pobieranie nie powiodło się: {url}...',
+        'status_uploading_file': 'Przesyłanie {current}/{total}: {filename}...',
+
+        # Error messages
+        'error_title': 'Błąd',
+        'error_enter_url': 'Wprowadź URL YouTube lub wybierz plik lokalny',
+        'error_file_not_found': 'Nie znaleziono pliku:\n{path}',
+        'error_invalid_url': 'Nieprawidłowy URL',
+        'error_not_youtube_url': 'To nie jest URL YouTube. Wprowadź prawidłowy link YouTube.',
+        'error_invalid_youtube_short': 'Nieprawidłowy krótki URL YouTube',
+        'error_valid_youtube_url': 'Prawidłowy URL YouTube',
+        'error_valid_youtube_shorts': 'Prawidłowy URL YouTube Shorts',
+        'error_valid_youtube_embed': 'Prawidłowy URL osadzony YouTube',
+        'error_valid_youtube_playlist': 'Prawidłowy URL playlisty YouTube',
+        'error_unrecognized_youtube': 'Nierozpoznany format URL YouTube',
+        'error_missing_video_id': 'Brak ID wideo w URL',
+        'error_invalid_url_format': 'Nieprawidłowy format URL',
+        'error_url_empty': 'URL jest pusty',
+        'error_missing_dependencies': 'yt-dlp lub ffmpeg nie jest zainstalowane.\n\nZainstaluj za pomocą:\npip install yt-dlp\n\ni zainstaluj ffmpeg z menedżera pakietów',
+        'error_no_file_to_upload': 'Brak pliku do przesłania. Najpierw pobierz/przetwórz wideo.',
+        'error_file_too_large_title': 'Plik za duży',
+        'error_file_too_large': 'Rozmiar pliku ({size} MB) przekracza limit 200MB Catbox.moe.\nPrzytnij wideo lub użyj niższej jakości.',
+        'error_request_timeout': 'Przekroczono limit czasu żądania. Sprawdź połączenie internetowe.',
+        'error_invalid_duration': 'Otrzymano nieprawidłowy format czasu trwania: {error}',
+        'error_fetch_duration_failed': 'Nie udało się pobrać czasu trwania wideo:\n{error}',
+        'error_read_video_failed': 'Nie udało się odczytać pliku wideo:\n{error}',
+        'error_invalid_video_format': 'Nieprawidłowy format pliku wideo',
+        'error_read_file_failed': 'Nie udało się odczytać pliku:\n{error}',
+        'error_path_not_exist': 'Ścieżka nie istnieje: {path}',
+        'error_path_not_directory': 'Ścieżka nie jest katalogiem: {path}',
+        'error_path_not_writable': 'Ścieżka nie jest zapisywalna:\n{path}\n\n{error}',
+        'error_failed_open_folder': 'Nie udało się otworzyć folderu:\n{error}',
+        'error_select_quality': 'Wybierz jakość wideo',
+        'error_fetch_duration_first': 'Najpierw pobierz czas trwania wideo',
+        'error_invalid_time_range': 'Nieprawidłowy zakres czasu',
+
+        # Info messages
+        'info_copied': 'Skopiowano',
+        'info_history_copied': 'Historia skopiowana do schowka!',
+        'info_upload_complete_title': 'Przesyłanie zakończone',
+        'info_upload_complete': 'Plik przesłany pomyślnie!\n\nURL: {url}\n\nURL został skopiowany do schowka.',
+        'info_upload_failed_title': 'Przesyłanie nie powiodło się',
+        'info_upload_failed': 'Nie udało się przesłać pliku:\n\n{error}',
+        'info_skipped_file': 'Pominięto: {filename}\nRozmiar pliku ({size} MB) przekracza limit 200MB.',
+
+        # Warning messages
+        'warning_clear_history_title': 'Wyczyść historię',
+        'warning_clear_history': 'Czy na pewno chcesz wyczyścić całą historię przesyłania?',
+        'warning_cannot_clear_title': 'Nie można wyczyścić',
+        'warning_cannot_clear_downloading': 'Nie można wyczyścić URL podczas trwających pobierań.',
+        'warning_cannot_clear_uploading': 'Nie można wyczyścić kolejki podczas trwających przesyłań.',
+        'warning_no_urls_title': 'Brak URL',
+        'warning_no_urls': 'Brak oczekujących URL do pobrania.',
+        'warning_no_files_title': 'Brak plików',
+        'warning_no_files': 'Brak plików w kolejce. Najpierw dodaj pliki.',
+        'warning_playlist_detected': 'Wykryto playlistę - Przycinanie i przesyłanie wyłączone dla playlist',
+
+        # History window
+        'window_history_title': 'Historia linków przesyłania',
+        'history_empty': 'Brak historii przesyłania.',
+        'history_load_error': 'Błąd ładowania historii: {error}',
+
+        # File dialogs
+        'dialog_select_video_files': 'Wybierz pliki wideo',
+        'dialog_video_files': 'Pliki wideo',
+        'dialog_audio_files': 'Pliki audio',
+        'dialog_all_files': 'Wszystkie pliki',
+        'dialog_select_video': 'Wybierz plik wideo',
+
+        # Download timeout messages
+        'timeout_download_absolute': 'Limit czasu pobierania (przekroczono limit 60 min)',
+        'timeout_download_stalled': 'Pobieranie wstrzymane (brak postępu przez 10 minut)',
+    }
+}
+
+def tr(key, **kwargs):
+    """Get translated string for current language with optional formatting.
+
+    Args:
+        key: Translation key (e.g., 'btn_download')
+        **kwargs: Optional format arguments (e.g., progress=50)
+
+    Returns:
+        Translated and formatted string
+    """
+    text = TRANSLATIONS.get(CURRENT_LANGUAGE, {}).get(key, key)
+    if kwargs:
+        try:
+            return text.format(**kwargs)
+        except (KeyError, ValueError):
+            return text
+    return text
 
 # Theme colors
 THEMES = {
@@ -124,7 +665,7 @@ class YouTubeDownloader:
     def __init__(self, root):
         logger.info("Initializing YoutubeDownloader")
         self.root = root
-        self.root.title("YoutubeDownloader")
+        self.root.title(tr('window_title'))
         self.root.geometry("900x1140")
         self.root.resizable(True, True)
         self.root.minsize(750, 600)
@@ -228,6 +769,9 @@ class YouTubeDownloader:
         # Create clipboard download directory
         Path(self.clipboard_download_path).mkdir(parents=True, exist_ok=True)
 
+        # Load language preference before UI setup
+        self._load_language_preference()
+
         self.setup_ui()
 
         # Bind cleanup on window close
@@ -280,6 +824,67 @@ class YouTubeDownloader:
                         self._update_url_status(url, 'failed')
             logger.info(f"Restored {len(self.persisted_clipboard_urls)} URLs to clipboard list")
 
+    def _load_language_preference(self):
+        """Load saved language preference"""
+        global CURRENT_LANGUAGE
+        try:
+            if CONFIG_FILE.exists():
+                import json
+                with open(CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+                    lang_code = config.get('language', 'en')
+                    CURRENT_LANGUAGE = lang_code
+                    logger.info(f"Loaded language preference: {lang_code}")
+        except Exception as e:
+            logger.error(f"Error loading language preference: {e}")
+            CURRENT_LANGUAGE = 'en'
+
+    def _save_language_preference(self):
+        """Save language preference to config file"""
+        try:
+            CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            import json
+
+            # Load existing config if any
+            config = {}
+            if CONFIG_FILE.exists():
+                with open(CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+
+            # Update language
+            config['language'] = CURRENT_LANGUAGE
+
+            # Save config
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(config, f, indent=2)
+
+            logger.info(f"Saved language preference: {CURRENT_LANGUAGE}")
+        except Exception as e:
+            logger.error(f"Error saving language preference: {e}")
+
+    def on_language_change(self, event=None):
+        """Handle language selection change"""
+        global CURRENT_LANGUAGE
+
+        selected = self.language_var.get()
+        lang_map = {
+            "🇬🇧 English": 'en',
+            "🇩🇪 Deutsch": 'de',
+            "🇵🇱 Polski": 'pl'
+        }
+
+        new_lang = lang_map.get(selected, 'en')
+
+        if new_lang != CURRENT_LANGUAGE:
+            CURRENT_LANGUAGE = new_lang
+            self._save_language_preference()
+
+            # Show restart message
+            messagebox.showinfo(
+                tr('info_language_changed_title'),
+                tr('info_language_changed_msg')
+            )
+
     def save_upload_link(self, link, filename=""):
         """Save uploaded video link to history file"""
         try:
@@ -294,7 +899,7 @@ class YouTubeDownloader:
     def view_upload_history(self):
         """View upload link history in a new window"""
         history_window = tk.Toplevel(self.root)
-        history_window.title("Upload Link History")
+        history_window.title(tr('window_history_title'))
         history_window.geometry("800x500")
 
         # Create text widget with scrollbar
@@ -316,9 +921,9 @@ class YouTubeDownloader:
                     if content:
                         text_widget.insert('1.0', content)
                     else:
-                        text_widget.insert('1.0', "No upload history yet.")
+                        text_widget.insert('1.0', tr('history_empty'))
             else:
-                text_widget.insert('1.0', "No upload history yet.")
+                text_widget.insert('1.0', tr('history_empty'))
         except Exception as e:
             text_widget.insert('1.0', f"Error loading history: {e}")
 
@@ -331,23 +936,23 @@ class YouTubeDownloader:
         def copy_all():
             self.root.clipboard_clear()
             self.root.clipboard_append(text_widget.get('1.0', tk.END))
-            messagebox.showinfo("Copied", "History copied to clipboard!")
+            messagebox.showinfo(tr('info_copied'), tr('info_history_copied'))
 
         def clear_history():
-            if messagebox.askyesno("Clear History", "Are you sure you want to clear all upload history?"):
+            if messagebox.askyesno(tr('warning_clear_history_title'), tr('warning_clear_history')):
                 try:
                     if UPLOAD_HISTORY_FILE.exists():
                         UPLOAD_HISTORY_FILE.unlink()
                     text_widget.config(state='normal')
                     text_widget.delete('1.0', tk.END)
-                    text_widget.insert('1.0', "No upload history yet.")
+                    text_widget.insert('1.0', tr('history_empty'))
                     text_widget.config(state='disabled')
                 except Exception as e:
-                    messagebox.showerror("Error", f"Failed to clear history: {e}")
+                    messagebox.showerror(tr('error_title'), f"Failed to clear history: {e}")
 
-        ttk.Button(button_frame, text="Copy All", command=copy_all).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Clear History", command=clear_history).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text="Close", command=history_window.destroy).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text=tr('btn_copy_all'), command=copy_all).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text=tr('warning_clear_history_title'), command=clear_history).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text=tr('btn_close'), command=history_window.destroy).pack(side=tk.RIGHT, padx=5)
 
     def retry_network_operation(self, operation, operation_name, *args, **kwargs):
         """Retry a network operation with exponential backoff"""
@@ -730,24 +1335,47 @@ class YouTubeDownloader:
         # Store canvas reference for cleanup
         self.canvas = canvas
 
+        # Language selector at top
+        language_frame = ttk.Frame(scrollable_frame)
+        language_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5, pady=(5, 0))
+
+        ttk.Label(language_frame, text=tr('language') + ":", font=('Arial', 9)).pack(side=tk.LEFT, padx=(0, 5))
+
+        # Language options with flag emojis
+        language_options = [
+            "🇬🇧 English",
+            "🇩🇪 Deutsch",
+            "🇵🇱 Polski"
+        ]
+
+        # Set initial language based on loaded preference
+        lang_map_reverse = {'en': 0, 'de': 1, 'pl': 2}
+        initial_index = lang_map_reverse.get(CURRENT_LANGUAGE, 0)
+
+        self.language_var = tk.StringVar(value=language_options[initial_index])
+        self.language_combo = ttk.Combobox(language_frame, textvariable=self.language_var,
+            values=language_options, state='readonly', width=15)
+        self.language_combo.pack(side=tk.LEFT)
+        self.language_combo.bind('<<ComboboxSelected>>', self.on_language_change)
+
         # Create notebook for tabs
         self.notebook = ttk.Notebook(scrollable_frame)
-        self.notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
+        self.notebook.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
 
         # Clipboard Mode tab (first tab)
         clipboard_tab_frame = ttk.Frame(self.notebook, padding="20")
-        self.notebook.add(clipboard_tab_frame, text="Clipboard Mode")
+        self.notebook.add(clipboard_tab_frame, text=tr('tab_clipboard'))
         # Setup will be called after Trimmer tab is created
 
         # Trimmer tab (second tab)
         main_tab_frame = ttk.Frame(self.notebook, padding="20")
-        self.notebook.add(main_tab_frame, text="Trimmer")
+        self.notebook.add(main_tab_frame, text=tr('tab_trimmer'))
 
         # Uploader tab (third tab)
         uploader_tab_frame = ttk.Frame(self.notebook, padding="20")
-        self.notebook.add(uploader_tab_frame, text="Uploader")
+        self.notebook.add(uploader_tab_frame, text=tr('tab_uploader'))
 
-        ttk.Label(main_tab_frame, text="YouTube URL or Local File:", font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
+        ttk.Label(main_tab_frame, text=tr('label_youtube_url'), font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
         # URL/File input frame
         url_input_frame = ttk.Frame(main_tab_frame)
@@ -757,7 +1385,7 @@ class YouTubeDownloader:
         self.url_entry.pack(side=tk.LEFT, padx=(0, 10), fill=tk.X, expand=True)
         self.url_entry.bind('<KeyRelease>', self.on_url_change)
 
-        ttk.Button(url_input_frame, text="Browse Local File", command=self.browse_local_file).pack(side=tk.LEFT)
+        ttk.Button(url_input_frame, text=tr('btn_browse_local'), command=self.browse_local_file).pack(side=tk.LEFT)
 
         # Mode indicator label
         self.mode_label = ttk.Label(main_tab_frame, text="", foreground="blue", font=('Arial', 9))
@@ -767,12 +1395,12 @@ class YouTubeDownloader:
         quality_frame = ttk.Frame(main_tab_frame)
         quality_frame.grid(row=3, column=0, columnspan=2, sticky=tk.W, pady=(10, 5))
 
-        ttk.Label(quality_frame, text="Video Quality:", font=('Arial', 11, 'bold')).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(quality_frame, text=tr('label_video_quality'), font=('Arial', 11, 'bold')).pack(side=tk.LEFT, padx=(0, 10))
 
         self.quality_var = tk.StringVar(value="480")
         self.quality_var.trace_add('write', self.on_quality_change)
 
-        quality_options = ["1440", "1080", "720", "480", "360", "240", "none (Audio only)"]
+        quality_options = ["1440", "1080", "720", "480", "360", "240", tr('quality_audio_only')]
         self.quality_combo = ttk.Combobox(quality_frame, textvariable=self.quality_var,
             values=quality_options, state='readonly', width=20)
         self.quality_combo.pack(side=tk.LEFT)
@@ -784,10 +1412,10 @@ class YouTubeDownloader:
         trim_and_volume_row.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 3))
 
         # Left side: Trim Video
-        ttk.Label(trim_and_volume_row, text="Trim Video:", font=('Arial', 11, 'bold')).pack(side=tk.LEFT, padx=(0, 30))
+        ttk.Label(trim_and_volume_row, text=tr('label_trim_video'), font=('Arial', 11, 'bold')).pack(side=tk.LEFT, padx=(0, 30))
 
         # Right side: Volume Adjustment
-        ttk.Label(trim_and_volume_row, text="Volume:", font=('Arial', 11, 'bold')).pack(side=tk.LEFT, padx=(20, 5))
+        ttk.Label(trim_and_volume_row, text=tr('label_volume'), font=('Arial', 11, 'bold')).pack(side=tk.LEFT, padx=(20, 5))
 
         self.volume_slider = ttk.Scale(trim_and_volume_row, from_=0, to=2.0, variable=self.volume_var,
                                         orient='horizontal', length=150, command=self.on_volume_change)
@@ -804,17 +1432,17 @@ class YouTubeDownloader:
         self.volume_label.pack(side=tk.LEFT, padx=(0, 5))
 
         # Reset to 100% button
-        ttk.Button(trim_and_volume_row, text="Reset to 100%", command=self.reset_volume, width=12).pack(side=tk.LEFT)
+        ttk.Button(trim_and_volume_row, text=tr('btn_reset_volume'), command=self.reset_volume, width=12).pack(side=tk.LEFT)
 
         # Trim checkbox row with fetch button
         trim_checkbox_frame = ttk.Frame(main_tab_frame)
         trim_checkbox_frame.grid(row=6, column=0, sticky=tk.W, padx=(20, 0), pady=(3, 5))
 
         self.trim_enabled_var = tk.BooleanVar()
-        ttk.Checkbutton(trim_checkbox_frame, text="Enable video trimming", variable=self.trim_enabled_var,
+        ttk.Checkbutton(trim_checkbox_frame, text=tr('checkbox_enable_trimming'), variable=self.trim_enabled_var,
                        command=self.toggle_trim).pack(side=tk.LEFT)
 
-        self.fetch_duration_btn = ttk.Button(trim_checkbox_frame, text="Fetch Video Duration", command=self.fetch_duration_clicked, state='disabled')
+        self.fetch_duration_btn = ttk.Button(trim_checkbox_frame, text=tr('btn_fetch_duration'), command=self.fetch_duration_clicked, state='disabled')
         self.fetch_duration_btn.pack(side=tk.LEFT, padx=(10, 0))
 
         # Video info label
@@ -833,20 +1461,20 @@ class YouTubeDownloader:
         start_preview_frame = ttk.Frame(preview_container)
         start_preview_frame.grid(row=0, column=0, padx=(0, 20))
 
-        ttk.Label(start_preview_frame, text="Start Time:", font=('Arial', 9)).pack()
+        ttk.Label(start_preview_frame, text=tr('label_start_time'), font=('Arial', 9)).pack()
         self.start_preview_label = tk.Label(start_preview_frame, bg='gray20', fg='white', relief='sunken')
         self.start_preview_label.pack(pady=(5, 0))
 
         # Create placeholder images
-        self.placeholder_image = self.create_placeholder_image(PREVIEW_WIDTH, PREVIEW_HEIGHT, "Preview")
-        self.loading_image = self.create_placeholder_image(PREVIEW_WIDTH, PREVIEW_HEIGHT, "Loading...")
+        self.placeholder_image = self.create_placeholder_image(PREVIEW_WIDTH, PREVIEW_HEIGHT, tr('label_preview'))
+        self.loading_image = self.create_placeholder_image(PREVIEW_WIDTH, PREVIEW_HEIGHT, tr('label_loading'))
         self.start_preview_label.config(image=self.placeholder_image)
 
         # End time preview
         end_preview_frame = ttk.Frame(preview_container)
         end_preview_frame.grid(row=0, column=1)
 
-        ttk.Label(end_preview_frame, text="End Time:", font=('Arial', 9)).pack()
+        ttk.Label(end_preview_frame, text=tr('label_end_time'), font=('Arial', 9)).pack()
         self.end_preview_label = tk.Label(end_preview_frame, bg='gray20', fg='white', relief='sunken')
         self.end_preview_label.pack(pady=(5, 0))
         self.end_preview_label.config(image=self.placeholder_image)
@@ -860,7 +1488,7 @@ class YouTubeDownloader:
                                       orient='horizontal', length=SLIDER_LENGTH, command=self.on_slider_change, state='disabled')
         self.start_slider.pack(side=tk.LEFT, padx=(0, 10))
 
-        ttk.Label(start_control_frame, text="Start:", font=('Arial', 9)).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(start_control_frame, text=tr('label_start_time') + ":", font=('Arial', 9)).pack(side=tk.LEFT, padx=(0, 5))
         self.start_time_entry = ttk.Entry(start_control_frame, width=10, state='disabled')
         self.start_time_entry.pack(side=tk.LEFT)
         self.start_time_entry.insert(0, "00:00:00")
@@ -876,7 +1504,7 @@ class YouTubeDownloader:
                                     orient='horizontal', length=SLIDER_LENGTH, command=self.on_slider_change, state='disabled')
         self.end_slider.pack(side=tk.LEFT, padx=(0, 10))
 
-        ttk.Label(end_control_frame, text="End:", font=('Arial', 9)).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(end_control_frame, text=tr('label_end_time') + ":", font=('Arial', 9)).pack(side=tk.LEFT, padx=(0, 5))
         self.end_time_entry = ttk.Entry(end_control_frame, width=10, state='disabled')
         self.end_time_entry.pack(side=tk.LEFT)
         self.end_time_entry.insert(0, "00:00:00")
@@ -884,7 +1512,7 @@ class YouTubeDownloader:
         self.end_time_entry.bind('<FocusOut>', self.on_end_entry_change)
 
         # Trim duration display
-        self.trim_duration_label = ttk.Label(main_tab_frame, text="Selected Duration: 00:00:00", foreground="green", font=('Arial', 9, 'bold'))
+        self.trim_duration_label = ttk.Label(main_tab_frame, text=tr('label_selected_duration'), foreground="green", font=('Arial', 9, 'bold'))
         self.trim_duration_label.grid(row=12, column=0, sticky=tk.W, padx=(40, 0), pady=(3, 0))
 
         ttk.Separator(main_tab_frame, orient='horizontal').grid(row=13, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
@@ -892,28 +1520,28 @@ class YouTubeDownloader:
         path_frame = ttk.Frame(main_tab_frame)
         path_frame.grid(row=14, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
 
-        ttk.Label(path_frame, text="Save to:").pack(side=tk.LEFT)
+        ttk.Label(path_frame, text=tr('label_save_to')).pack(side=tk.LEFT)
         self.path_label = ttk.Label(path_frame, text=self.download_path, foreground="blue")
         self.path_label.pack(side=tk.LEFT, padx=(10, 10))
-        ttk.Button(path_frame, text="Change", command=self.change_path).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(path_frame, text="Open Folder", command=self.open_download_folder).pack(side=tk.LEFT)
+        ttk.Button(path_frame, text=tr('btn_change'), command=self.change_path).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(path_frame, text=tr('btn_open_folder'), command=self.open_download_folder).pack(side=tk.LEFT)
 
         # Filename customization
         filename_frame = ttk.Frame(main_tab_frame)
         filename_frame.grid(row=15, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
 
-        ttk.Label(filename_frame, text="Output filename:", font=('Arial', 9)).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(filename_frame, text=tr('label_output_filename'), font=('Arial', 9)).pack(side=tk.LEFT, padx=(0, 5))
         self.filename_entry = ttk.Entry(filename_frame, width=40)
         self.filename_entry.pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Label(filename_frame, text="(Optional - leave empty for auto-generated name)", foreground="gray", font=('Arial', 8)).pack(side=tk.LEFT)
+        ttk.Label(filename_frame, text=tr('hint_filename'), foreground="gray", font=('Arial', 8)).pack(side=tk.LEFT)
 
         button_frame = ttk.Frame(main_tab_frame)
         button_frame.grid(row=16, column=0, columnspan=2, pady=(0, 10))
 
-        self.download_btn = ttk.Button(button_frame, text="Download", command=self.start_download)
+        self.download_btn = ttk.Button(button_frame, text=tr('btn_download'), command=self.start_download)
         self.download_btn.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.stop_btn = ttk.Button(button_frame, text="Stop", command=self.stop_download, state='disabled')
+        self.stop_btn = ttk.Button(button_frame, text=tr('btn_stop'), command=self.stop_download, state='disabled')
         self.stop_btn.pack(side=tk.LEFT, padx=(0, 15))
 
         # Speed limit controls
@@ -929,21 +1557,21 @@ class YouTubeDownloader:
         self.progress_label = ttk.Label(main_tab_frame, text="0%", foreground="blue")
         self.progress_label.grid(row=18, column=0, columnspan=2, pady=(5, 0))
 
-        self.status_label = ttk.Label(main_tab_frame, text="Ready", foreground="green")
+        self.status_label = ttk.Label(main_tab_frame, text=tr('status_ready'), foreground="green")
         self.status_label.grid(row=19, column=0, columnspan=2, pady=(10, 0))
 
         # Upload to Catbox.moe Section
         ttk.Separator(main_tab_frame, orient='horizontal').grid(row=20, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
 
-        ttk.Label(main_tab_frame, text="Upload to Streaming Site:", font=('Arial', 11, 'bold')).grid(row=21, column=0, sticky=tk.W, pady=(0, 3))
+        ttk.Label(main_tab_frame, text=tr('label_upload_section'), font=('Arial', 11, 'bold')).grid(row=21, column=0, sticky=tk.W, pady=(0, 3))
 
         upload_frame = ttk.Frame(main_tab_frame)
         upload_frame.grid(row=22, column=0, columnspan=2, sticky=tk.W, pady=(5, 5))
 
-        self.upload_btn = ttk.Button(upload_frame, text="Upload to Catbox.moe", command=self.start_upload, state='disabled')
+        self.upload_btn = ttk.Button(upload_frame, text=tr('btn_upload'), command=self.start_upload, state='disabled')
         self.upload_btn.pack(side=tk.LEFT, padx=(0, 10))
 
-        ttk.Button(upload_frame, text="View Upload History", command=self.view_upload_history).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(upload_frame, text=tr('btn_view_history'), command=self.view_upload_history).pack(side=tk.LEFT, padx=(0, 10))
 
         self.upload_status_label = ttk.Label(upload_frame, text="", foreground="blue", font=('Arial', 9))
         self.upload_status_label.pack(side=tk.LEFT)
@@ -952,19 +1580,19 @@ class YouTubeDownloader:
         auto_upload_frame = ttk.Frame(main_tab_frame)
         auto_upload_frame.grid(row=23, column=0, columnspan=2, sticky=tk.W, padx=(20, 0), pady=(5, 0))
 
-        ttk.Checkbutton(auto_upload_frame, text="Auto-upload after download/trim completes",
+        ttk.Checkbutton(auto_upload_frame, text=tr('checkbox_auto_upload'),
                        variable=self.auto_upload_var).pack(side=tk.LEFT)
 
         # Upload URL display (initially hidden)
         self.upload_url_frame = ttk.Frame(main_tab_frame)
         self.upload_url_frame.grid(row=24, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
 
-        ttk.Label(self.upload_url_frame, text="Upload URL:", font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(self.upload_url_frame, text=tr('label_upload_url'), font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 5))
 
         self.upload_url_entry = ttk.Entry(self.upload_url_frame, width=60, state='readonly')
         self.upload_url_entry.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.copy_url_btn = ttk.Button(self.upload_url_frame, text="Copy URL", command=self.copy_upload_url)
+        self.copy_url_btn = ttk.Button(self.upload_url_frame, text=tr('btn_copy_url'), command=self.copy_upload_url)
         self.copy_url_btn.pack(side=tk.LEFT)
 
         # Hide upload URL frame initially
@@ -986,10 +1614,10 @@ class YouTubeDownloader:
         """Setup Clipboard Mode tab UI"""
 
         # Header
-        ttk.Label(parent, text="Clipboard Mode", font=('Arial', 14, 'bold')).grid(
+        ttk.Label(parent, text=tr('header_clipboard_mode'), font=('Arial', 14, 'bold')).grid(
             row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
 
-        ttk.Label(parent, text="Copy YouTube URLs (Ctrl+C) to automatically detect and download them.",
+        ttk.Label(parent, text=tr('desc_clipboard_mode'),
                   foreground="gray", font=('Arial', 9)).grid(
             row=1, column=0, columnspan=2, sticky=tk.W, pady=(0, 15))
 
@@ -997,22 +1625,22 @@ class YouTubeDownloader:
         mode_frame = ttk.Frame(parent)
         mode_frame.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
 
-        ttk.Label(mode_frame, text="Download Mode:", font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Label(mode_frame, text=tr('label_download_mode'), font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 10))
         self.clipboard_auto_download_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(mode_frame, text="Auto-download (starts immediately)",
+        ttk.Checkbutton(mode_frame, text=tr('checkbox_auto_download'),
                        variable=self.clipboard_auto_download_var).pack(side=tk.LEFT)
 
         # Settings
         ttk.Separator(parent, orient='horizontal').grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
-        ttk.Label(parent, text="Settings", font=('Arial', 11, 'bold')).grid(row=4, column=0, sticky=tk.W, pady=(0, 5))
+        ttk.Label(parent, text=tr('header_settings'), font=('Arial', 11, 'bold')).grid(row=4, column=0, sticky=tk.W, pady=(0, 5))
 
         settings_frame = ttk.Frame(parent)
         settings_frame.grid(row=5, column=0, columnspan=2, sticky=tk.W, padx=(20, 0), pady=(0, 10))
 
         # Quality dropdown
-        ttk.Label(settings_frame, text="Quality:", font=('Arial', 9)).grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        ttk.Label(settings_frame, text=tr('label_quality'), font=('Arial', 9)).grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
         self.clipboard_quality_var = tk.StringVar(value="1080")
-        quality_options = ["1440", "1080", "720", "480", "360", "240", "none (Audio only)"]
+        quality_options = ["1440", "1080", "720", "480", "360", "240", tr('quality_audio_only')]
         self.clipboard_quality_combo = ttk.Combobox(settings_frame, textvariable=self.clipboard_quality_var,
             values=quality_options, state='readonly', width=20)
         self.clipboard_quality_combo.grid(row=0, column=1, sticky=tk.W)
@@ -1023,11 +1651,11 @@ class YouTubeDownloader:
         folder_frame = ttk.Frame(parent)
         folder_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
 
-        ttk.Label(folder_frame, text="Save to:", font=('Arial', 9)).pack(side=tk.LEFT)
+        ttk.Label(folder_frame, text=tr('label_save_to'), font=('Arial', 9)).pack(side=tk.LEFT)
         self.clipboard_path_label = ttk.Label(folder_frame, text=self.clipboard_download_path, foreground="blue")
         self.clipboard_path_label.pack(side=tk.LEFT, padx=(10, 10))
-        ttk.Button(folder_frame, text="Change", command=self.change_clipboard_path).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(folder_frame, text="Open Folder", command=self.open_clipboard_folder).pack(side=tk.LEFT)
+        ttk.Button(folder_frame, text=tr('btn_change'), command=self.change_clipboard_path).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(folder_frame, text=tr('btn_open_folder'), command=self.open_clipboard_folder).pack(side=tk.LEFT)
 
         # URL List
         ttk.Separator(parent, orient='horizontal').grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
@@ -1035,10 +1663,10 @@ class YouTubeDownloader:
         url_header_frame = ttk.Frame(parent)
         url_header_frame.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
 
-        ttk.Label(url_header_frame, text="Detected URLs", font=('Arial', 11, 'bold')).pack(side=tk.LEFT)
-        self.clipboard_url_count_label = ttk.Label(url_header_frame, text="(0 URLs)", foreground="gray", font=('Arial', 9))
+        ttk.Label(url_header_frame, text=tr('label_detected_urls'), font=('Arial', 11, 'bold')).pack(side=tk.LEFT)
+        self.clipboard_url_count_label = ttk.Label(url_header_frame, text=tr('label_url_count_0'), foreground="gray", font=('Arial', 9))
         self.clipboard_url_count_label.pack(side=tk.LEFT, padx=(10, 0))
-        ttk.Button(url_header_frame, text="Clear All", command=self.clear_all_clipboard_urls).pack(side=tk.RIGHT)
+        ttk.Button(url_header_frame, text=tr('btn_clear_all'), command=self.clear_all_clipboard_urls).pack(side=tk.RIGHT)
 
         # Scrollable URL list
         url_list_container = ttk.Frame(parent)
@@ -1065,16 +1693,16 @@ class YouTubeDownloader:
         button_frame = ttk.Frame(parent)
         button_frame.grid(row=12, column=0, columnspan=2, pady=(0, 10))
 
-        self.clipboard_download_btn = ttk.Button(button_frame, text="Download All",
+        self.clipboard_download_btn = ttk.Button(button_frame, text=tr('btn_download_all'),
             command=self.start_clipboard_downloads, state='disabled')
         self.clipboard_download_btn.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.clipboard_stop_btn = ttk.Button(button_frame, text="Stop",
+        self.clipboard_stop_btn = ttk.Button(button_frame, text=tr('btn_stop'),
             command=self.stop_clipboard_downloads, state='disabled')
         self.clipboard_stop_btn.pack(side=tk.LEFT)
 
         # Individual progress
-        ttk.Label(parent, text="Current Download:", font=('Arial', 9, 'bold')).grid(row=13, column=0, sticky=tk.W, pady=(0, 3))
+        ttk.Label(parent, text=tr('label_current_download'), font=('Arial', 9, 'bold')).grid(row=13, column=0, sticky=tk.W, pady=(0, 3))
 
         self.clipboard_progress = ttk.Progressbar(parent, mode='determinate', length=560, maximum=100)
         self.clipboard_progress.grid(row=14, column=0, columnspan=2)
@@ -1083,22 +1711,22 @@ class YouTubeDownloader:
         self.clipboard_progress_label.grid(row=15, column=0, columnspan=2, pady=(5, 0))
 
         # Total progress
-        self.clipboard_total_label = ttk.Label(parent, text="Completed: 0/0 videos",
+        self.clipboard_total_label = ttk.Label(parent, text=tr('label_completed_total', done=0, total=0),
             foreground="green", font=('Arial', 9, 'bold'))
         self.clipboard_total_label.grid(row=16, column=0, columnspan=2, pady=(5, 0))
 
         # Status
-        self.clipboard_status_label = ttk.Label(parent, text="Ready", foreground="green")
+        self.clipboard_status_label = ttk.Label(parent, text=tr('status_ready'), foreground="green")
         self.clipboard_status_label.grid(row=17, column=0, columnspan=2, pady=(10, 0))
 
     def setup_uploader_ui(self, parent):
         """Setup Uploader tab UI"""
 
         # Header
-        ttk.Label(parent, text="Upload Local File", font=('Arial', 14, 'bold')).grid(
+        ttk.Label(parent, text=tr('header_upload_file'), font=('Arial', 14, 'bold')).grid(
             row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
 
-        ttk.Label(parent, text="Upload local video files to Catbox.moe streaming service.",
+        ttk.Label(parent, text=tr('desc_upload_file'),
                   foreground="gray", font=('Arial', 9)).grid(
             row=1, column=0, columnspan=2, sticky=tk.W, pady=(0, 15))
 
@@ -1108,15 +1736,15 @@ class YouTubeDownloader:
         file_header_frame = ttk.Frame(parent)
         file_header_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
 
-        ttk.Label(file_header_frame, text="File Queue:", font=('Arial', 11, 'bold')).pack(side=tk.LEFT)
-        self.uploader_queue_count_label = ttk.Label(file_header_frame, text="(0 files)", foreground="gray", font=('Arial', 9))
+        ttk.Label(file_header_frame, text=tr('label_file_queue'), font=('Arial', 11, 'bold')).pack(side=tk.LEFT)
+        self.uploader_queue_count_label = ttk.Label(file_header_frame, text=tr('label_file_count_0'), foreground="gray", font=('Arial', 9))
         self.uploader_queue_count_label.pack(side=tk.LEFT, padx=(10, 0))
 
         file_select_frame = ttk.Frame(parent)
         file_select_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
 
-        ttk.Button(file_select_frame, text="Add Files", command=self.browse_uploader_files).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(file_select_frame, text="Clear All", command=self.clear_uploader_queue).pack(side=tk.LEFT)
+        ttk.Button(file_select_frame, text=tr('btn_add_files'), command=self.browse_uploader_files).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(file_select_frame, text=tr('btn_clear_all'), command=self.clear_uploader_queue).pack(side=tk.LEFT)
 
         # Scrollable file list
         file_list_container = ttk.Frame(parent)
@@ -1143,11 +1771,11 @@ class YouTubeDownloader:
         upload_controls_frame = ttk.Frame(parent)
         upload_controls_frame.grid(row=7, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
 
-        self.uploader_upload_btn = ttk.Button(upload_controls_frame, text="Upload to Catbox.moe",
+        self.uploader_upload_btn = ttk.Button(upload_controls_frame, text=tr('btn_upload'),
                                               command=self.start_uploader_upload, state='disabled')
         self.uploader_upload_btn.pack(side=tk.LEFT, padx=(0, 10))
 
-        ttk.Button(upload_controls_frame, text="View Upload History", command=self.view_upload_history).pack(side=tk.LEFT)
+        ttk.Button(upload_controls_frame, text=tr('btn_view_history'), command=self.view_upload_history).pack(side=tk.LEFT)
 
         self.uploader_status_label = ttk.Label(parent, text="", foreground="blue", font=('Arial', 9))
         self.uploader_status_label.grid(row=8, column=0, columnspan=2, sticky=tk.W, pady=(5, 10))
@@ -1156,12 +1784,12 @@ class YouTubeDownloader:
         self.uploader_url_frame = ttk.Frame(parent)
         self.uploader_url_frame.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
 
-        ttk.Label(self.uploader_url_frame, text="Upload URL:", font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Label(self.uploader_url_frame, text=tr('label_upload_url'), font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=(0, 5))
 
         self.uploader_url_entry = ttk.Entry(self.uploader_url_frame, width=60, state='readonly')
         self.uploader_url_entry.pack(side=tk.LEFT, padx=(0, 10))
 
-        ttk.Button(self.uploader_url_frame, text="Copy URL", command=self.copy_uploader_url).pack(side=tk.LEFT)
+        ttk.Button(self.uploader_url_frame, text=tr('btn_copy_url'), command=self.copy_uploader_url).pack(side=tk.LEFT)
 
         # Hide URL frame initially
         self.uploader_url_frame.grid_remove()
@@ -1380,7 +2008,7 @@ class YouTubeDownloader:
     def clear_all_clipboard_urls(self):
         """Clear all URLs from clipboard list"""
         if self.clipboard_downloading:
-            messagebox.showwarning("Cannot Clear", "Cannot clear URLs while downloads are in progress.")
+            messagebox.showwarning(tr('warning_cannot_clear_title'), tr('warning_cannot_clear_downloading'))
             return
 
         for item in self.clipboard_url_list:
@@ -1399,7 +2027,8 @@ class YouTubeDownloader:
     def _update_clipboard_url_count(self):
         """Update URL count label"""
         count = len(self.clipboard_url_list)
-        self.clipboard_url_count_label.config(text=f"({count} URL{'s' if count != 1 else ''})")
+        s = 's' if count != 1 else ''
+        self.clipboard_url_count_label.config(text=tr('label_url_count', count=count, s=s))
 
     def _update_url_status(self, url, status):
         """Update visual status of URL: pending (gray), downloading (blue), completed (green), failed (red)"""
@@ -1427,7 +2056,7 @@ class YouTubeDownloader:
         pending_urls = [item for item in self.clipboard_url_list if item['status'] == 'pending']
 
         if not pending_urls:
-            messagebox.showinfo("No URLs", "No pending URLs to download.")
+            messagebox.showinfo(tr('warning_no_urls_title'), tr('warning_no_urls'))
             return
 
         self.clipboard_downloading = True
@@ -1435,7 +2064,7 @@ class YouTubeDownloader:
         self.clipboard_stop_btn.config(state='normal')
 
         total_count = len(pending_urls)
-        self.clipboard_total_label.config(text=f"Completed: 0/{total_count} videos")
+        self.clipboard_total_label.config(text=tr('label_completed_total', done=0, total=total_count))
 
         logger.info(f"Starting clipboard batch download: {total_count} URLs")
         self.thread_pool.submit(self._process_clipboard_queue)
@@ -1454,7 +2083,7 @@ class YouTubeDownloader:
 
             self.root.after(0, lambda u=url: self._update_url_status(u, 'downloading'))
             self.root.after(0, lambda i=index, t=total_count:
-                self.clipboard_total_label.config(text=f"Completed: {i}/{t} videos"))
+                self.clipboard_total_label.config(text=tr('label_completed_total', done=i, total=t)))
             self.root.after(0, lambda u=url:
                 self.update_clipboard_status(f"Downloading: {u[:50]}...", "blue"))
 
@@ -1467,7 +2096,7 @@ class YouTubeDownloader:
 
             completed = index + 1
             self.root.after(0, lambda c=completed, t=total_count:
-                self.clipboard_total_label.config(text=f"Completed: {c}/{t} videos"))
+                self.clipboard_total_label.config(text=tr('label_completed_total', done=c, total=t)))
 
         self.root.after(0, self._finish_clipboard_downloads)
 
@@ -1659,11 +2288,11 @@ class YouTubeDownloader:
         path = filedialog.askdirectory(initialdir=self.clipboard_download_path)
         if path:
             if not os.path.exists(path):
-                messagebox.showerror("Error", f"Path does not exist: {path}")
+                messagebox.showerror(tr('error_title'), tr('error_path_not_exist', path=path))
                 return
 
             if not os.path.isdir(path):
-                messagebox.showerror("Error", f"Path is not a directory: {path}")
+                messagebox.showerror(tr('error_title'), tr('error_path_not_directory', path=path))
                 return
 
             test_file = os.path.join(path, ".ytdl_write_test")
@@ -1672,7 +2301,7 @@ class YouTubeDownloader:
                     f.write("test")
                 os.remove(test_file)
             except (IOError, OSError) as e:
-                messagebox.showerror("Error", f"Path is not writable:\n{path}\n\n{str(e)}")
+                messagebox.showerror(tr('error_title'), tr('error_path_not_writable', path=path, error=str(e)))
                 return
 
             self.clipboard_download_path = path
@@ -1689,7 +2318,7 @@ class YouTubeDownloader:
             else:
                 subprocess.Popen(['xdg-open', self.clipboard_download_path])
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to open folder:\n{str(e)}")
+            messagebox.showerror(tr('error_title'), tr('error_failed_open_folder', error=str(e)))
 
     def create_placeholder_image(self, width, height, text):
         """Create a placeholder image with text"""
@@ -1743,21 +2372,21 @@ class YouTubeDownloader:
         """Handler for fetch duration button"""
         url = self.url_entry.get().strip()
         if not url:
-            messagebox.showerror("Error", "Please enter a YouTube URL or select a local file first")
+            messagebox.showerror(tr('error_title'), tr('error_enter_url'))
             return
 
         # Check if it's a local file or YouTube URL
         if self.is_local_file(url):
             # Validate local file exists
             if not os.path.isfile(url):
-                messagebox.showerror("Error", f"File not found:\n{url}")
+                messagebox.showerror(tr('error_title'), tr('error_file_not_found', path=url))
                 return
             self.local_file_path = url
         else:
             # Validate YouTube URL
             is_valid, message = self.validate_youtube_url(url)
             if not is_valid:
-                messagebox.showerror("Invalid URL", message)
+                messagebox.showerror(tr('error_invalid_url'), message)
                 logger.warning(f"Invalid URL rejected: {url}")
                 return
             self.local_file_path = None
@@ -1768,7 +2397,7 @@ class YouTubeDownloader:
                 # Disable trimming and upload for playlists
                 self.trim_enabled_var.set(False)
                 self.toggle_trim()  # Disable trim controls
-                self.video_info_label.config(text="Playlist detected - Trimming and upload disabled for playlists", foreground="orange")
+                self.video_info_label.config(text=tr('warning_playlist_detected'), foreground="orange")
                 self.filesize_label.config(text="")
                 logger.info("Playlist URL detected - trimming disabled")
                 # Don't fetch duration for playlists
@@ -1860,17 +2489,17 @@ class YouTubeDownloader:
                 raise Exception(f"yt-dlp returned error: {result.stderr}")
 
         except subprocess.TimeoutExpired:
-            error_msg = "Request timed out. Please check your internet connection."
-            messagebox.showerror("Error", error_msg)
+            error_msg = tr('error_request_timeout')
+            messagebox.showerror(tr('error_title'), error_msg)
             self.update_status("Duration fetch timed out", "red")
             logger.error("Timeout fetching video duration")
         except ValueError as e:
-            error_msg = f"Invalid duration format received: {str(e)}"
-            messagebox.showerror("Error", error_msg)
+            error_msg = tr('error_invalid_duration', error=str(e))
+            messagebox.showerror(tr('error_title'), error_msg)
             self.update_status("Invalid duration format", "red")
             logger.error(f"Duration parsing error: {e}")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to fetch video duration:\n{str(e)}")
+            messagebox.showerror(tr('error_title'), tr('error_fetch_duration_failed', error=str(e)))
             self.update_status("Failed to fetch duration", "red")
             logger.exception(f"Unexpected error fetching duration: {e}")
 
@@ -1999,17 +2628,17 @@ class YouTubeDownloader:
             self.root.after(100, self.update_previews)
 
         except subprocess.CalledProcessError as e:
-            error_msg = f"Failed to read video file:\n{e.stderr if e.stderr else str(e)}"
-            messagebox.showerror("Error", error_msg)
+            error_msg = tr('error_read_video_failed', error=(e.stderr if e.stderr else str(e)))
+            messagebox.showerror(tr('error_title'), error_msg)
             self.update_status("Failed to read file", "red")
             logger.error(f"ffprobe error: {e}")
         except ValueError as e:
-            error_msg = "Invalid video file format"
-            messagebox.showerror("Error", error_msg)
+            error_msg = tr('error_invalid_video_format')
+            messagebox.showerror(tr('error_title'), error_msg)
             self.update_status("Invalid file format", "red")
             logger.error(f"Duration parsing error: {e}")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to read file:\n{str(e)}")
+            messagebox.showerror(tr('error_title'), tr('error_read_file_failed', error=str(e)))
             self.update_status("Failed to read file", "red")
             logger.exception(f"Unexpected error reading local file: {e}")
         finally:
@@ -2124,20 +2753,19 @@ class YouTubeDownloader:
     def start_upload(self):
         """Start upload to Catbox.moe in a background thread"""
         if not self.last_output_file or not os.path.isfile(self.last_output_file):
-            messagebox.showerror("Error", "No file available to upload. Please download/process a video first.")
+            messagebox.showerror(tr('error_title'), tr('error_no_file_to_upload'))
             return
 
         # Check file size (200MB limit for Catbox.moe)
         file_size_mb = os.path.getsize(self.last_output_file) / (1024 * 1024)
         if file_size_mb > 200:
-            messagebox.showerror("File Too Large",
-                               f"File size ({file_size_mb:.1f} MB) exceeds Catbox.moe's 200MB limit.\n"
-                               "Please trim the video or use a lower quality setting.")
+            messagebox.showerror(tr('error_file_too_large_title'),
+                               tr('error_file_too_large', size=f"{file_size_mb:.1f}"))
             return
 
         # Disable upload button during upload
         self.upload_btn.config(state='disabled')
-        self.upload_status_label.config(text="Uploading...", foreground="blue")
+        self.upload_status_label.config(text=tr('status_uploading'), foreground="blue")
         self.upload_url_frame.grid_remove()
 
         # Start upload in background thread
@@ -2167,7 +2795,7 @@ class YouTubeDownloader:
 
     def _upload_success(self, file_url):
         """Handle successful upload (called on main thread)"""
-        self.upload_status_label.config(text="Upload complete!", foreground="green")
+        self.upload_status_label.config(text=tr('status_upload_complete'), foreground="green")
 
         # Show URL in entry field
         self.upload_url_entry.config(state='normal')
@@ -2183,9 +2811,8 @@ class YouTubeDownloader:
         filename = os.path.basename(self.last_output_file) if self.last_output_file else "unknown"
         self.save_upload_link(file_url, filename)
 
-        messagebox.showinfo("Upload Complete",
-                          f"File uploaded successfully!\n\nURL: {file_url}\n\n"
-                          "The URL has been copied to your clipboard.")
+        messagebox.showinfo(tr('info_upload_complete_title'),
+                          tr('info_upload_complete', url=file_url))
 
         # Auto-copy to clipboard
         self.root.clipboard_clear()
@@ -2193,9 +2820,9 @@ class YouTubeDownloader:
 
     def _upload_failed(self, error_msg):
         """Handle failed upload (called on main thread)"""
-        self.upload_status_label.config(text="Upload failed", foreground="red")
+        self.upload_status_label.config(text=tr('status_upload_failed'), foreground="red")
         self.upload_btn.config(state='normal')
-        messagebox.showerror("Upload Failed", f"Failed to upload file:\n\n{error_msg}")
+        messagebox.showerror(tr('info_upload_failed_title'), tr('info_upload_failed', error=error_msg))
 
     def copy_upload_url(self):
         """Copy upload URL to clipboard"""
@@ -2203,7 +2830,7 @@ class YouTubeDownloader:
         if url:
             self.root.clipboard_clear()
             self.root.clipboard_append(url)
-            self.upload_status_label.config(text="URL copied to clipboard!", foreground="green")
+            self.upload_status_label.config(text=tr('status_url_copied'), foreground="green")
             logger.info("Upload URL copied to clipboard")
 
     # Uploader tab methods
@@ -2211,11 +2838,11 @@ class YouTubeDownloader:
     def browse_uploader_files(self):
         """Browse and select multiple files for upload in Uploader tab"""
         file_paths = filedialog.askopenfilenames(
-            title="Select Video Files",
+            title=tr('dialog_select_video_files'),
             filetypes=[
-                ("Video files", "*.mp4 *.avi *.mkv *.mov *.flv *.wmv *.webm *.m4v"),
-                ("Audio files", "*.mp3 *.m4a *.wav *.flac *.aac *.ogg"),
-                ("All files", "*.*")
+                (tr('dialog_video_files'), "*.mp4 *.avi *.mkv *.mov *.flv *.wmv *.webm *.m4v"),
+                (tr('dialog_audio_files'), "*.mp3 *.m4a *.wav *.flac *.aac *.ogg"),
+                (tr('dialog_all_files'), "*.*")
             ]
         )
 
@@ -2224,8 +2851,8 @@ class YouTubeDownloader:
                 # Check file size
                 file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
                 if file_size_mb > 200:
-                    messagebox.showwarning("File Too Large",
-                                         f"Skipped: {os.path.basename(file_path)}\nFile size ({file_size_mb:.1f} MB) exceeds 200MB limit.")
+                    messagebox.showwarning(tr('error_file_too_large_title'),
+                                         tr('info_skipped_file', filename=os.path.basename(file_path), size=f"{file_size_mb:.1f}"))
                     continue
 
                 # Add to queue if not already there
@@ -2270,7 +2897,7 @@ class YouTubeDownloader:
     def clear_uploader_queue(self):
         """Clear all files from upload queue"""
         if self.uploader_is_uploading:
-            messagebox.showwarning("Cannot Clear", "Cannot clear queue while uploads are in progress.")
+            messagebox.showwarning(tr('warning_cannot_clear_title'), tr('warning_cannot_clear_uploading'))
             return
 
         for item in self.uploader_file_queue:
@@ -2285,12 +2912,13 @@ class YouTubeDownloader:
     def _update_uploader_queue_count(self):
         """Update file queue count label"""
         count = len(self.uploader_file_queue)
-        self.uploader_queue_count_label.config(text=f"({count} file{'s' if count != 1 else ''})")
+        s = 's' if count != 1 else ''
+        self.uploader_queue_count_label.config(text=tr('label_file_count', count=count, s=s))
 
     def start_uploader_upload(self):
         """Start uploading all files in queue sequentially"""
         if len(self.uploader_file_queue) == 0:
-            messagebox.showinfo("No Files", "No files in queue. Please add files first.")
+            messagebox.showinfo(tr('warning_no_files_title'), tr('warning_no_files'))
             return
 
         if self.uploader_is_uploading:
@@ -2319,7 +2947,7 @@ class YouTubeDownloader:
 
             self.root.after(0, lambda i=index, t=total_count, fn=filename:
                 self.uploader_status_label.config(
-                    text=f"Uploading {i+1}/{t}: {fn}...",
+                    text=tr('status_uploading_file', current=i+1, total=t, filename=fn),
                     foreground="blue"))
 
             success = self._upload_single_file(file_path)
@@ -2351,9 +2979,10 @@ class YouTubeDownloader:
         except Exception as e:
             logger.exception(f"Upload failed for {file_path}: {e}")
             error_msg = str(e)
-            self.root.after(0, lambda msg=error_msg, path=file_path:
-                messagebox.showerror("Upload Failed",
-                    f"Failed to upload {os.path.basename(path)}:\n\n{msg}"))
+            filename = os.path.basename(file_path)
+            full_error = f"Failed to upload {filename}:\n\n{error_msg}"
+            self.root.after(0, lambda msg=full_error:
+                messagebox.showerror(tr('info_upload_failed_title'), msg))
             return False
 
     def _show_upload_url(self, file_url):
@@ -2381,7 +3010,7 @@ class YouTubeDownloader:
         self.uploader_file_queue.clear()
         self._update_uploader_queue_count()
 
-        self.uploader_status_label.config(text=f"All uploads complete! ({count} files)", foreground="green")
+        self.uploader_status_label.config(text=tr('status_all_uploads_complete', count=count), foreground="green")
         self.uploader_upload_btn.config(state='disabled')
 
         logger.info(f"Uploader queue finished: {count} files uploaded")
@@ -2392,7 +3021,7 @@ class YouTubeDownloader:
         if url:
             self.root.clipboard_clear()
             self.root.clipboard_append(url)
-            self.uploader_status_label.config(text="URL copied to clipboard!", foreground="green")
+            self.uploader_status_label.config(text=tr('status_url_copied'), foreground="green")
             logger.info("Upload URL copied to clipboard from Uploader tab")
 
     def _find_latest_file(self):
@@ -2620,11 +3249,11 @@ class YouTubeDownloader:
         if path:
             # Validate that path exists and is writable
             if not os.path.exists(path):
-                messagebox.showerror("Error", f"Path does not exist: {path}")
+                messagebox.showerror(tr('error_title'), tr('error_path_not_exist', path=path))
                 return
 
             if not os.path.isdir(path):
-                messagebox.showerror("Error", f"Path is not a directory: {path}")
+                messagebox.showerror(tr('error_title'), tr('error_path_not_directory', path=path))
                 return
 
             # Test write permissions
@@ -2634,7 +3263,7 @@ class YouTubeDownloader:
                     f.write("test")
                 os.remove(test_file)
             except (IOError, OSError) as e:
-                messagebox.showerror("Error", f"Path is not writable:\n{path}\n\n{str(e)}")
+                messagebox.showerror(tr('error_title'), tr('error_path_not_writable', path=path, error=str(e)))
                 return
 
             self.download_path = path
@@ -2650,17 +3279,17 @@ class YouTubeDownloader:
             else:
                 subprocess.Popen(['xdg-open', self.download_path])
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to open folder:\n{str(e)}")
+            messagebox.showerror(tr('error_title'), tr('error_failed_open_folder', error=str(e)))
 
     def browse_local_file(self):
         """Open file dialog to select a local video file"""
         filetypes = [
-            ('Video Files', '*.mp4 *.mkv *.avi *.mov *.flv *.webm *.wmv *.m4v'),
-            ('All Files', '*.*')
+            (tr('dialog_video_files'), '*.mp4 *.mkv *.avi *.mov *.flv *.webm *.wmv *.m4v'),
+            (tr('dialog_all_files'), '*.*')
         ]
 
         filepath = filedialog.askopenfilename(
-            title="Select a video file",
+            title=tr('dialog_select_video'),
             filetypes=filetypes,
             initialdir=str(Path.home())
         )
@@ -2670,7 +3299,7 @@ class YouTubeDownloader:
             self.url_entry.insert(0, filepath)
             self.local_file_path = filepath
             self.mode_label.config(
-                text=f"Mode: Local File | {Path(filepath).name}",
+                text=tr('label_mode_local', filename=Path(filepath).name),
                 foreground="green"
             )
             # Clear filename field for new file
@@ -2692,13 +3321,13 @@ class YouTubeDownloader:
         if self.is_local_file(input_text):
             self.local_file_path = input_text
             self.mode_label.config(
-                text=f"Mode: Local File | {Path(input_text).name}",
+                text=tr('label_mode_local', filename=Path(input_text).name),
                 foreground="green"
             )
         else:
             self.local_file_path = None
             self.mode_label.config(
-                text="Mode: YouTube Download",
+                text=tr('label_mode_youtube'),
                 foreground="blue"
             )
 
@@ -2775,7 +3404,7 @@ class YouTubeDownloader:
         url = self.url_entry.get().strip()
 
         if not url:
-            messagebox.showerror("Error", "Please enter a YouTube URL or select a local file")
+            messagebox.showerror(tr('error_title'), tr('error_enter_url'))
             return
 
         # Check if local file or YouTube URL
@@ -2784,13 +3413,13 @@ class YouTubeDownloader:
         if is_local:
             # Validate local file exists
             if not os.path.isfile(url):
-                messagebox.showerror("Error", f"File not found:\n{url}")
+                messagebox.showerror(tr('error_title'), tr('error_file_not_found', path=url))
                 return
         else:
             # Validate YouTube URL
             is_valid, message = self.validate_youtube_url(url)
             if not is_valid:
-                messagebox.showerror("Invalid URL", message)
+                messagebox.showerror(tr('error_invalid_url'), message)
                 logger.warning(f"Invalid URL rejected for download: {url}")
                 return
 
@@ -2798,7 +3427,7 @@ class YouTubeDownloader:
             self.is_playlist = self.is_playlist_url(url)
 
         if not self.dependencies_ok:
-            messagebox.showerror("Error", "yt-dlp or ffmpeg is not installed.\n\nInstall with:\npip install yt-dlp\n\nand install ffmpeg from your package manager")
+            messagebox.showerror(tr('error_title'), tr('error_missing_dependencies'))
             return
 
         logger.info(f"Starting download for URL: {url}")
