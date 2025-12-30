@@ -22,6 +22,13 @@ try:
 except ImportError:
     DBUS_AVAILABLE = False
 
+# Try to import pyperclip for cross-platform clipboard support
+try:
+    import pyperclip
+    PYPERCLIP_AVAILABLE = True
+except ImportError:
+    PYPERCLIP_AVAILABLE = False
+
 # Configure logging
 log_dir = Path.home() / ".ytviddownloader"
 log_dir.mkdir(exist_ok=True)
@@ -695,14 +702,14 @@ class YouTubeDownloader:
             logger.info("Clipboard monitoring stopped")
 
     def _poll_clipboard(self):
-        """Poll clipboard using Klipper (KDE) or tkinter fallback"""
+        """Poll clipboard using best available method for each platform"""
         if not self.clipboard_monitoring:
             return
 
         clipboard_content = None
 
         try:
-            # Try KDE Klipper first (most reliable on KDE Plasma)
+            # Try KDE Klipper first (most reliable on KDE Plasma Linux)
             if self.klipper_interface:
                 try:
                     clipboard_content = str(self.klipper_interface.getClipboardContents())
@@ -710,7 +717,15 @@ class YouTubeDownloader:
                     logger.debug(f"Klipper read failed: {e}")
                     clipboard_content = None
 
-            # Fallback to tkinter if Klipper unavailable or failed
+            # Try pyperclip (works on Windows even when Firefox has focus)
+            if not clipboard_content and PYPERCLIP_AVAILABLE:
+                try:
+                    clipboard_content = pyperclip.paste()
+                except Exception as e:
+                    logger.debug(f"Pyperclip read failed: {e}")
+                    clipboard_content = None
+
+            # Fallback to tkinter if other methods unavailable or failed
             if not clipboard_content:
                 self.root.update_idletasks()
                 clipboard_content = self.root.clipboard_get()

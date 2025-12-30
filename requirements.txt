@@ -1,4 +1,5 @@
 yt-dlp>=2024.11.0,<2026.0.0
 Pillow>=10.0.0,<12.0.0
-catboxpy>=1.0.0
-dbus-python>=1.2.0
+catboxpy>=0.1.0
+dbus-python>=1.2.0; sys_platform == 'linux'
+pyperclip>=1.8.0
