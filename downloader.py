@@ -2024,7 +2024,7 @@ class YouTubeDownloader:
         return False
 
     def _get_bundled_executable(self, name):
-        """Get path to bundled executable (ffmpeg/ffprobe) if available"""
+        """Get path to bundled executable (ffmpeg/ffprobe/yt-dlp) if available"""
         # When packaged with PyInstaller, bundled files are in sys._MEIPASS
         if getattr(sys, 'frozen', False):
             # Running as compiled executable
@@ -2038,6 +2038,21 @@ class YouTubeDownloader:
             if os.path.exists(bundled_path):
                 logger.info(f"Using bundled {name}: {bundled_path}")
                 return bundled_path
+
+        # When running from source, check local venv first
+        else:
+            # Check venv in script directory
+            script_dir = Path(__file__).parent
+            venv_path = script_dir / 'venv' / 'bin' / name
+            if venv_path.exists():
+                logger.info(f"Using venv {name}: {venv_path}")
+                return str(venv_path)
+
+            # Check current Python's bin directory (if venv is activated)
+            python_bin_path = Path(sys.executable).parent / name
+            if python_bin_path.exists():
+                logger.info(f"Using Python bin {name}: {python_bin_path}")
+                return str(python_bin_path)
 
         # Fall back to system PATH
         return name
