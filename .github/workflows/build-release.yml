@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -35,12 +38,13 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller yt-dlp
+        pip install pyinstaller
+        pip install -r requirements.txt
 
     - name: Build executable (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
-        pyinstaller --onefile --name YTVidDownloader --windowed downloader.py
+        pyinstaller --onefile --name YTVidDownloader --windowed --hidden-import dbus downloader.py
 
     - name: Build executable (Windows)
       if: matrix.os == 'windows-latest'
