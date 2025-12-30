@@ -329,7 +329,12 @@ class YouTubeDownloader:
         self.notebook = ttk.Notebook(scrollable_frame)
         self.notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
 
-        # Trimmer tab (existing functionality)
+        # Clipboard Mode tab (first tab)
+        clipboard_tab_frame = ttk.Frame(self.notebook, padding="20")
+        self.notebook.add(clipboard_tab_frame, text="Clipboard Mode")
+        # Setup will be called after Trimmer tab is created
+
+        # Trimmer tab (second tab)
         main_tab_frame = ttk.Frame(self.notebook, padding="20")
         self.notebook.add(main_tab_frame, text="Trimmer")
 
@@ -556,9 +561,7 @@ class YouTubeDownloader:
         # Hide upload URL frame initially
         self.upload_url_frame.grid_remove()
 
-        # Clipboard Mode tab (new functionality)
-        clipboard_tab_frame = ttk.Frame(self.notebook, padding="20")
-        self.notebook.add(clipboard_tab_frame, text="Clipboard Mode")
+        # Setup Clipboard Mode UI (tab was created at the beginning)
         self.setup_clipboard_mode_ui(clipboard_tab_frame)
 
         # Bind tab change event
@@ -593,7 +596,7 @@ class YouTubeDownloader:
 
         # Quality dropdown
         ttk.Label(settings_frame, text="Quality:", font=('Arial', 9)).grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
-        self.clipboard_quality_var = tk.StringVar(value="480")
+        self.clipboard_quality_var = tk.StringVar(value="1080")
         quality_options = ["1440", "1080", "720", "480", "360", "240", "none (Audio only)"]
         self.clipboard_quality_combo = ttk.Combobox(settings_frame, textvariable=self.clipboard_quality_var,
             values=quality_options, state='readonly', width=20)
@@ -679,9 +682,9 @@ class YouTubeDownloader:
     def on_tab_changed(self, event=None):
         """Handle notebook tab changes"""
         current_tab = self.notebook.index(self.notebook.select())
-        if current_tab == 1:  # Clipboard Mode tab
+        if current_tab == 0:  # Clipboard Mode tab (first tab)
             self.start_clipboard_monitoring()
-        else:  # Main tab
+        else:  # Trimmer tab (second tab)
             self.stop_clipboard_monitoring()
 
     def start_clipboard_monitoring(self):
