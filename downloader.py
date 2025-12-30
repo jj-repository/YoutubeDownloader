@@ -76,6 +76,10 @@ class YouTubeDownloader:
         self.download_start_time = None
         self.timeout_monitor_thread = None
 
+        # Detect bundled ffmpeg/ffprobe (when packaged with PyInstaller)
+        self.ffmpeg_path = self._get_bundled_executable(self.ffmpeg_path)
+        self.ffprobe_path = self._get_bundled_executable(self.ffprobe_path)
+
         # Frame preview variables
         self.start_preview_image = None
         self.end_preview_image = None
@@ -1469,7 +1473,7 @@ class YouTubeDownloader:
         """Fetch duration from local file using ffprobe"""
         try:
             cmd = [
-                'ffprobe',
+                self.ffprobe_path,
                 '-v', 'error',
                 '-show_entries', 'format=duration',
                 '-of', 'default=noprint_wrappers=1:nokey=1',
@@ -1821,7 +1825,7 @@ class YouTubeDownloader:
             # Now extract frame from the actual stream with retry
             def _extract_frame():
                 cmd = [
-                    'ffmpeg',
+                    self.ffmpeg_path,
                     '-ss', str(timestamp),
                     '-i', video_url,
                     '-vframes', '1',
@@ -2021,6 +2025,25 @@ class YouTubeDownloader:
 
         return False
 
+    def _get_bundled_executable(self, name):
+        """Get path to bundled executable (ffmpeg/ffprobe) if available"""
+        # When packaged with PyInstaller, bundled files are in sys._MEIPASS
+        if getattr(sys, 'frozen', False):
+            # Running as compiled executable
+            bundle_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+            if sys.platform == 'win32':
+                exe_name = f"{name}.exe"
+            else:
+                exe_name = name
+
+            bundled_path = os.path.join(bundle_dir, exe_name)
+            if os.path.exists(bundled_path):
+                logger.info(f"Using bundled {name}: {bundled_path}")
+                return bundled_path
+
+        # Fall back to system PATH
+        return name
+
     def check_dependencies(self):
         """Check if yt-dlp, ffmpeg, and ffprobe are available"""
         try:
@@ -2029,15 +2052,15 @@ class YouTubeDownloader:
                                   capture_output=True, check=True, timeout=5)
             logger.info(f"yt-dlp version: {result.stdout.decode().strip()}")
 
-            # Check ffmpeg
-            result = subprocess.run(['ffmpeg', '-version'],
+            # Check ffmpeg (use bundled or system)
+            result = subprocess.run([self.ffmpeg_path, '-version'],
                                   capture_output=True, check=True, timeout=5)
-            logger.info("ffmpeg is available")
+            logger.info(f"ffmpeg is available at: {self.ffmpeg_path}")
 
-            # Check ffprobe
-            result = subprocess.run(['ffprobe', '-version'],
+            # Check ffprobe (use bundled or system)
+            result = subprocess.run([self.ffprobe_path, '-version'],
                                   capture_output=True, check=True, timeout=5)
-            logger.info("ffprobe is available")
+            logger.info(f"ffprobe is available at: {self.ffprobe_path}")
 
             return True
         except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
@@ -2476,7 +2499,7 @@ class YouTubeDownloader:
             if audio_only:
                 # Extract audio only
                 output_file = os.path.join(self.download_path, f"{output_name}.m4a")
-                cmd = ['ffmpeg', '-i', filepath]
+                cmd = [self.ffmpeg_path, '-i', filepath]
 
                 if trim_enabled:
                     cmd.extend(['-ss', str(start_time), '-to', str(end_time)])
@@ -2499,7 +2522,7 @@ class YouTubeDownloader:
                 height = quality
                 output_file = os.path.join(self.download_path, f"{output_name}.mp4")
 
-                cmd = ['ffmpeg', '-i', filepath]
+                cmd = [self.ffmpeg_path, '-i', filepath]
 
                 if trim_enabled:
                     cmd.extend(['-ss', str(start_time), '-to', str(end_time)])

@@ -55,15 +55,39 @@ jobs:
       run: |
         pip install dbus-python
 
+    - name: Download and bundle ffmpeg (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        mkdir -p ffmpeg_bundle
+        cd ffmpeg_bundle
+        wget https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
+        tar -xf ffmpeg-release-amd64-static.tar.xz
+        mv ffmpeg-*-amd64-static/ffmpeg ../ffmpeg
+        mv ffmpeg-*-amd64-static/ffprobe ../ffprobe
+        cd ..
+        chmod +x ffmpeg ffprobe
+        rm -rf ffmpeg_bundle
+
     - name: Build executable (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
-        pyinstaller --onefile --name YTVidDownloader --windowed downloader.py
+        pyinstaller --onefile --name YTVidDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." downloader.py
+
+    - name: Download and bundle ffmpeg (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        # Download ffmpeg static build for Windows
+        Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile "ffmpeg.zip"
+        Expand-Archive -Path ffmpeg.zip -DestinationPath .
+        Move-Item -Path ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe -Destination ffmpeg.exe
+        Move-Item -Path ffmpeg-master-latest-win64-gpl/bin/ffprobe.exe -Destination ffprobe.exe
+        Remove-Item -Recurse -Force ffmpeg-master-latest-win64-gpl, ffmpeg.zip
 
     - name: Build executable (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        pyinstaller --onefile --name YTVidDownloader --windowed --icon=NONE downloader.py
+        pyinstaller --onefile --name YTVidDownloader --windowed --icon=NONE --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." downloader.py
 
     - name: Create release package (Linux)
       if: matrix.os == 'ubuntu-latest'
