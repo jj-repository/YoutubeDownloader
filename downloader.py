@@ -85,7 +85,7 @@ MAX_FILENAME_LENGTH = 200  # Maximum filename length
 DEFAULT_VIDEO_QUALITY = "480"  # Default video quality preset
 
 # UI Constants
-CLIPBOARD_URL_LIST_HEIGHT = 25  # Height for clipboard URL list (reduced from 200)
+CLIPBOARD_URL_LIST_HEIGHT = 12  # Height for clipboard URL list (reduced from 200)
 
 # File paths for persistence
 UPLOAD_HISTORY_FILE = Path.home() / ".youtubedownloader" / "upload_history.txt"
@@ -700,13 +700,27 @@ class YouTubeDownloader:
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
 
+        def _on_mousewheel_linux(event):
+            # Linux uses Button-4 (scroll up) and Button-5 (scroll down)
+            if event.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(1, "units")
+
         # Bind mousewheel to canvas and scrollable frame for better UX
-        canvas.bind("<MouseWheel>", _on_mousewheel)
+        canvas.bind("<MouseWheel>", _on_mousewheel)  # Windows/MacOS
+        canvas.bind("<Button-4>", _on_mousewheel_linux)  # Linux scroll up
+        canvas.bind("<Button-5>", _on_mousewheel_linux)  # Linux scroll down
+
         scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
+        scrollable_frame.bind("<Button-4>", _on_mousewheel_linux)
+        scrollable_frame.bind("<Button-5>", _on_mousewheel_linux)
 
         # Recursively bind mousewheel to all children widgets
         def bind_to_mousewheel(widget):
             widget.bind("<MouseWheel>", _on_mousewheel)
+            widget.bind("<Button-4>", _on_mousewheel_linux)
+            widget.bind("<Button-5>", _on_mousewheel_linux)
             for child in widget.winfo_children():
                 bind_to_mousewheel(child)
 
@@ -1028,8 +1042,7 @@ class YouTubeDownloader:
 
         # Scrollable URL list
         url_list_container = ttk.Frame(parent)
-        url_list_container.grid(row=10, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        parent.grid_rowconfigure(10, weight=1)
+        url_list_container.grid(row=10, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
 
         self.clipboard_url_canvas = tk.Canvas(url_list_container, height=CLIPBOARD_URL_LIST_HEIGHT, bg='white',
                                              highlightthickness=1, highlightbackground='gray')
@@ -1107,10 +1120,9 @@ class YouTubeDownloader:
 
         # Scrollable file list
         file_list_container = ttk.Frame(parent)
-        file_list_container.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
-        parent.grid_rowconfigure(5, weight=1)
+        file_list_container.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
 
-        self.uploader_file_canvas = tk.Canvas(file_list_container, height=150, bg='white',
+        self.uploader_file_canvas = tk.Canvas(file_list_container, height=75, bg='white',
                                              highlightthickness=1, highlightbackground='gray')
         file_scrollbar = ttk.Scrollbar(file_list_container, orient="vertical",
                                       command=self.uploader_file_canvas.yview)
