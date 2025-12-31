@@ -1809,6 +1809,13 @@ class YouTubeDownloader:
             values=quality_options, state='readonly', width=20)
         self.clipboard_quality_combo.grid(row=0, column=1, sticky=tk.W)
 
+        # Speed limit
+        ttk.Label(settings_frame, text="Speed limit:", font=('Arial', 9)).grid(row=0, column=2, sticky=tk.W, padx=(20, 5))
+        self.clipboard_speed_limit_var = tk.StringVar(value="")
+        self.clipboard_speed_limit_entry = ttk.Entry(settings_frame, textvariable=self.clipboard_speed_limit_var, width=6)
+        self.clipboard_speed_limit_entry.grid(row=0, column=3, sticky=tk.W)
+        ttk.Label(settings_frame, text="MB/s", font=('Arial', 9)).grid(row=0, column=4, sticky=tk.W, padx=(5, 0))
+
         # Output Folder
         ttk.Separator(parent, orient='horizontal').grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
 
@@ -2243,6 +2250,9 @@ class YouTubeDownloader:
                 cmd = self.build_audio_ytdlp_command(url, output_path, volume=1.0)
             else:
                 cmd = self.build_video_ytdlp_command(url, output_path, quality, volume=1.0)
+
+            # Add speed limit if set
+            cmd.extend(self._get_speed_limit_args(self.clipboard_speed_limit_var))
 
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                        universal_newlines=True, bufsize=1)
@@ -3689,9 +3699,15 @@ class YouTubeDownloader:
             self.update_status(reason, "red")
             self.stop_download()
 
-    def _get_speed_limit_args(self):
-        """Get yt-dlp speed limit arguments if speed limit is set"""
-        speed_limit_str = self.speed_limit_var.get().strip()
+    def _get_speed_limit_args(self, speed_limit_var=None):
+        """Get yt-dlp speed limit arguments if speed limit is set
+
+        Args:
+            speed_limit_var: Optional StringVar to use. Defaults to self.speed_limit_var
+        """
+        if speed_limit_var is None:
+            speed_limit_var = self.speed_limit_var
+        speed_limit_str = speed_limit_var.get().strip()
         if speed_limit_str:
             try:
                 speed_limit = float(speed_limit_str)
