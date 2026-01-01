@@ -250,7 +250,12 @@ Check this file for detailed error messages and debugging information.
 
 ## 🔄 Changelog
 
-### Version 3.1.0 (Latest)
+### Version 3.1.1 (Latest)
+- ✅ **Clipboard Mode Progress Feedback**: Shows "Downloading video...", "Downloading audio...", "Merging..." status
+- ✅ **Fixed Clipboard URL Re-detection**: Normalized clipboard content to prevent false duplicate detection
+- ✅ **Enhanced Status Messages**: Added ffmpeg processing and audio extraction status indicators
+
+### Version 3.1.0
 - ✅ **Speed Limit for Clipboard Mode**: Added download speed cap option (MB/s) matching Trimmer tab
 - ✅ **Improved Preview Extraction**: HTTP reconnect options for reliable YouTube stream fetching
 - ✅ **EOF Preview Fix**: Adjusted end-of-video preview to avoid ffmpeg seek failures
