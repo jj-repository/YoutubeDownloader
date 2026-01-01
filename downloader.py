@@ -1980,9 +1980,10 @@ class YouTubeDownloader:
         if not self.clipboard_monitoring:
             self.clipboard_monitoring = True
             logger.info("Clipboard monitoring started (tkinter polling)")
-            # Initialize last content from current clipboard
+            # Initialize last content from current clipboard (normalized to prevent source mismatches)
             try:
-                self.clipboard_last_content = self.root.clipboard_get()
+                content = self.root.clipboard_get()
+                self.clipboard_last_content = content.strip() if content else ""
             except tk.TclError:
                 self.clipboard_last_content = ""
             # Start polling loop
@@ -2022,6 +2023,10 @@ class YouTubeDownloader:
             if not clipboard_content:
                 self.root.update_idletasks()
                 clipboard_content = self.root.clipboard_get()
+
+            # Normalize clipboard content to prevent false changes from whitespace differences
+            if clipboard_content:
+                clipboard_content = clipboard_content.strip()
 
             if clipboard_content and clipboard_content != self.clipboard_last_content:
                 logger.info(f"Clipboard changed: {clipboard_content[:80]}")
@@ -2257,6 +2262,9 @@ class YouTubeDownloader:
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                        universal_newlines=True, bufsize=1)
 
+            # Track current download phase for status messages
+            current_phase = "video" if not audio_only else "audio"
+
             for line in process.stdout:
                 # Check stop flags
                 if check_stop:
@@ -2272,11 +2280,32 @@ class YouTubeDownloader:
                         self.safe_process_cleanup(process)
                         return False
 
+                line_lower = line.lower()
+
+                # Detect phase changes from yt-dlp output
+                if 'downloading video' in line_lower or ('video' in line_lower and 'downloading' in line_lower):
+                    current_phase = "video"
+                elif 'downloading audio' in line_lower or ('audio' in line_lower and 'downloading' in line_lower):
+                    current_phase = "audio"
+
                 if '[download]' in line or 'Downloading' in line:
                     progress_match = PROGRESS_REGEX.search(line)
                     if progress_match:
                         progress = float(progress_match.group(1))
                         self.root.after(0, lambda p=progress: self.update_clipboard_progress(p))
+
+                        # Show phase-specific status
+                        phase = current_phase
+                        self.root.after(0, lambda p=progress, ph=phase: self.update_clipboard_status(
+                            f"Downloading {ph}... {p:.1f}%", "blue"))
+
+                # Show merging/processing status
+                elif '[Merger]' in line or 'Merging' in line:
+                    self.root.after(0, lambda: self.update_clipboard_status("Merging video and audio...", "blue"))
+                elif '[ffmpeg]' in line:
+                    self.root.after(0, lambda: self.update_clipboard_status("Processing with ffmpeg...", "blue"))
+                elif '[ExtractAudio]' in line:
+                    self.root.after(0, lambda: self.update_clipboard_status("Extracting audio...", "blue"))
 
             process.wait()
 
