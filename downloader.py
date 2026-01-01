@@ -3598,23 +3598,36 @@ class YouTubeDownloader:
     def check_dependencies(self):
         """Check if yt-dlp, ffmpeg, and ffprobe are available"""
         try:
-            # Check yt-dlp
+            # Check yt-dlp (don't use check=True as warnings may cause non-zero exit)
             result = subprocess.run([self.ytdlp_path, '--version'],
-                                  capture_output=True, check=True, timeout=DEPENDENCY_CHECK_TIMEOUT)
-            logger.info(f"yt-dlp version: {result.stdout.decode().strip()}")
+                                  capture_output=True, timeout=DEPENDENCY_CHECK_TIMEOUT)
+            version = result.stdout.decode().strip()
+            if version:
+                logger.info(f"yt-dlp version: {version}")
+            else:
+                logger.error("yt-dlp check failed: no version output")
+                return False
 
             # Check ffmpeg (use bundled or system)
             result = subprocess.run([self.ffmpeg_path, '-version'],
-                                  capture_output=True, check=True, timeout=DEPENDENCY_CHECK_TIMEOUT)
-            logger.info(f"ffmpeg is available at: {self.ffmpeg_path}")
+                                  capture_output=True, timeout=DEPENDENCY_CHECK_TIMEOUT)
+            if result.returncode == 0:
+                logger.info(f"ffmpeg is available at: {self.ffmpeg_path}")
+            else:
+                logger.error("ffmpeg check failed")
+                return False
 
             # Check ffprobe (use bundled or system)
             result = subprocess.run([self.ffprobe_path, '-version'],
-                                  capture_output=True, check=True, timeout=DEPENDENCY_CHECK_TIMEOUT)
-            logger.info(f"ffprobe is available at: {self.ffprobe_path}")
+                                  capture_output=True, timeout=DEPENDENCY_CHECK_TIMEOUT)
+            if result.returncode == 0:
+                logger.info(f"ffprobe is available at: {self.ffprobe_path}")
+            else:
+                logger.error("ffprobe check failed")
+                return False
 
             return True
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             logger.error(f"Dependency check failed: {e}")
             return False
 
