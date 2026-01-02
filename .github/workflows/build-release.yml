@@ -449,7 +449,7 @@ jobs:
       uses: actions/download-artifact@v4
 
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         files: |
           ubuntu-latest-executable/YoutubeDownloader-Linux.tar.gz
