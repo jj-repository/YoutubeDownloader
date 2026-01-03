@@ -250,7 +250,14 @@ Check this file for detailed error messages and debugging information.
 
 ## 🔄 Changelog
 
-### Version 3.1.1 (Latest)
+### Version 3.1.2 (Latest)
+- ✅ **Code Cleanup**: Removed duplicate translation keys across all languages (en, de, pl)
+- ✅ **Python 3.13 Compatibility**: Fixed test suite mock compatibility with Python 3.13
+- ✅ **Python 3.6-3.8 Compatibility**: Fixed ThreadPoolExecutor.shutdown() for older Python versions
+- ✅ **Removed Dead Code**: Cleaned up unused THEMES dictionary and redundant imports
+- ✅ **Dependency Pinning**: Added upper bound to catboxpy dependency for stability
+
+### Version 3.1.1
 - ✅ **Clipboard Mode Progress Feedback**: Shows "Downloading video...", "Downloading audio...", "Merging..." status
 - ✅ **Fixed Clipboard URL Re-detection**: Normalized clipboard content to prevent false duplicate detection
 - ✅ **Enhanced Status Messages**: Added ffmpeg processing and audio extraction status indicators
