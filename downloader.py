@@ -7,12 +7,17 @@ import subprocess
 import threading
 import re
 import logging
+import json
 from pathlib import Path
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, parse_qs
+import shutil
+import signal
+import glob
+from collections import OrderedDict
 from catboxpy.catbox import CatboxClient
 
 # Try to import dbus for KDE Klipper integration
@@ -80,6 +85,7 @@ TIMEOUT_CHECK_INTERVAL = 10  # Download timeout check interval
 MAX_VOLUME = 2.0  # Maximum 200% volume
 MIN_VOLUME = 0.0  # Minimum 0% volume (mute)
 MAX_VIDEO_DURATION = 86400  # Max 24 hours
+BYTES_PER_MB = 1024 * 1024  # Bytes in a megabyte
 CATBOX_MAX_SIZE_MB = 200  # Catbox file size limit
 MAX_FILENAME_LENGTH = 200  # Maximum filename length
 DEFAULT_VIDEO_QUALITY = "480"  # Default video quality preset
@@ -277,13 +283,6 @@ TRANSLATIONS = {
         'status_duration_fetch_failed': 'Failed to fetch duration',
         'status_processing_complete': 'Processing complete!',
         'status_processing_failed': 'Processing failed',
-        'status_processing_local': 'Processing local file...',
-        'status_preparing_download': 'Preparing download...',
-        'status_extracting_audio': 'Extracting audio...',
-        'status_merging': 'Merging video and audio...',
-        'status_processing_ffmpeg': 'Processing with ffmpeg...',
-        'status_post_processing': 'Post-processing...',
-        'status_file_exists': 'File already exists, skipping...',
         'status_playlist_downloading': 'Downloading playlist...',
         'status_playlist_complete': 'Playlist download complete!',
         'status_playlist_failed': 'Playlist download failed',
@@ -302,7 +301,7 @@ TRANSLATIONS = {
         'label_calculating_size': 'Calculating size...',
         'label_file_size': '{filename} ({size} MB)',
 
-        # Additional status messages
+        # Clipboard and download status messages
         'status_clipboard_downloading': 'Downloading: {url}...',
         'status_clipboard_completed_total': 'Completed: {completed}/{total} videos',
         'status_downloading_detailed': 'Downloading... {progress}%',
@@ -310,7 +309,6 @@ TRANSLATIONS = {
         'status_downloading_full': 'Downloading... {progress}% at {speed} | ETA: {eta}',
 
         # Additional error messages
-        'error_url_empty': 'URL is empty',
         'error_permission_denied': 'Permission denied. Check write permissions for download folder.',
         'error_os_error': 'OS error: {error}',
         'error_generic': 'Error: {error}',
@@ -493,13 +491,6 @@ TRANSLATIONS = {
         'status_duration_fetch_failed': 'Dauer konnte nicht abgerufen werden',
         'status_processing_complete': 'Verarbeitung abgeschlossen!',
         'status_processing_failed': 'Verarbeitung fehlgeschlagen',
-        'status_processing_local': 'Lokale Datei wird verarbeitet...',
-        'status_preparing_download': 'Download wird vorbereitet...',
-        'status_extracting_audio': 'Audio wird extrahiert...',
-        'status_merging': 'Video und Audio werden zusammengeführt...',
-        'status_processing_ffmpeg': 'Verarbeitung mit ffmpeg...',
-        'status_post_processing': 'Nachbearbeitung...',
-        'status_file_exists': 'Datei existiert bereits, überspringe...',
         'status_playlist_downloading': 'Playlist wird heruntergeladen...',
         'status_playlist_complete': 'Playlist-Download abgeschlossen!',
         'status_playlist_failed': 'Playlist-Download fehlgeschlagen',
@@ -518,7 +509,7 @@ TRANSLATIONS = {
         'label_calculating_size': 'Größe wird berechnet...',
         'label_file_size': '{filename} ({size} MB)',
 
-        # Additional status messages
+        # Clipboard and download status messages
         'status_clipboard_downloading': 'Herunterladen: {url}...',
         'status_clipboard_completed_total': 'Abgeschlossen: {completed}/{total} Videos',
         'status_downloading_detailed': 'Herunterladen... {progress}%',
@@ -526,7 +517,6 @@ TRANSLATIONS = {
         'status_downloading_full': 'Herunterladen... {progress}% bei {speed} | ETA: {eta}',
 
         # Additional error messages
-        'error_url_empty': 'URL ist leer',
         'error_permission_denied': 'Zugriff verweigert. Überprüfen Sie die Schreibrechte für den Download-Ordner.',
         'error_os_error': 'OS-Fehler: {error}',
         'error_generic': 'Fehler: {error}',
@@ -709,13 +699,6 @@ TRANSLATIONS = {
         'status_duration_fetch_failed': 'Nie udało się pobrać czasu trwania',
         'status_processing_complete': 'Przetwarzanie zakończone!',
         'status_processing_failed': 'Przetwarzanie nie powiodło się',
-        'status_processing_local': 'Przetwarzanie pliku lokalnego...',
-        'status_preparing_download': 'Przygotowywanie pobierania...',
-        'status_extracting_audio': 'Wyodrębnianie audio...',
-        'status_merging': 'Łączenie wideo i audio...',
-        'status_processing_ffmpeg': 'Przetwarzanie za pomocą ffmpeg...',
-        'status_post_processing': 'Przetwarzanie końcowe...',
-        'status_file_exists': 'Plik już istnieje, pomijanie...',
         'status_playlist_downloading': 'Pobieranie playlisty...',
         'status_playlist_complete': 'Pobieranie playlisty zakończone!',
         'status_playlist_failed': 'Pobieranie playlisty nie powiodło się',
@@ -734,7 +717,7 @@ TRANSLATIONS = {
         'label_calculating_size': 'Obliczanie rozmiaru...',
         'label_file_size': '{filename} ({size} MB)',
 
-        # Additional status messages
+        # Clipboard and download status messages
         'status_clipboard_downloading': 'Pobieranie: {url}...',
         'status_clipboard_completed_total': 'Ukończono: {completed}/{total} filmów',
         'status_downloading_detailed': 'Pobieranie... {progress}%',
@@ -742,7 +725,6 @@ TRANSLATIONS = {
         'status_downloading_full': 'Pobieranie... {progress}% przy {speed} | ETA: {eta}',
 
         # Additional error messages
-        'error_url_empty': 'URL jest pusty',
         'error_permission_denied': 'Dostęp zabroniony. Sprawdź uprawnienia zapisu dla folderu pobierania.',
         'error_os_error': 'Błąd systemu: {error}',
         'error_generic': 'Błąd: {error}',
@@ -766,28 +748,6 @@ def tr(key, **kwargs):
         except (KeyError, ValueError):
             return text
     return text
-
-# Theme colors
-THEMES = {
-    'light': {
-        'bg': '#f0f0f0',
-        'fg': '#000000',
-        'select_bg': '#0078d7',
-        'select_fg': '#ffffff',
-        'button_bg': '#e1e1e1',
-        'entry_bg': '#ffffff',
-        'frame_bg': '#f0f0f0'
-    },
-    'dark': {
-        'bg': '#2b2b2b',
-        'fg': '#ffffff',
-        'select_bg': '#0078d7',
-        'select_fg': '#ffffff',
-        'button_bg': '#3c3c3c',
-        'entry_bg': '#1e1e1e',
-        'frame_bg': '#2b2b2b'
-    }
-}
 
 # Compiled regex patterns for performance
 PROGRESS_REGEX = re.compile(r'(\d+\.?\d*)%')
@@ -827,8 +787,8 @@ class YouTubeDownloader:
         self.preview_update_timer = None
         self.last_preview_update = 0
         self.preview_thread_running = False  # Track if preview thread is active
-        self.preview_cache = {}  # Cache for preview frames {timestamp: file_path}
-        self.cache_access_order = []  # Track access order for LRU eviction
+        # Use OrderedDict for O(1) LRU cache operations
+        self.preview_cache = OrderedDict()  # Cache for preview frames {timestamp: file_path}
 
         # Volume control
         self.volume_var = tk.DoubleVar(value=1.0)  # 1.0 = 100%
@@ -923,7 +883,6 @@ class YouTubeDownloader:
         try:
             if CLIPBOARD_URLS_FILE.exists():
                 with open(CLIPBOARD_URLS_FILE, 'r') as f:
-                    import json
                     data = json.load(f)
 
                     # Validate JSON structure
@@ -947,7 +906,6 @@ class YouTubeDownloader:
         """Save clipboard URLs to file for persistence between sessions"""
         try:
             CLIPBOARD_URLS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            import json
             # Save only pending and failed URLs (not completed ones)
             with self.clipboard_lock:
                 urls_to_save = [
@@ -980,12 +938,23 @@ class YouTubeDownloader:
         global CURRENT_LANGUAGE
         try:
             if CONFIG_FILE.exists():
-                import json
                 with open(CONFIG_FILE, 'r') as f:
                     config = json.load(f)
+                    # Validate config structure
+                    if not self.validate_config_json(config):
+                        logger.warning("Invalid config structure, using defaults")
+                        CURRENT_LANGUAGE = 'en'
+                        return
                     lang_code = config.get('language', 'en')
+                    # Validate language code
+                    if lang_code not in ['en', 'de', 'pl']:
+                        logger.warning(f"Unknown language code '{lang_code}', using 'en'")
+                        lang_code = 'en'
                     CURRENT_LANGUAGE = lang_code
                     logger.info(f"Loaded language preference: {lang_code}")
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in config file: {e}")
+            CURRENT_LANGUAGE = 'en'
         except Exception as e:
             logger.error(f"Error loading language preference: {e}")
             CURRENT_LANGUAGE = 'en'
@@ -994,7 +963,6 @@ class YouTubeDownloader:
         """Save language preference to config file"""
         try:
             CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            import json
 
             # Load existing config if any
             config = {}
@@ -1164,6 +1132,69 @@ class YouTubeDownloader:
             filename = filename[:MAX_FILENAME_LENGTH]
 
         return filename
+
+    @staticmethod
+    def validate_download_path(path):
+        """Validate download path to prevent path traversal attacks.
+
+        Args:
+            path: The path to validate
+
+        Returns:
+            tuple: (is_valid, normalized_path, error_message)
+        """
+        try:
+            # Normalize the path
+            normalized = os.path.normpath(os.path.abspath(path))
+
+            # Check for path traversal attempts
+            if '..' in path:
+                return (False, None, "Path contains directory traversal sequences")
+
+            # Ensure the path is within user's home directory or common safe locations
+            home_dir = str(Path.home())
+            safe_prefixes = [
+                home_dir,
+                '/tmp',
+                os.path.expandvars('$TEMP') if sys.platform == 'win32' else '/tmp',
+            ]
+
+            is_safe = any(normalized.startswith(os.path.normpath(prefix)) for prefix in safe_prefixes)
+            if not is_safe:
+                return (False, None, "Download path must be within home directory or temp folder")
+
+            return (True, normalized, None)
+        except Exception as e:
+            return (False, None, f"Path validation error: {str(e)}")
+
+    @staticmethod
+    def validate_config_json(config):
+        """Validate configuration JSON structure.
+
+        Args:
+            config: The parsed JSON config dict
+
+        Returns:
+            bool: True if config is valid, False otherwise
+        """
+        if not isinstance(config, dict):
+            return False
+
+        # Define allowed keys and their expected types
+        allowed_keys = {
+            'language': str,
+        }
+
+        for key, value in config.items():
+            if key not in allowed_keys:
+                logger.warning(f"Unknown config key ignored: {key}")
+                continue
+            expected_type = allowed_keys[key]
+            if not isinstance(value, expected_type):
+                logger.warning(f"Config key '{key}' has wrong type, expected {expected_type.__name__}")
+                return False
+
+        return True
 
     @staticmethod
     def validate_volume(volume):
@@ -1408,14 +1439,11 @@ class YouTubeDownloader:
             if 'list=' in parsed.query and query_params.get('list'):
                 return True
             return False
-        except Exception:
+        except (ValueError, AttributeError):
             return False
 
     def _init_temp_directory(self):
         """Initialize temp directory and clean up orphaned ones from previous crashes"""
-        import shutil
-        import glob
-
         # Clean up old orphaned temp directories
         temp_base = tempfile.gettempdir()
         old_dirs = glob.glob(os.path.join(temp_base, "ytdl_preview_*"))
@@ -1425,8 +1453,8 @@ class YouTubeDownloader:
                 dir_age = time.time() - os.path.getmtime(old_dir)
                 if dir_age > TEMP_DIR_MAX_AGE:
                     shutil.rmtree(old_dir, ignore_errors=True)
-            except Exception:
-                pass
+            except OSError:
+                pass  # Directory may have been removed by another process
 
         # Create new temp directory
         self.temp_dir = tempfile.mkdtemp(prefix="ytdl_preview_")
@@ -1977,7 +2005,10 @@ class YouTubeDownloader:
 
     def start_clipboard_monitoring(self):
         """Start clipboard monitoring using tkinter polling"""
-        if not self.clipboard_monitoring:
+        # Use clipboard_lock to prevent race conditions when starting/stopping
+        with self.clipboard_lock:
+            if self.clipboard_monitoring:
+                return  # Already monitoring, don't start another polling loop
             self.clipboard_monitoring = True
             logger.info("Clipboard monitoring started (tkinter polling)")
             # Initialize last content from current clipboard (normalized to prevent source mismatches)
@@ -1986,19 +2017,23 @@ class YouTubeDownloader:
                 self.clipboard_last_content = content.strip() if content else ""
             except tk.TclError:
                 self.clipboard_last_content = ""
-            # Start polling loop
-            self._poll_clipboard()
+        # Start polling loop (outside lock to avoid holding it during callback scheduling)
+        self._poll_clipboard()
 
     def stop_clipboard_monitoring(self):
         """Stop clipboard monitoring"""
-        if self.clipboard_monitoring:
+        with self.clipboard_lock:
+            if not self.clipboard_monitoring:
+                return  # Already stopped
             self.clipboard_monitoring = False
             logger.info("Clipboard monitoring stopped")
 
     def _poll_clipboard(self):
         """Poll clipboard using best available method for each platform"""
-        if not self.clipboard_monitoring:
-            return
+        # Check if monitoring was stopped (with lock for thread safety)
+        with self.clipboard_lock:
+            if not self.clipboard_monitoring:
+                return
 
         clipboard_content = None
 
@@ -2054,9 +2089,10 @@ class YouTubeDownloader:
         except Exception as e:
             logger.error(f"Error polling clipboard: {e}")
 
-        # Schedule next poll
-        if self.clipboard_monitoring:
-            self.root.after(CLIPBOARD_POLL_INTERVAL_MS, self._poll_clipboard)
+        # Schedule next poll (with lock to check monitoring state safely)
+        with self.clipboard_lock:
+            if self.clipboard_monitoring:
+                self.root.after(CLIPBOARD_POLL_INTERVAL_MS, self._poll_clipboard)
 
 
     # Phase 5: URL List Management
@@ -2481,6 +2517,13 @@ class YouTubeDownloader:
         """Change clipboard mode download path"""
         path = filedialog.askdirectory(initialdir=self.clipboard_download_path)
         if path:
+            # Validate path for security (prevent path traversal attacks)
+            is_valid, normalized_path, error_msg = self.validate_download_path(path)
+            if not is_valid:
+                messagebox.showerror(tr('error_title'), error_msg)
+                return
+            path = normalized_path
+
             if not os.path.exists(path):
                 messagebox.showerror(tr('error_title'), tr('error_path_not_exist', path=path))
                 return
@@ -2522,7 +2565,7 @@ class YouTubeDownloader:
         # Draw text in center - use default font for cross-platform compatibility
         try:
             font = ImageFont.load_default()
-        except Exception:
+        except (IOError, OSError):
             font = None
 
         # Get text bounding box to center it
@@ -2642,14 +2685,33 @@ class YouTubeDownloader:
                 duration_str = result.stdout.strip()
                 # Parse duration (format can be SS, MM:SS, or HH:MM:SS)
                 parts = duration_str.split(':')
-                if len(parts) == 1:  # Just seconds (e.g., "59")
-                    self.video_duration = int(parts[0])
-                elif len(parts) == 2:  # MM:SS
-                    self.video_duration = int(parts[0]) * 60 + int(parts[1])
-                elif len(parts) == 3:  # HH:MM:SS
-                    self.video_duration = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-                else:
-                    raise ValueError(f"Invalid duration format: {duration_str}")
+                try:
+                    if len(parts) == 1:  # Just seconds (e.g., "59")
+                        duration = int(parts[0])
+                    elif len(parts) == 2:  # MM:SS
+                        mins, secs = int(parts[0]), int(parts[1])
+                        if mins < 0 or secs < 0 or secs >= 60:
+                            raise ValueError(f"Invalid time values in duration: {duration_str}")
+                        duration = mins * 60 + secs
+                    elif len(parts) == 3:  # HH:MM:SS
+                        hours, mins, secs = int(parts[0]), int(parts[1]), int(parts[2])
+                        if hours < 0 or mins < 0 or secs < 0 or mins >= 60 or secs >= 60:
+                            raise ValueError(f"Invalid time values in duration: {duration_str}")
+                        duration = hours * 3600 + mins * 60 + secs
+                    else:
+                        raise ValueError(f"Invalid duration format: {duration_str}")
+
+                    # Validate duration is reasonable (max 24 hours to prevent slider issues)
+                    MAX_DURATION = 24 * 3600  # 24 hours in seconds
+                    if duration < 0:
+                        raise ValueError(f"Negative duration: {duration}")
+                    if duration > MAX_DURATION:
+                        logger.warning(f"Duration {duration}s exceeds max, capping to {MAX_DURATION}s")
+                        duration = MAX_DURATION
+
+                    self.video_duration = duration
+                except (ValueError, OverflowError) as e:
+                    raise ValueError(f"Invalid duration format: {duration_str} ({e})")
 
                 # Update sliders
                 self.start_slider.config(from_=0, to=self.video_duration, state='normal')
@@ -2710,7 +2772,6 @@ class YouTubeDownloader:
         """Fetch estimated file size for the video (runs in background thread)"""
         def _fetch():
             try:
-                import json
                 quality = self.quality_var.get()
 
                 # Build format selector based on quality
@@ -2728,7 +2789,7 @@ class YouTubeDownloader:
 
                     if filesize:
                         # Convert to MB and update UI on main thread
-                        filesize_mb = filesize / (1024 * 1024)
+                        filesize_mb = filesize / BYTES_PER_MB
                         self.root.after(0, lambda: self._update_filesize_display(filesize, filesize_mb))
                     else:
                         self.root.after(0, lambda: self._update_filesize_display(None, None))
@@ -2767,7 +2828,7 @@ class YouTubeDownloader:
         if not self.estimated_filesize or not self.trim_enabled_var.get():
             # If no size estimate or trimming disabled, show original size
             if self.estimated_filesize:
-                filesize_mb = self.estimated_filesize / (1024 * 1024)
+                filesize_mb = self.estimated_filesize / BYTES_PER_MB
                 self.filesize_label.config(text=tr('label_estimated_size', size=f"{filesize_mb:.1f}"))
             return
 
@@ -2779,7 +2840,7 @@ class YouTubeDownloader:
         if self.video_duration > 0:
             duration_percentage = selected_duration / self.video_duration
             trimmed_size = self.estimated_filesize * duration_percentage
-            trimmed_size_mb = trimmed_size / (1024 * 1024)
+            trimmed_size_mb = trimmed_size / BYTES_PER_MB
             self.filesize_label.config(text=tr('label_estimated_size_trimmed', size=f"{trimmed_size_mb:.1f}"))
 
     def _fetch_local_file_duration(self, filepath):
@@ -2972,8 +3033,8 @@ class YouTubeDownloader:
             return
 
         # Check file size (200MB limit for Catbox.moe)
-        file_size_mb = os.path.getsize(self.last_output_file) / (1024 * 1024)
-        if file_size_mb > 200:
+        file_size_mb = os.path.getsize(self.last_output_file) / BYTES_PER_MB
+        if file_size_mb > CATBOX_MAX_SIZE_MB:
             messagebox.showerror(tr('error_file_too_large_title'),
                                tr('error_file_too_large', size=f"{file_size_mb:.1f}"))
             return
@@ -3065,8 +3126,8 @@ class YouTubeDownloader:
         if file_paths:
             for file_path in file_paths:
                 # Check file size
-                file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-                if file_size_mb > 200:
+                file_size_mb = os.path.getsize(file_path) / BYTES_PER_MB
+                if file_size_mb > CATBOX_MAX_SIZE_MB:
                     messagebox.showwarning(tr('error_file_too_large_title'),
                                          tr('info_skipped_file', filename=os.path.basename(file_path), size=f"{file_size_mb:.1f}"))
                     continue
@@ -3082,7 +3143,7 @@ class YouTubeDownloader:
         file_frame.pack(fill=tk.X, padx=5, pady=2)
 
         filename = os.path.basename(file_path)
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        file_size_mb = os.path.getsize(file_path) / BYTES_PER_MB
 
         file_label = ttk.Label(file_frame, text=tr('label_file_size', filename=filename, size=f"{file_size_mb:.1f}"), font=('Arial', 9))
         file_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 10))
@@ -3298,36 +3359,32 @@ class YouTubeDownloader:
         """Clear the preview frame cache"""
         logger.info("Clearing preview cache")
         self.preview_cache.clear()
-        self.cache_access_order.clear()
 
     def _cache_preview_frame(self, timestamp, file_path):
-        """Add a frame to the cache with LRU eviction"""
+        """Add a frame to the cache with LRU eviction (O(1) operations with OrderedDict)"""
+        # If timestamp already exists, remove it first to update position
+        if timestamp in self.preview_cache:
+            del self.preview_cache[timestamp]
+
         # Remove oldest if cache is full
         if len(self.preview_cache) >= PREVIEW_CACHE_SIZE:
-            if self.cache_access_order:
-                oldest = self.cache_access_order.pop(0)
-                if oldest in self.preview_cache:
-                    old_path = self.preview_cache.pop(oldest)
-                    # Optionally delete the old cached file
-                    try:
-                        if os.path.exists(old_path):
-                            os.remove(old_path)
-                    except Exception:
-                        pass
+            # popitem(last=False) removes the oldest (first) item in O(1)
+            oldest_key, old_path = self.preview_cache.popitem(last=False)
+            # Optionally delete the old cached file
+            try:
+                if os.path.exists(old_path):
+                    os.remove(old_path)
+            except OSError:
+                pass  # File may already be removed or locked
 
-        # Add to cache
+        # Add to cache (will be at the end, marking it as most recently used)
         self.preview_cache[timestamp] = file_path
-        if timestamp in self.cache_access_order:
-            self.cache_access_order.remove(timestamp)
-        self.cache_access_order.append(timestamp)
 
     def _get_cached_frame(self, timestamp):
-        """Get a cached frame if available"""
+        """Get a cached frame if available (O(1) with OrderedDict.move_to_end)"""
         if timestamp in self.preview_cache:
-            # Update access order (move to end as most recently used)
-            if timestamp in self.cache_access_order:
-                self.cache_access_order.remove(timestamp)
-            self.cache_access_order.append(timestamp)
+            # Update access order (move to end as most recently used) - O(1) operation
+            self.preview_cache.move_to_end(timestamp)
             return self.preview_cache[timestamp]
         return None
 
@@ -3368,6 +3425,11 @@ class YouTubeDownloader:
 
                 if not video_url:
                     logger.error("Failed to get stream URL - empty response")
+                    return None
+
+                # Validate that the stream URL looks like a valid URL
+                if not (video_url.startswith('http://') or video_url.startswith('https://')):
+                    logger.error(f"Invalid stream URL format: {video_url[:100]}")
                     return None
 
             # Now extract frame from the actual stream with retry
@@ -3460,7 +3522,9 @@ class YouTubeDownloader:
                 error_img = self.create_placeholder_image(PREVIEW_WIDTH, PREVIEW_HEIGHT, "Error")
                 self.root.after(0, lambda img=error_img: self._set_end_preview(img))
         finally:
-            self.preview_thread_running = False
+            # Use lock when resetting flag to prevent race condition with spawn check
+            with self.preview_lock:
+                self.preview_thread_running = False
 
     def _update_preview_image(self, image_path, position):
         """Update preview image in UI (must be called from main thread or scheduled)"""
@@ -3471,11 +3535,14 @@ class YouTubeDownloader:
                 # Convert to PhotoImage (must be done before context exits)
                 photo = ImageTk.PhotoImage(img)
 
-            # Schedule UI update on main thread
+            # CRITICAL: Store reference BEFORE scheduling to prevent GC
+            # The lambda uses default argument to capture the photo object immediately
             if position == 'start':
-                self.root.after(0, lambda: self._set_start_preview(photo))
+                self.start_preview_image = photo  # Keep reference to avoid GC
+                self.root.after(0, lambda p=photo: self._set_start_preview(p))
             else:
-                self.root.after(0, lambda: self._set_end_preview(photo))
+                self.end_preview_image = photo  # Keep reference to avoid GC
+                self.root.after(0, lambda p=photo: self._set_end_preview(p))
 
         except Exception as e:
             logger.error(f"Error updating preview image for {position}: {e}")
@@ -3494,6 +3561,14 @@ class YouTubeDownloader:
         """Change download path with validation"""
         path = filedialog.askdirectory(initialdir=self.download_path)
         if path:
+            # Validate path for security (prevent path traversal)
+            is_valid, normalized_path, error_msg = self.validate_download_path(path)
+            if not is_valid:
+                messagebox.showerror(tr('error_title'), error_msg)
+                return
+
+            path = normalized_path
+
             # Validate that path exists and is writable
             if not os.path.exists(path):
                 messagebox.showerror(tr('error_title'), tr('error_path_not_exist', path=path))
@@ -3765,8 +3840,7 @@ class YouTubeDownloader:
                 speed_limit = float(speed_limit_str)
                 if speed_limit > 0:
                     # yt-dlp expects rate in bytes/second, user enters MB/s
-                    # 1 MB = 1024 * 1024 bytes
-                    rate_bytes = int(speed_limit * 1024 * 1024)
+                    rate_bytes = int(speed_limit * BYTES_PER_MB)
                     return ['--limit-rate', f'{rate_bytes}']
             except ValueError:
                 # Invalid input, ignore
@@ -4362,7 +4436,6 @@ class YouTubeDownloader:
     def cleanup_temp_files(self):
         """Clean up temporary preview files"""
         try:
-            import shutil
             # Clear cache references
             self._clear_preview_cache()
             # Remove temp directory
@@ -4409,7 +4482,11 @@ class YouTubeDownloader:
         # Shutdown thread pool gracefully with timeout
         logger.info("Shutting down thread pool...")
         try:
+            # cancel_futures parameter was added in Python 3.9
             self.thread_pool.shutdown(wait=True, cancel_futures=False)
+        except TypeError:
+            # Python 3.6-3.8 compatibility: cancel_futures not supported
+            self.thread_pool.shutdown(wait=True)
         except Exception as e:
             logger.error(f"Error shutting down thread pool: {e}")
 
@@ -4421,6 +4498,16 @@ class YouTubeDownloader:
 def main():
     root = tk.Tk()
     app = YouTubeDownloader(root)
+
+    # Setup signal handlers for graceful shutdown (SIGINT, SIGTERM)
+    def signal_handler(signum, frame):
+        logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+        # Schedule cleanup on the main thread
+        root.after(0, app.on_closing)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     root.mainloop()
 
 if __name__ == "__main__":

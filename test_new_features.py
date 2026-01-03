@@ -7,7 +7,21 @@ from pathlib import Path
 # Mock tkinter to avoid GUI in tests
 import unittest.mock as mock
 
-# Create mock tkinter
+
+def create_mock_widget(*args, **kwargs):
+    """Factory function that creates a simple MagicMock without spec issues"""
+    return mock.MagicMock()
+
+
+def create_mock_var(*args, **kwargs):
+    """Factory function for tkinter variables"""
+    m = mock.MagicMock()
+    m.get.return_value = kwargs.get('value', '')
+    m.set = mock.MagicMock()
+    return m
+
+
+# Create mock tkinter module
 tk_mock = mock.MagicMock()
 ttk_mock = mock.MagicMock()
 messagebox_mock = mock.MagicMock()
@@ -18,27 +32,53 @@ sys.modules['tkinter.ttk'] = ttk_mock
 sys.modules['tkinter.messagebox'] = messagebox_mock
 sys.modules['tkinter.filedialog'] = filedialog_mock
 
-# Set up the mocks
-tk_mock.Tk = mock.MagicMock
-tk_mock.StringVar = mock.MagicMock
-tk_mock.BooleanVar = mock.MagicMock
-tk_mock.DoubleVar = mock.MagicMock
-tk_mock.Label = mock.MagicMock
+# Set up tk mock with factory functions (Python 3.13 compatible)
+tk_mock.Tk = create_mock_widget
+tk_mock.StringVar = create_mock_var
+tk_mock.BooleanVar = create_mock_var
+tk_mock.DoubleVar = create_mock_var
+tk_mock.IntVar = create_mock_var
+tk_mock.Label = create_mock_widget
+tk_mock.Frame = create_mock_widget
+tk_mock.Canvas = create_mock_widget
+tk_mock.Scrollbar = create_mock_widget
+tk_mock.Toplevel = create_mock_widget
+tk_mock.Text = create_mock_widget
+
+# Tkinter constants
 tk_mock.W = 'w'
 tk_mock.E = 'e'
 tk_mock.N = 'n'
 tk_mock.S = 's'
 tk_mock.LEFT = 'left'
+tk_mock.RIGHT = 'right'
+tk_mock.TOP = 'top'
+tk_mock.BOTTOM = 'bottom'
 tk_mock.END = 'end'
-ttk_mock.Frame = mock.MagicMock
-ttk_mock.Label = mock.MagicMock
-ttk_mock.Entry = mock.MagicMock
-ttk_mock.Button = mock.MagicMock
-ttk_mock.Scale = mock.MagicMock
-ttk_mock.Radiobutton = mock.MagicMock
-ttk_mock.Checkbutton = mock.MagicMock
-ttk_mock.Separator = mock.MagicMock
-ttk_mock.Progressbar = mock.MagicMock
+tk_mock.BOTH = 'both'
+tk_mock.X = 'x'
+tk_mock.Y = 'y'
+tk_mock.HORIZONTAL = 'horizontal'
+tk_mock.VERTICAL = 'vertical'
+tk_mock.DISABLED = 'disabled'
+tk_mock.NORMAL = 'normal'
+tk_mock.WORD = 'word'
+tk_mock.NW = 'nw'
+
+# Set up ttk mock with factory functions (Python 3.13 compatible)
+ttk_mock.Frame = create_mock_widget
+ttk_mock.Label = create_mock_widget
+ttk_mock.Entry = create_mock_widget
+ttk_mock.Button = create_mock_widget
+ttk_mock.Scale = create_mock_widget
+ttk_mock.Radiobutton = create_mock_widget
+ttk_mock.Checkbutton = create_mock_widget
+ttk_mock.Separator = create_mock_widget
+ttk_mock.Progressbar = create_mock_widget
+ttk_mock.Notebook = create_mock_widget
+ttk_mock.Combobox = create_mock_widget
+ttk_mock.Scrollbar = create_mock_widget
+ttk_mock.Style = create_mock_widget
 
 # Now import the downloader
 from downloader import YouTubeDownloader
