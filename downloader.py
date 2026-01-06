@@ -1314,7 +1314,7 @@ class YouTubeDownloader:
         cmd.extend([
             '-f', 'bestaudio',
             '--extract-audio',
-            '--audio-format', 'm4a',
+            '--audio-format', 'mp3',
             '--audio-quality', AUDIO_BITRATE,
         ])
 
@@ -3926,7 +3926,7 @@ class YouTubeDownloader:
                     '--http-chunk-size', CHUNK_SIZE,  # Larger chunks = fewer requests
                     '-f', 'bestaudio',
                     '--extract-audio',
-                    '--audio-format', 'm4a',
+                    '--audio-format', 'mp3',
                     '--audio-quality', '128K',
                     '--newline',
                     '--progress',
@@ -4198,13 +4198,13 @@ class YouTubeDownloader:
 
             if audio_only:
                 # Extract audio only
-                output_file = os.path.join(self.download_path, f"{output_name}.m4a")
+                output_file = os.path.join(self.download_path, f"{output_name}.mp3")
                 cmd = [self.ffmpeg_path, '-i', filepath]
 
                 if trim_enabled:
                     cmd.extend(['-ss', str(start_time), '-to', str(end_time)])
 
-                cmd.extend(['-vn', '-c:a', 'aac', '-b:a', '128k'])
+                cmd.extend(['-vn', '-c:a', 'libmp3lame', '-b:a', '128k'])
 
                 if volume_multiplier != 1.0:
                     cmd.extend(['-af', f'volume={volume_multiplier}'])
@@ -4320,7 +4320,7 @@ class YouTubeDownloader:
                     '--http-chunk-size', CHUNK_SIZE,  # Larger chunks = fewer requests
                     '-f', 'bestaudio',
                     '--extract-audio',
-                    '--audio-format', 'm4a',
+                    '--audio-format', 'mp3',
                     '--audio-quality', '128K',
                     '--newline',
                     '--progress',
