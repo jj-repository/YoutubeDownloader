@@ -96,6 +96,13 @@ UI_INITIAL_DELAY_MS = 100  # Delay for initial UI setup callbacks (milliseconds)
 AUTO_UPLOAD_DELAY_MS = 500  # Delay before auto-upload starts (milliseconds)
 SHUTDOWN_GRACE_PERIOD_SEC = 0.5  # Wait time during graceful shutdown (seconds)
 
+# Version and Update Constants
+APP_VERSION = "3.1.2"
+GITHUB_REPO = "jj-repository/YoutubeDownloader"
+GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
+GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}"
+
 # File paths for persistence
 UPLOAD_HISTORY_FILE = Path.home() / ".youtubedownloader" / "upload_history.txt"
 CLIPBOARD_URLS_FILE = Path.home() / ".youtubedownloader" / "clipboard_urls.json"
@@ -312,6 +319,25 @@ TRANSLATIONS = {
         'error_permission_denied': 'Permission denied. Check write permissions for download folder.',
         'error_os_error': 'OS error: {error}',
         'error_generic': 'Error: {error}',
+
+        # Update feature
+        'update_check_btn': 'Check for Updates',
+        'update_auto_check': 'Check for updates on startup',
+        'update_checking': 'Checking for updates...',
+        'update_available_title': 'Update Available',
+        'update_available_msg': 'A new version is available!\n\nCurrent: v{current}\nLatest: v{latest}\n\nWould you like to update?',
+        'update_now_btn': 'Update Now',
+        'update_open_releases': 'Open Releases Page',
+        'update_later_btn': 'Later',
+        'update_up_to_date_title': 'Up to Date',
+        'update_up_to_date_msg': 'You are running the latest version (v{version}).',
+        'update_error_title': 'Update Error',
+        'update_error_msg': 'Failed to check for updates:\n{error}',
+        'update_downloading': 'Downloading update...',
+        'update_complete_title': 'Update Complete',
+        'update_complete_msg': 'Update downloaded successfully!\n\nPlease restart the application to apply the update.',
+        'update_failed_title': 'Update Failed',
+        'update_failed_msg': 'Failed to download update:\n{error}',
     },
 
     'de': {
@@ -520,6 +546,25 @@ TRANSLATIONS = {
         'error_permission_denied': 'Zugriff verweigert. Überprüfen Sie die Schreibrechte für den Download-Ordner.',
         'error_os_error': 'OS-Fehler: {error}',
         'error_generic': 'Fehler: {error}',
+
+        # Update feature
+        'update_check_btn': 'Nach Updates suchen',
+        'update_auto_check': 'Beim Start nach Updates suchen',
+        'update_checking': 'Suche nach Updates...',
+        'update_available_title': 'Update verfügbar',
+        'update_available_msg': 'Eine neue Version ist verfügbar!\n\nAktuell: v{current}\nNeueste: v{latest}\n\nMöchten Sie aktualisieren?',
+        'update_now_btn': 'Jetzt aktualisieren',
+        'update_open_releases': 'Releases-Seite öffnen',
+        'update_later_btn': 'Später',
+        'update_up_to_date_title': 'Aktuell',
+        'update_up_to_date_msg': 'Sie verwenden die neueste Version (v{version}).',
+        'update_error_title': 'Update-Fehler',
+        'update_error_msg': 'Fehler beim Suchen nach Updates:\n{error}',
+        'update_downloading': 'Update wird heruntergeladen...',
+        'update_complete_title': 'Update abgeschlossen',
+        'update_complete_msg': 'Update erfolgreich heruntergeladen!\n\nBitte starten Sie die Anwendung neu, um das Update anzuwenden.',
+        'update_failed_title': 'Update fehlgeschlagen',
+        'update_failed_msg': 'Update konnte nicht heruntergeladen werden:\n{error}',
     },
 
     'pl': {
@@ -728,6 +773,25 @@ TRANSLATIONS = {
         'error_permission_denied': 'Dostęp zabroniony. Sprawdź uprawnienia zapisu dla folderu pobierania.',
         'error_os_error': 'Błąd systemu: {error}',
         'error_generic': 'Błąd: {error}',
+
+        # Update feature
+        'update_check_btn': 'Sprawdź aktualizacje',
+        'update_auto_check': 'Sprawdzaj aktualizacje przy uruchomieniu',
+        'update_checking': 'Sprawdzanie aktualizacji...',
+        'update_available_title': 'Dostępna aktualizacja',
+        'update_available_msg': 'Dostępna jest nowa wersja!\n\nObecna: v{current}\nNajnowsza: v{latest}\n\nCzy chcesz zaktualizować?',
+        'update_now_btn': 'Aktualizuj teraz',
+        'update_open_releases': 'Otwórz stronę wydań',
+        'update_later_btn': 'Później',
+        'update_up_to_date_title': 'Aktualne',
+        'update_up_to_date_msg': 'Używasz najnowszej wersji (v{version}).',
+        'update_error_title': 'Błąd aktualizacji',
+        'update_error_msg': 'Nie udało się sprawdzić aktualizacji:\n{error}',
+        'update_downloading': 'Pobieranie aktualizacji...',
+        'update_complete_title': 'Aktualizacja zakończona',
+        'update_complete_msg': 'Aktualizacja została pobrana pomyślnie!\n\nUruchom ponownie aplikację, aby zastosować aktualizację.',
+        'update_failed_title': 'Aktualizacja nie powiodła się',
+        'update_failed_msg': 'Nie udało się pobrać aktualizacji:\n{error}',
     }
 }
 
@@ -876,6 +940,10 @@ class YouTubeDownloader:
         # Bind cleanup on window close
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+        # Check for updates on startup if enabled (delay to let UI initialize)
+        if self._load_auto_check_updates_setting():
+            self.root.after(2000, lambda: self.thread_pool.submit(self._check_for_updates, True))
+
     # Persistence methods
 
     def _load_clipboard_urls(self):
@@ -980,6 +1048,210 @@ class YouTubeDownloader:
             logger.info(f"Saved language preference: {CURRENT_LANGUAGE}")
         except Exception as e:
             logger.error(f"Error saving language preference: {e}")
+
+    def _load_auto_check_updates_setting(self):
+        """Load auto-check updates setting from config"""
+        try:
+            if CONFIG_FILE.exists():
+                with open(CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+                    return config.get('auto_check_updates', True)  # Default to True
+        except Exception as e:
+            logger.error(f"Error loading auto_check_updates setting: {e}")
+        return True  # Default to True
+
+    def _save_auto_check_updates_setting(self):
+        """Save auto-check updates setting to config"""
+        try:
+            CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            config = {}
+            if CONFIG_FILE.exists():
+                with open(CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+
+            config['auto_check_updates'] = self.auto_check_updates_var.get()
+
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(config, f, indent=2)
+
+            logger.info(f"Saved auto_check_updates: {config['auto_check_updates']}")
+        except Exception as e:
+            logger.error(f"Error saving auto_check_updates setting: {e}")
+
+    def _version_newer(self, latest, current):
+        """Compare version strings to check if latest is newer than current.
+
+        Args:
+            latest: Latest version string (e.g., '3.1.3')
+            current: Current version string (e.g., '3.1.2')
+
+        Returns:
+            bool: True if latest is newer than current
+        """
+        try:
+            latest_parts = tuple(map(int, latest.split('.')))
+            current_parts = tuple(map(int, current.split('.')))
+            return latest_parts > current_parts
+        except (ValueError, AttributeError):
+            return False
+
+    def _check_for_updates_clicked(self):
+        """Handle Check for Updates button click"""
+        self.thread_pool.submit(self._check_for_updates, False)
+
+    def _check_for_updates(self, silent=True):
+        """Check GitHub for new version.
+
+        Args:
+            silent: If True, don't show dialog when up-to-date or on error
+        """
+        import urllib.request
+        import urllib.error
+
+        try:
+            logger.info("Checking for updates...")
+            if not silent:
+                self.root.after(0, lambda: self.update_status(tr('update_checking'), "blue"))
+
+            request = urllib.request.Request(
+                GITHUB_API_LATEST,
+                headers={'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
+            )
+            with urllib.request.urlopen(request, timeout=10) as response:
+                data = json.loads(response.read().decode())
+
+            latest_version = data.get('tag_name', '').lstrip('v')
+
+            if not latest_version:
+                raise ValueError("No version tag found in release")
+
+            logger.info(f"Current version: {APP_VERSION}, Latest version: {latest_version}")
+
+            if self._version_newer(latest_version, APP_VERSION):
+                # New version available
+                self.root.after(0, lambda: self._show_update_dialog(latest_version, data))
+            elif not silent:
+                # Up to date
+                self.root.after(0, lambda: messagebox.showinfo(
+                    tr('update_up_to_date_title'),
+                    tr('update_up_to_date_msg', version=APP_VERSION)
+                ))
+
+        except urllib.error.URLError as e:
+            logger.error(f"Network error checking for updates: {e}")
+            if not silent:
+                self.root.after(0, lambda: messagebox.showerror(
+                    tr('update_error_title'),
+                    tr('update_error_msg', error=str(e))
+                ))
+        except Exception as e:
+            logger.error(f"Error checking for updates: {e}")
+            if not silent:
+                self.root.after(0, lambda: messagebox.showerror(
+                    tr('update_error_title'),
+                    tr('update_error_msg', error=str(e))
+                ))
+
+    def _show_update_dialog(self, latest_version, release_data):
+        """Show update available dialog with options.
+
+        Args:
+            latest_version: The latest version string
+            release_data: The GitHub release API response data
+        """
+        dialog = tk.Toplevel(self.root)
+        dialog.title(tr('update_available_title'))
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # Center dialog on parent
+        dialog.geometry("400x200")
+        dialog.resizable(False, False)
+
+        # Message
+        msg = tr('update_available_msg', current=APP_VERSION, latest=latest_version)
+        ttk.Label(dialog, text=msg, justify=tk.CENTER, wraplength=350).pack(pady=20)
+
+        # Buttons frame
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=10)
+
+        def update_now():
+            dialog.destroy()
+            self.thread_pool.submit(self._apply_update, release_data)
+
+        def open_releases():
+            dialog.destroy()
+            import webbrowser
+            webbrowser.open(GITHUB_RELEASES_URL)
+
+        ttk.Button(btn_frame, text=tr('update_now_btn'), command=update_now).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text=tr('update_open_releases'), command=open_releases).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text=tr('update_later_btn'), command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+
+        # Center the dialog on screen
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() - dialog.winfo_width()) // 2
+        y = (dialog.winfo_screenheight() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+    def _apply_update(self, release_data):
+        """Download and apply update.
+
+        Args:
+            release_data: The GitHub release API response data
+        """
+        import urllib.request
+        import urllib.error
+        import shutil
+        import tempfile
+
+        try:
+            self.root.after(0, lambda: self.update_status(tr('update_downloading'), "blue"))
+
+            # Get the tag name for raw file download
+            tag_name = release_data.get('tag_name', 'main')
+
+            # Download the raw downloader.py from the release tag
+            download_url = f"{GITHUB_RAW_URL}/{tag_name}/downloader.py"
+            logger.info(f"Downloading update from: {download_url}")
+
+            request = urllib.request.Request(
+                download_url,
+                headers={'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
+            )
+
+            # Download to temp file first
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.py', delete=False) as tmp_file:
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    tmp_file.write(response.read())
+                tmp_path = tmp_file.name
+
+            # Get current script path
+            current_script = Path(__file__).resolve()
+
+            # Create backup
+            backup_path = current_script.with_suffix('.py.backup')
+            shutil.copy2(current_script, backup_path)
+            logger.info(f"Created backup at: {backup_path}")
+
+            # Replace current script with new version
+            shutil.move(tmp_path, current_script)
+            logger.info(f"Updated script at: {current_script}")
+
+            self.root.after(0, lambda: self.update_status(tr('update_complete_title'), "green"))
+            self.root.after(0, lambda: messagebox.showinfo(
+                tr('update_complete_title'),
+                tr('update_complete_msg')
+            ))
+
+        except Exception as e:
+            logger.error(f"Error applying update: {e}")
+            self.root.after(0, lambda: messagebox.showerror(
+                tr('update_failed_title'),
+                tr('update_failed_msg', error=str(e))
+            ))
 
     def on_language_change(self, event=None):
         """Handle language selection change"""
@@ -1183,6 +1455,7 @@ class YouTubeDownloader:
         # Define allowed keys and their expected types
         allowed_keys = {
             'language': str,
+            'auto_check_updates': bool,
         }
 
         for key, value in config.items():
@@ -1549,6 +1822,17 @@ class YouTubeDownloader:
             values=language_options, state='readonly', width=15)
         self.language_combo.pack(side=tk.LEFT)
         self.language_combo.bind('<<ComboboxSelected>>', self.on_language_change)
+
+        # Update controls - separator and checkbox
+        ttk.Separator(language_frame, orient='vertical').pack(side=tk.LEFT, padx=15, fill='y', pady=2)
+
+        self.auto_check_updates_var = tk.BooleanVar(value=self._load_auto_check_updates_setting())
+        ttk.Checkbutton(language_frame, text=tr('update_auto_check'),
+                       variable=self.auto_check_updates_var,
+                       command=self._save_auto_check_updates_setting).pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Button(language_frame, text=tr('update_check_btn'),
+                  command=self._check_for_updates_clicked).pack(side=tk.LEFT)
 
         # Create notebook for tabs
         self.notebook = ttk.Notebook(scrollable_frame)
