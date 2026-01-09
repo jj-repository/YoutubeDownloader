@@ -262,7 +262,14 @@ Check this file for detailed error messages and debugging information.
 
 ## 🔄 Changelog
 
-### Version 3.1.2 (Latest)
+### Version 3.3.0 (Latest)
+- ✨ **Auto-Updates**: Added automatic update checking on startup (configurable)
+- ✨ **Update Toggle**: Added "Check for Updates on Startup" setting in Help menu
+- 🔒 **SHA256 Verification**: Secure update downloads with checksum validation
+- 📝 **Documentation**: Added CLAUDE.md project context file
+- 🧹 **Code Organization**: Extracted constants and translations to separate modules
+
+### Version 3.1.2
 - ✅ **Code Cleanup**: Removed duplicate translation keys across all languages (en, de, pl)
 - ✅ **Python 3.13 Compatibility**: Fixed test suite mock compatibility with Python 3.13
 - ✅ **Python 3.6-3.8 Compatibility**: Fixed ThreadPoolExecutor.shutdown() for older Python versions
