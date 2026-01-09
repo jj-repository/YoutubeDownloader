@@ -45,6 +45,12 @@ A professional YouTube video downloader with advanced trimming capabilities, cli
 - **📋 Comprehensive Logging**: Full debug logs at `~/.youtubedownloader/youtubedownloader.log`
 - **🎯 Path Validation**: Ensures download location is writable before starting
 
+### Auto-Updates
+- **🔄 Automatic Update Check**: Checks for new versions on startup (configurable)
+- **🔒 SHA256 Verification**: Secure updates with cryptographic checksum validation
+- **⚙️ Toggle Setting**: Enable/disable auto-check via Help menu
+- **📥 One-Click Update**: Download and apply updates directly from GitHub
+
 ### Performance & Reliability
 - **10-50x faster preview loading** through LRU caching
 - **80%+ recovery rate** on transient network failures
@@ -238,6 +244,12 @@ For developers running from source:
 - The app will auto-detect stalls after 5 minutes
 - Check your internet connection
 - Try a different video quality
+
+**Update issues**
+- **"Checksum verification failed"**: Downloaded file may be corrupted, try again
+- **"Could not find checksum file"**: Update not yet published with checksum
+- **Cannot check for updates**: Verify internet connection
+- **Disable auto-check**: Use Help menu → "Check for Updates on Startup" toggle
 
 ### Debug Logs
 
