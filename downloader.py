@@ -871,11 +871,8 @@ class YouTubeDownloader:
 
     # Command building helper methods
 
-    def build_base_ytdlp_command(self, url):
+    def build_base_ytdlp_command(self):
         """Build base yt-dlp command with common options.
-
-        Args:
-            url: YouTube URL to download
 
         Returns:
             list: Base command with common flags
@@ -900,7 +897,7 @@ class YouTubeDownloader:
         Returns:
             list: Complete command for audio download
         """
-        cmd = self.build_base_ytdlp_command(url)
+        cmd = self.build_base_ytdlp_command()
         cmd.extend([
             '-f', 'bestaudio',
             '--extract-audio',
@@ -930,7 +927,7 @@ class YouTubeDownloader:
         Returns:
             list: Complete command for video download
         """
-        cmd = self.build_base_ytdlp_command(url)
+        cmd = self.build_base_ytdlp_command()
         cmd.extend([
             '-f', f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]',
             '--merge-output-format', 'mp4',
