@@ -3326,13 +3326,21 @@ class YouTubeDownloader:
         else:
             # Check venv in script directory
             script_dir = Path(__file__).parent
-            venv_path = script_dir / 'venv' / 'bin' / name
+            # Windows uses Scripts folder, Unix uses bin
+            if sys.platform == 'win32':
+                venv_subdir = 'Scripts'
+                exe_name = f"{name}.exe"
+            else:
+                venv_subdir = 'bin'
+                exe_name = name
+
+            venv_path = script_dir / 'venv' / venv_subdir / exe_name
             if venv_path.exists():
                 logger.info(f"Using venv {name}: {venv_path}")
                 return str(venv_path)
 
             # Check current Python's bin directory (if venv is activated)
-            python_bin_path = Path(sys.executable).parent / name
+            python_bin_path = Path(sys.executable).parent / exe_name
             if python_bin_path.exists():
                 logger.info(f"Using Python bin {name}: {python_bin_path}")
                 return str(python_bin_path)
