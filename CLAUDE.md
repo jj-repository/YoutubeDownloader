@@ -166,6 +166,7 @@ message = tr('download_complete')  # Returns German translation
 
 - Fixed hardcoded English strings in validate_youtube_url() to use translation system
 - All URL validation messages now use tr() for proper internationalization
+- Fixed Windows venv path detection (uses Scripts/ and .exe extension instead of bin/)
 
 ## Language System
 
