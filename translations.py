@@ -44,6 +44,7 @@ TRANSLATIONS = {
         'label_volume': 'Volume:',
         'btn_reset_volume': 'Reset to 100%',
         'checkbox_enable_trimming': 'Enable video trimming',
+        'checkbox_keep_below_10mb': 'Keep video below 10MB',
         'btn_fetch_duration': 'Fetch Video Duration',
         'label_start_time': 'Start Time:',
         'label_end_time': 'End Time:',
@@ -103,6 +104,10 @@ TRANSLATIONS = {
         'status_extracting_audio': 'Extracting audio...',
         'status_merging': 'Merging video and audio...',
         'status_processing_ffmpeg': 'Processing with ffmpeg...',
+        'status_two_pass_1': 'Encoding pass 1/2 (analysing)...',
+        'status_two_pass_1_progress': 'Encoding pass 1/2... {progress}%',
+        'status_two_pass_2': 'Encoding pass 2/2...',
+        'status_two_pass_2_progress': 'Encoding pass 2/2... {progress}%',
         'status_post_processing': 'Post-processing...',
         'status_file_exists': 'File already exists, skipping...',
         'status_downloading_playlist': 'Downloading playlist... {progress}%',
@@ -153,6 +158,7 @@ TRANSLATIONS = {
         'info_upload_failed_title': 'Upload Failed',
         'info_upload_failed': 'Failed to upload file:\n\n{error}',
         'info_skipped_file': 'Skipped: {filename}\nFile size ({size} MB) exceeds 200MB limit.',
+        'info_playlist_params_stripped': 'Playlist parameters removed - downloading single video',
 
         # Warning messages
         'warning_clear_history_title': 'Clear History',
@@ -236,6 +242,24 @@ TRANSLATIONS = {
         'update_complete_msg': 'Update downloaded successfully!\n\nPlease restart the application to apply the update.',
         'update_failed_title': 'Update Failed',
         'update_failed_msg': 'Failed to download update:\n{error}',
+
+        # yt-dlp updates
+        'ytdlp_update_btn': 'Update yt-dlp',
+        'ytdlp_checking': 'Checking yt-dlp version...',
+        'ytdlp_current_version': 'Current yt-dlp: {version}',
+        'ytdlp_update_available_title': 'yt-dlp Update Available',
+        'ytdlp_update_available_msg': 'A new version of yt-dlp is available!\n\nCurrent: {current}\nLatest: {latest}\n\nThis may fix download issues.\nUpdate now?',
+        'ytdlp_up_to_date_title': 'yt-dlp Up to Date',
+        'ytdlp_up_to_date_msg': 'yt-dlp is already at the latest version ({version}).',
+        'ytdlp_updating': 'Updating yt-dlp...',
+        'ytdlp_update_success_title': 'yt-dlp Updated',
+        'ytdlp_update_success_msg': 'yt-dlp has been updated to version {version}.\n\nPlease restart the application.',
+        'ytdlp_update_failed_title': 'yt-dlp Update Failed',
+        'ytdlp_update_failed_msg': 'Failed to update yt-dlp:\n{error}',
+        'ytdlp_update_not_supported_title': 'Update Not Supported',
+        'ytdlp_update_not_supported_msg': 'Cannot auto-update yt-dlp in bundled mode.\n\nPlease download the latest release from the releases page.',
+        'ytdlp_check_failed_title': 'Check Failed',
+        'ytdlp_check_failed_msg': 'Failed to check yt-dlp version:\n{error}',
     },
 
     'de': {
@@ -272,6 +296,7 @@ TRANSLATIONS = {
         'label_volume': 'Lautstärke:',
         'btn_reset_volume': 'Auf 100% zurücksetzen',
         'checkbox_enable_trimming': 'Videozuschnitt aktivieren',
+        'checkbox_keep_below_10mb': 'Video unter 10MB halten',
         'btn_fetch_duration': 'Videodauer abrufen',
         'label_start_time': 'Startzeit:',
         'label_end_time': 'Endzeit:',
@@ -331,6 +356,10 @@ TRANSLATIONS = {
         'status_extracting_audio': 'Audio wird extrahiert...',
         'status_merging': 'Video und Audio werden zusammengeführt...',
         'status_processing_ffmpeg': 'Verarbeitung mit ffmpeg...',
+        'status_two_pass_1': 'Kodierung Durchgang 1/2 (Analyse)...',
+        'status_two_pass_1_progress': 'Kodierung Durchgang 1/2... {progress}%',
+        'status_two_pass_2': 'Kodierung Durchgang 2/2...',
+        'status_two_pass_2_progress': 'Kodierung Durchgang 2/2... {progress}%',
         'status_post_processing': 'Nachbearbeitung...',
         'status_file_exists': 'Datei existiert bereits, überspringe...',
         'status_downloading_playlist': 'Playlist wird heruntergeladen... {progress}%',
@@ -381,6 +410,7 @@ TRANSLATIONS = {
         'info_upload_failed_title': 'Upload fehlgeschlagen',
         'info_upload_failed': 'Fehler beim Hochladen der Datei:\n\n{error}',
         'info_skipped_file': 'Übersprungen: {filename}\nDateigröße ({size} MB) überschreitet 200MB-Limit.',
+        'info_playlist_params_stripped': 'Playlist-Parameter entfernt - Einzelvideo wird heruntergeladen',
 
         # Warning messages
         'warning_clear_history_title': 'Verlauf löschen',
@@ -464,6 +494,24 @@ TRANSLATIONS = {
         'update_complete_msg': 'Update erfolgreich heruntergeladen!\n\nBitte starten Sie die Anwendung neu, um das Update anzuwenden.',
         'update_failed_title': 'Update fehlgeschlagen',
         'update_failed_msg': 'Update konnte nicht heruntergeladen werden:\n{error}',
+
+        # yt-dlp updates
+        'ytdlp_update_btn': 'yt-dlp aktualisieren',
+        'ytdlp_checking': 'Überprüfe yt-dlp Version...',
+        'ytdlp_current_version': 'Aktuelles yt-dlp: {version}',
+        'ytdlp_update_available_title': 'yt-dlp Update verfügbar',
+        'ytdlp_update_available_msg': 'Eine neue Version von yt-dlp ist verfügbar!\n\nAktuell: {current}\nNeueste: {latest}\n\nDies könnte Download-Probleme beheben.\nJetzt aktualisieren?',
+        'ytdlp_up_to_date_title': 'yt-dlp aktuell',
+        'ytdlp_up_to_date_msg': 'yt-dlp ist bereits auf der neuesten Version ({version}).',
+        'ytdlp_updating': 'Aktualisiere yt-dlp...',
+        'ytdlp_update_success_title': 'yt-dlp aktualisiert',
+        'ytdlp_update_success_msg': 'yt-dlp wurde auf Version {version} aktualisiert.\n\nBitte starten Sie die Anwendung neu.',
+        'ytdlp_update_failed_title': 'yt-dlp Update fehlgeschlagen',
+        'ytdlp_update_failed_msg': 'yt-dlp konnte nicht aktualisiert werden:\n{error}',
+        'ytdlp_update_not_supported_title': 'Update nicht unterstützt',
+        'ytdlp_update_not_supported_msg': 'yt-dlp kann im gebündelten Modus nicht automatisch aktualisiert werden.\n\nBitte laden Sie die neueste Version von der Releases-Seite herunter.',
+        'ytdlp_check_failed_title': 'Überprüfung fehlgeschlagen',
+        'ytdlp_check_failed_msg': 'yt-dlp Version konnte nicht überprüft werden:\n{error}',
     },
 
     'pl': {
@@ -500,6 +548,7 @@ TRANSLATIONS = {
         'label_volume': 'Głośność:',
         'btn_reset_volume': 'Resetuj do 100%',
         'checkbox_enable_trimming': 'Włącz przycinanie wideo',
+        'checkbox_keep_below_10mb': 'Utrzymaj wideo poniżej 10MB',
         'btn_fetch_duration': 'Pobierz czas trwania wideo',
         'label_start_time': 'Czas rozpoczęcia:',
         'label_end_time': 'Czas zakończenia:',
@@ -559,6 +608,10 @@ TRANSLATIONS = {
         'status_extracting_audio': 'Wyodrębnianie audio...',
         'status_merging': 'Łączenie wideo i audio...',
         'status_processing_ffmpeg': 'Przetwarzanie za pomocą ffmpeg...',
+        'status_two_pass_1': 'Kodowanie przebieg 1/2 (analiza)...',
+        'status_two_pass_1_progress': 'Kodowanie przebieg 1/2... {progress}%',
+        'status_two_pass_2': 'Kodowanie przebieg 2/2...',
+        'status_two_pass_2_progress': 'Kodowanie przebieg 2/2... {progress}%',
         'status_post_processing': 'Przetwarzanie końcowe...',
         'status_file_exists': 'Plik już istnieje, pomijanie...',
         'status_downloading_playlist': 'Pobieranie playlisty... {progress}%',
@@ -609,6 +662,7 @@ TRANSLATIONS = {
         'info_upload_failed_title': 'Przesyłanie nie powiodło się',
         'info_upload_failed': 'Nie udało się przesłać pliku:\n\n{error}',
         'info_skipped_file': 'Pominięto: {filename}\nRozmiar pliku ({size} MB) przekracza limit 200MB.',
+        'info_playlist_params_stripped': 'Parametry playlisty usunięte - pobieranie pojedynczego wideo',
 
         # Warning messages
         'warning_clear_history_title': 'Wyczyść historię',
@@ -692,6 +746,24 @@ TRANSLATIONS = {
         'update_complete_msg': 'Aktualizacja została pobrana pomyślnie!\n\nUruchom ponownie aplikację, aby zastosować aktualizację.',
         'update_failed_title': 'Aktualizacja nie powiodła się',
         'update_failed_msg': 'Nie udało się pobrać aktualizacji:\n{error}',
+
+        # yt-dlp updates
+        'ytdlp_update_btn': 'Aktualizuj yt-dlp',
+        'ytdlp_checking': 'Sprawdzanie wersji yt-dlp...',
+        'ytdlp_current_version': 'Obecny yt-dlp: {version}',
+        'ytdlp_update_available_title': 'Dostępna aktualizacja yt-dlp',
+        'ytdlp_update_available_msg': 'Dostępna jest nowa wersja yt-dlp!\n\nObecna: {current}\nNajnowsza: {latest}\n\nTo może naprawić problemy z pobieraniem.\nZaktualizować teraz?',
+        'ytdlp_up_to_date_title': 'yt-dlp aktualny',
+        'ytdlp_up_to_date_msg': 'yt-dlp jest już w najnowszej wersji ({version}).',
+        'ytdlp_updating': 'Aktualizowanie yt-dlp...',
+        'ytdlp_update_success_title': 'yt-dlp zaktualizowany',
+        'ytdlp_update_success_msg': 'yt-dlp został zaktualizowany do wersji {version}.\n\nUruchom ponownie aplikację.',
+        'ytdlp_update_failed_title': 'Aktualizacja yt-dlp nie powiodła się',
+        'ytdlp_update_failed_msg': 'Nie udało się zaktualizować yt-dlp:\n{error}',
+        'ytdlp_update_not_supported_title': 'Aktualizacja nieobsługiwana',
+        'ytdlp_update_not_supported_msg': 'Nie można automatycznie zaktualizować yt-dlp w trybie pakietu.\n\nPobierz najnowszą wersję ze strony wydań.',
+        'ytdlp_check_failed_title': 'Sprawdzenie nie powiodło się',
+        'ytdlp_check_failed_msg': 'Nie udało się sprawdzić wersji yt-dlp:\n{error}',
     }
 }
 

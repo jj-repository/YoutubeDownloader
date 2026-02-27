@@ -13,7 +13,7 @@ from PIL import Image, ImageTk, ImageDraw, ImageFont
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import shutil
 import signal
 import glob
@@ -32,7 +32,10 @@ from constants import (
     DEPENDENCY_CHECK_TIMEOUT, TIMEOUT_CHECK_INTERVAL, MAX_VOLUME, MIN_VOLUME,
     MAX_VIDEO_DURATION, BYTES_PER_MB, CATBOX_MAX_SIZE_MB, MAX_FILENAME_LENGTH,
     DEFAULT_VIDEO_QUALITY, CLIPBOARD_URL_LIST_HEIGHT, UI_INITIAL_DELAY_MS,
-    AUTO_UPLOAD_DELAY_MS, SHUTDOWN_GRACE_PERIOD_SEC, APP_VERSION, GITHUB_REPO,
+    AUTO_UPLOAD_DELAY_MS, SHUTDOWN_GRACE_PERIOD_SEC,
+    TARGET_MAX_SIZE_BYTES, TARGET_AUDIO_BITRATE_BPS,
+    SIZE_CONSTRAINED_RESOLUTIONS, SIZE_CONSTRAINED_MIN_BITRATES,
+    APP_VERSION, GITHUB_REPO,
     GITHUB_RELEASES_URL, GITHUB_API_LATEST, GITHUB_RAW_URL, APP_DATA_DIR,
     UPLOAD_HISTORY_FILE, CLIPBOARD_URLS_FILE, CONFIG_FILE, LOG_FILE,
 )
@@ -98,6 +101,7 @@ class YouTubeDownloader:
         self.current_process = None
         self.is_downloading = False
         self.video_duration = 0
+        self.video_title = None
         self.is_fetching_duration = False
         self.last_progress_time = None
         self.download_start_time = None
@@ -365,7 +369,7 @@ class YouTubeDownloader:
         self.thread_pool.submit(self._check_for_updates, False)
 
     def _check_for_updates(self, silent=True):
-        """Check GitHub for new version.
+        """Check GitHub for new app version and PyPI for yt-dlp updates.
 
         Args:
             silent: If True, don't show dialog when up-to-date or on error
@@ -373,30 +377,71 @@ class YouTubeDownloader:
         import urllib.request
         import urllib.error
 
+        app_update_available = False
+        ytdlp_update_available = False
+        ytdlp_current = None
+        ytdlp_latest = None
+
         try:
             logger.info("Checking for updates...")
             if not silent:
                 self.root.after(0, lambda: self.update_status(tr('update_checking'), "blue"))
 
-            request = urllib.request.Request(
-                GITHUB_API_LATEST,
-                headers={'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
-            )
-            with urllib.request.urlopen(request, timeout=10) as response:
-                data = json.loads(response.read().decode())
+            # Check app update from GitHub
+            try:
+                request = urllib.request.Request(
+                    GITHUB_API_LATEST,
+                    headers={'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
+                )
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    data = json.loads(response.read().decode())
 
-            latest_version = data.get('tag_name', '').lstrip('v')
+                latest_version = data.get('tag_name', '').lstrip('v')
 
-            if not latest_version:
-                raise ValueError("No version tag found in release")
+                if latest_version and self._version_newer(latest_version, APP_VERSION):
+                    logger.info(f"App update available: {APP_VERSION} -> {latest_version}")
+                    app_update_available = True
+                    # Show app update dialog and return (app update takes priority)
+                    self.root.after(0, lambda: self._show_update_dialog(latest_version, data))
+                    return
+                else:
+                    logger.info(f"App is up to date: {APP_VERSION}")
 
-            logger.info(f"Current version: {APP_VERSION}, Latest version: {latest_version}")
+            except Exception as e:
+                logger.error(f"Error checking app updates: {e}")
+                # Continue to check yt-dlp even if app check fails
 
-            if self._version_newer(latest_version, APP_VERSION):
-                # New version available
-                self.root.after(0, lambda: self._show_update_dialog(latest_version, data))
+            # Check yt-dlp update from PyPI
+            try:
+                ytdlp_current = self._get_ytdlp_version()
+                if ytdlp_current:
+                    request = urllib.request.Request(
+                        'https://pypi.org/pypi/yt-dlp/json',
+                        headers={'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
+                    )
+                    with urllib.request.urlopen(request, timeout=10) as response:
+                        pypi_data = json.loads(response.read().decode())
+
+                    ytdlp_latest = pypi_data.get('info', {}).get('version', '')
+
+                    if ytdlp_latest:
+                        current_parsed = self._parse_ytdlp_version(ytdlp_current)
+                        latest_parsed = self._parse_ytdlp_version(ytdlp_latest)
+
+                        if latest_parsed > current_parsed:
+                            logger.info(f"yt-dlp update available: {ytdlp_current} -> {ytdlp_latest}")
+                            ytdlp_update_available = True
+                        else:
+                            logger.info(f"yt-dlp is up to date: {ytdlp_current}")
+
+            except Exception as e:
+                logger.error(f"Error checking yt-dlp updates: {e}")
+
+            # Show appropriate dialog based on what was found
+            if ytdlp_update_available:
+                self.root.after(0, lambda: self._show_ytdlp_update_dialog(ytdlp_current, ytdlp_latest))
             elif not silent:
-                # Up to date
+                # Everything is up to date
                 self.root.after(0, lambda: messagebox.showinfo(
                     tr('update_up_to_date_title'),
                     tr('update_up_to_date_msg', version=APP_VERSION)
@@ -567,6 +612,148 @@ class YouTubeDownloader:
             self.root.after(0, lambda: messagebox.showerror(
                 tr('update_failed_title'),
                 tr('update_failed_msg', error=str(e))
+            ))
+
+    def _get_ytdlp_version(self):
+        """Get the current yt-dlp version.
+
+        Returns:
+            str: Version string (e.g., '2025.12.08') or None if failed
+        """
+        try:
+            result = subprocess.run(
+                [self.ytdlp_path, '--version'],
+                capture_output=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                return result.stdout.decode().strip()
+        except Exception as e:
+            logger.error(f"Error getting yt-dlp version: {e}")
+        return None
+
+    def _get_pip_path(self):
+        """Get the pip path for the venv.
+
+        Returns:
+            str: Path to pip executable or None if not in venv mode
+        """
+        # When running from source with venv
+        if not getattr(sys, 'frozen', False):
+            script_dir = Path(__file__).parent
+            if sys.platform == 'win32':
+                pip_path = script_dir / 'venv' / 'Scripts' / 'pip.exe'
+            else:
+                pip_path = script_dir / 'venv' / 'bin' / 'pip'
+
+            if pip_path.exists():
+                return str(pip_path)
+
+            # Try current Python's pip
+            python_bin = Path(sys.executable).parent
+            if sys.platform == 'win32':
+                pip_path = python_bin / 'pip.exe'
+            else:
+                pip_path = python_bin / 'pip'
+
+            if pip_path.exists():
+                return str(pip_path)
+
+        return None
+
+    def _parse_ytdlp_version(self, version_str):
+        """Parse yt-dlp version string into comparable tuple.
+
+        Handles versions like '2026.02.04' and '2026.2.4' correctly.
+
+        Args:
+            version_str: Version string (e.g., '2026.02.04')
+
+        Returns:
+            tuple: Version as tuple of integers (e.g., (2026, 2, 4))
+        """
+        try:
+            # Split by '.' and convert each part to int (removes leading zeros)
+            return tuple(int(part) for part in version_str.split('.'))
+        except (ValueError, AttributeError):
+            return (0,)
+
+    def _show_ytdlp_update_dialog(self, current_version, latest_version):
+        """Show yt-dlp update available dialog.
+
+        Args:
+            current_version: Current yt-dlp version string
+            latest_version: Latest yt-dlp version string
+        """
+        # Check if we can auto-update (not in bundled mode)
+        if getattr(sys, 'frozen', False):
+            messagebox.showwarning(
+                tr('ytdlp_update_not_supported_title'),
+                tr('ytdlp_update_not_supported_msg')
+            )
+            return
+
+        pip_path = self._get_pip_path()
+        if not pip_path:
+            messagebox.showwarning(
+                tr('ytdlp_update_not_supported_title'),
+                tr('ytdlp_update_not_supported_msg')
+            )
+            return
+
+        # Show update dialog
+        result = messagebox.askyesno(
+            tr('ytdlp_update_available_title'),
+            tr('ytdlp_update_available_msg', current=current_version, latest=latest_version)
+        )
+
+        if result:
+            self.thread_pool.submit(self._apply_ytdlp_update, pip_path)
+
+    def _apply_ytdlp_update(self, pip_path):
+        """Apply yt-dlp update using pip.
+
+        Args:
+            pip_path: Path to pip executable
+        """
+        try:
+            logger.info("Updating yt-dlp...")
+            self.root.after(0, lambda: self.update_status(tr('ytdlp_updating'), "blue"))
+
+            # Run pip install --upgrade yt-dlp
+            result = subprocess.run(
+                [pip_path, 'install', '--upgrade', 'yt-dlp'],
+                capture_output=True,
+                timeout=120  # 2 minute timeout for download/install
+            )
+
+            if result.returncode == 0:
+                # Get new version
+                new_version = self._get_ytdlp_version() or "unknown"
+                logger.info(f"yt-dlp updated successfully to {new_version}")
+
+                self.root.after(0, lambda: self.update_status(
+                    tr('ytdlp_current_version', version=new_version), "green"
+                ))
+                self.root.after(0, lambda: messagebox.showinfo(
+                    tr('ytdlp_update_success_title'),
+                    tr('ytdlp_update_success_msg', version=new_version)
+                ))
+            else:
+                error_msg = result.stderr.decode().strip() or result.stdout.decode().strip()
+                raise RuntimeError(error_msg or "pip returned non-zero exit code")
+
+        except subprocess.TimeoutExpired:
+            logger.error("yt-dlp update timed out")
+            self.root.after(0, lambda: messagebox.showerror(
+                tr('ytdlp_update_failed_title'),
+                tr('ytdlp_update_failed_msg', error="Update timed out")
+            ))
+        except Exception as e:
+            logger.error(f"Error updating yt-dlp: {e}")
+            self.root.after(0, lambda: messagebox.showerror(
+                tr('ytdlp_update_failed_title'),
+                tr('ytdlp_update_failed_msg', error=str(e))
             ))
 
     def on_language_change(self, event=None):
@@ -1037,6 +1224,28 @@ class YouTubeDownloader:
         except (ValueError, AttributeError):
             return False
 
+    def is_pure_playlist_url(self, url):
+        """Check if URL is a pure playlist URL (e.g. /playlist?list=YYY) without a video context."""
+        try:
+            parsed = urlparse(url)
+            return '/playlist' in parsed.path
+        except (ValueError, AttributeError):
+            return False
+
+    def strip_playlist_params(self, url):
+        """Strip playlist-related params (list, index) from a URL, keeping the video context."""
+        try:
+            parsed = urlparse(url)
+            params = parse_qs(parsed.query, keep_blank_values=True)
+            params.pop('list', None)
+            params.pop('index', None)
+            # Flatten single-value lists for urlencode
+            flat_params = {k: v[0] if len(v) == 1 else v for k, v in params.items()}
+            new_query = urlencode(flat_params, doseq=True)
+            return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+        except (ValueError, AttributeError):
+            return url
+
     def _init_temp_directory(self):
         """Initialize temp directory and clean up orphaned ones from previous crashes"""
         # Clean up old orphaned temp directories
@@ -1202,6 +1411,13 @@ class YouTubeDownloader:
         self.quality_combo = ttk.Combobox(quality_frame, textvariable=self.quality_var,
             values=quality_options, state='readonly', width=20)
         self.quality_combo.pack(side=tk.LEFT)
+
+        self.keep_below_10mb_var = tk.BooleanVar(value=False)
+        self.keep_below_10mb_check = ttk.Checkbutton(
+            quality_frame, text=tr('checkbox_keep_below_10mb'),
+            variable=self.keep_below_10mb_var,
+            command=self._on_keep_below_10mb_toggle)
+        self.keep_below_10mb_check.pack(side=tk.LEFT, padx=(20, 0))
 
         ttk.Separator(main_tab_frame, orient='horizontal').grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=15)
 
@@ -1903,10 +2119,16 @@ class YouTubeDownloader:
             self.root.after(0, lambda: self.clipboard_progress_label.config(text="0%"))
 
             # Use playlist-appropriate output template only when downloading full playlist
-            if download_as_playlist:
-                output_path = os.path.join(self.clipboard_download_path, '%(playlist_index)s-%(title)s.%(ext)s')
+            if audio_only:
+                if download_as_playlist:
+                    output_path = os.path.join(self.clipboard_download_path, '%(playlist_index)s-%(title)s.%(ext)s')
+                else:
+                    output_path = os.path.join(self.clipboard_download_path, '%(title)s.%(ext)s')
             else:
-                output_path = os.path.join(self.clipboard_download_path, '%(title)s.%(ext)s')
+                if download_as_playlist:
+                    output_path = os.path.join(self.clipboard_download_path, f'%(playlist_index)s-%(title)s_{quality}p.%(ext)s')
+                else:
+                    output_path = os.path.join(self.clipboard_download_path, f'%(title)s_{quality}p.%(ext)s')
 
             # Use helper methods for command construction
             if audio_only:
@@ -2270,16 +2492,27 @@ class YouTubeDownloader:
             self.local_file_path = None
 
             # Check if it's a playlist
-            self.is_playlist = self.is_playlist_url(url)
-            if self.is_playlist:
-                # Disable trimming and upload for playlists
-                self.trim_enabled_var.set(False)
-                self.toggle_trim()  # Disable trim controls
-                self.video_info_label.config(text=tr('warning_playlist_detected'), foreground="orange")
-                self.filesize_label.config(text="")
-                logger.info("Playlist URL detected - trimming disabled")
-                # Don't fetch duration for playlists
-                return
+            if self.is_playlist_url(url):
+                if self.is_pure_playlist_url(url):
+                    # Pure playlist URL — block trimming
+                    self.is_playlist = True
+                    self.trim_enabled_var.set(False)
+                    self.toggle_trim()  # Disable trim controls
+                    self.video_info_label.config(text=tr('warning_playlist_detected'), foreground="orange")
+                    self.filesize_label.config(text="")
+                    logger.info("Playlist URL detected - trimming disabled")
+                    # Don't fetch duration for playlists
+                    return
+                else:
+                    # Video URL with playlist context — strip playlist params, treat as single video
+                    url = self.strip_playlist_params(url)
+                    self.url_entry.delete(0, tk.END)
+                    self.url_entry.insert(0, url)
+                    self.is_playlist = False
+                    self.video_info_label.config(text=tr('info_playlist_params_stripped'), foreground="blue")
+                    logger.info(f"Stripped playlist params from video URL: {url}")
+            else:
+                self.is_playlist = False
 
         with self.fetch_lock:
             is_fetching = self.is_fetching_duration
@@ -2374,6 +2607,7 @@ class YouTubeDownloader:
                 # Display video title if available
                 if title_result and title_result.returncode == 0:
                     video_title = title_result.stdout.strip()
+                    self.video_title = video_title
                     self.video_info_label.config(text=tr('label_video_title', title=video_title))
                     logger.info(f"Video title: {video_title}")
 
@@ -2455,8 +2689,24 @@ class YouTubeDownloader:
         # Update trimmed size if trimming is enabled
         self._update_trimmed_filesize()
 
+    def _on_keep_below_10mb_toggle(self):
+        """Enable/disable quality dropdown based on 10MB checkbox state."""
+        if self.keep_below_10mb_var.get():
+            self.quality_combo.config(state='disabled')
+        else:
+            self.quality_combo.config(state='readonly')
+
     def on_quality_change(self, *args):
         """Handle quality selection changes - re-fetch file size with new quality"""
+        # Disable 10MB checkbox for audio-only
+        quality = self.quality_var.get()
+        if quality.startswith("none") or tr('quality_audio_only') in quality:
+            self.keep_below_10mb_var.set(False)
+            self.keep_below_10mb_check.config(state='disabled')
+            self.quality_combo.config(state='readonly')
+        else:
+            self.keep_below_10mb_check.config(state='normal')
+
         # Only re-fetch if we have a valid URL and have already fetched duration
         if self.current_video_url and self.video_duration > 0 and not self.is_playlist:
             # Show loading indicator
@@ -3418,7 +3668,12 @@ class YouTubeDownloader:
                 return
 
             # Check if it's a playlist and update flag
-            self.is_playlist = self.is_playlist_url(url)
+            if self.is_playlist_url(url) and not self.is_pure_playlist_url(url):
+                # Video URL with playlist context — strip playlist params
+                url = self.strip_playlist_params(url)
+                self.is_playlist = False
+            else:
+                self.is_playlist = self.is_playlist_url(url)
 
         if not self.dependencies_ok:
             messagebox.showerror(tr('error_title'), tr('error_missing_dependencies'))
@@ -3512,6 +3767,142 @@ class YouTubeDownloader:
             self.stop_btn.config(state='disabled')
             self.progress['value'] = 0
             self.progress_label.config(text="0%")
+
+    def _two_pass_encode(self, input_file, output_file, target_bitrate, duration,
+                         volume_multiplier=1.0, scale_height=None,
+                         start_time=None, end_time=None):
+        """Two-pass encode a video for optimal quality at a target bitrate.
+
+        Pass 1 analyses the video (output discarded), pass 2 produces the file.
+        Progress is reported via update_status/update_progress.
+        Returns True on success, False on failure or cancellation.
+        """
+        maxrate = int(target_bitrate * 1.5)
+        bufsize = int(target_bitrate * 2)
+        passlogfile = os.path.join(tempfile.gettempdir(), f'ytdl_2pass_{os.getpid()}')
+
+        # Common args shared by both passes
+        input_args = [self.ffmpeg_path, '-y', '-i', input_file]
+        if start_time is not None and end_time is not None:
+            input_args.extend(['-ss', str(start_time), '-to', str(end_time)])
+
+        vf_args = ['-vf', f'scale=-2:{scale_height}'] if scale_height else []
+
+        encoding_args = [
+            '-c:v', 'libx264',
+            '-b:v', str(target_bitrate),
+            '-maxrate', str(maxrate),
+            '-bufsize', str(bufsize),
+            '-preset', 'faster',
+        ]
+
+        try:
+            # --- Pass 1: analyse ---
+            self.update_status(tr('status_two_pass_1'), 'blue')
+            self.update_progress(0)
+            pass1_cmd = input_args + vf_args + encoding_args + [
+                '-pass', '1', '-passlogfile', passlogfile,
+                '-an', '-f', 'null', '/dev/null',
+                '-progress', 'pipe:1',
+            ]
+            logger.info(f"Two-pass pass 1: {' '.join(pass1_cmd)}")
+
+            self.current_process = subprocess.Popen(
+                pass1_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                universal_newlines=True, bufsize=1)
+
+            for line in self.current_process.stdout:
+                if not self.is_downloading:
+                    return False
+                if 'out_time_ms=' in line:
+                    try:
+                        time_ms = int(line.split('=')[1].strip())
+                        current = time_ms / 1_000_000
+                        if duration > 0:
+                            pct = min(100, (current / duration) * 100)
+                            self.update_progress(pct)
+                            self.update_status(
+                                tr('status_two_pass_1_progress', progress=f'{pct:.0f}'), 'blue')
+                    except (ValueError, IndexError):
+                        pass
+                self.last_progress_time = time.time()
+
+            self.current_process.wait()
+            if self.current_process.returncode != 0:
+                stderr = self.current_process.stderr.read() if self.current_process.stderr else ''
+                logger.error(f"Two-pass pass 1 failed (rc {self.current_process.returncode}): {stderr}")
+                return False
+
+            # --- Pass 2: encode ---
+            self.update_status(tr('status_two_pass_2'), 'blue')
+            self.update_progress(0)
+            pass2_cmd = input_args + vf_args + encoding_args + [
+                '-pass', '2', '-passlogfile', passlogfile,
+                '-c:a', 'aac', '-b:a', AUDIO_BITRATE,
+            ]
+            if volume_multiplier != 1.0:
+                pass2_cmd.extend(['-af', f'volume={volume_multiplier}'])
+            pass2_cmd.extend(['-progress', 'pipe:1', output_file])
+
+            logger.info(f"Two-pass pass 2: {' '.join(pass2_cmd)}")
+
+            self.current_process = subprocess.Popen(
+                pass2_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                universal_newlines=True, bufsize=1)
+
+            for line in self.current_process.stdout:
+                if not self.is_downloading:
+                    return False
+                if 'out_time_ms=' in line:
+                    try:
+                        time_ms = int(line.split('=')[1].strip())
+                        current = time_ms / 1_000_000
+                        if duration > 0:
+                            pct = min(100, (current / duration) * 100)
+                            self.update_progress(pct)
+                            self.update_status(
+                                tr('status_two_pass_2_progress', progress=f'{pct:.0f}'), 'blue')
+                    except (ValueError, IndexError):
+                        pass
+                self.last_progress_time = time.time()
+
+            self.current_process.wait()
+            if self.current_process.returncode != 0:
+                stderr = self.current_process.stderr.read() if self.current_process.stderr else ''
+                logger.error(f"Two-pass pass 2 failed (rc {self.current_process.returncode}): {stderr}")
+                return False
+
+            return True
+
+        finally:
+            # Clean up passlog files
+            for suffix in ['', '-0.log', '-0.log.mbtree']:
+                p = passlogfile + suffix
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
+
+    def _calculate_optimal_quality(self, duration_seconds):
+        """Calculate optimal resolution and video bitrate to keep output below 10MB.
+
+        Picks the highest resolution (down to 360p) where the available bitrate
+        still meets that resolution's minimum quality threshold.
+
+        Returns (height: int, video_bitrate_bps: int).
+        """
+        if duration_seconds <= 0:
+            return (360, 100000)
+        available_bitrate = int((TARGET_MAX_SIZE_BYTES * 8) / duration_seconds - TARGET_AUDIO_BITRATE_BPS)
+        available_bitrate = max(available_bitrate, 100000)
+
+        for height in SIZE_CONSTRAINED_RESOLUTIONS:
+            if available_bitrate >= SIZE_CONSTRAINED_MIN_BITRATES[height]:
+                return (height, available_bitrate)
+
+        # 360p floor — use whatever bitrate we have
+        return (360, available_bitrate)
 
     def download(self, url):
         try:
@@ -3614,71 +4005,98 @@ class YouTubeDownloader:
                         self.is_downloading = False
                     return
 
-                height = quality
+                keep_below_10mb = self.keep_below_10mb_var.get()
+
+                if keep_below_10mb:
+                    # Auto-calculate optimal resolution and bitrate
+                    clip_duration = (end_time - start_time) if trim_enabled else self.video_duration
+                    height, target_bitrate = self._calculate_optimal_quality(clip_duration)
+                    height = str(height)
+                    logger.info(f"10MB two-pass: auto-selected {height}p at {target_bitrate}bps for {clip_duration}s clip")
+                else:
+                    height = quality
+
+                volume_multiplier = self.validate_volume(self.volume_var.get())
 
                 # Check for custom filename
                 custom_name = self.sanitize_filename(self.filename_entry.get().strip())
                 if custom_name:
-                    # Use custom filename
                     base_name = custom_name
                 else:
-                    # Use video title from yt-dlp
                     base_name = '%(title)s'
 
                 # Generate filename with trim times if trimming is enabled
                 if trim_enabled:
                     start_hms_file = self.seconds_to_hms(start_time).replace(':', '-')
                     end_hms_file = self.seconds_to_hms(end_time).replace(':', '-')
-                    output_template = f'{base_name}_[{start_hms_file}_to_{end_hms_file}].%(ext)s'
+                    output_template = f'{base_name}_{height}p_[{start_hms_file}_to_{end_hms_file}].%(ext)s'
                 else:
-                    output_template = f'{base_name}.%(ext)s'
+                    output_template = f'{base_name}_{height}p.%(ext)s'
 
-                cmd = [
-                    self.ytdlp_path,
-                    '--concurrent-fragments', '5',  # Download fragments in parallel
-                    '--buffer-size', BUFFER_SIZE,  # Better buffering
-                    '--http-chunk-size', CHUNK_SIZE,  # Larger chunks = fewer requests
-                    '-f', f'bestvideo[height<={height}]+bestaudio/best[height<={height}]',
-                    '--merge-output-format', 'mp4',
-                ]
+                if keep_below_10mb:
+                    # --- Two-pass path: download raw to temp, then two-pass encode ---
+                    temp_dir = tempfile.mkdtemp(prefix='ytdl_10mb_')
+                    temp_output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
-                # Add trimming parameters
-                if trim_enabled:
-                    # Use download-sections for efficient trimming
-                    start_hms = self.seconds_to_hms(start_time)
-                    end_hms = self.seconds_to_hms(end_time)
+                    cmd = [
+                        self.ytdlp_path,
+                        '--concurrent-fragments', '5',
+                        '--buffer-size', BUFFER_SIZE,
+                        '--http-chunk-size', CHUNK_SIZE,
+                        '-f', f'bestvideo[height<={height}]+bestaudio/best[height<={height}]',
+                        '--merge-output-format', 'mp4',
+                    ]
+
+                    if trim_enabled:
+                        start_hms = self.seconds_to_hms(start_time)
+                        end_hms = self.seconds_to_hms(end_time)
+                        cmd.extend([
+                            '--download-sections', f'*{start_hms}-{end_hms}',
+                            '--force-keyframes-at-cuts',
+                        ])
+
+                    cmd.extend(self._get_speed_limit_args())
+                    if is_playlist_url:
+                        cmd.append('--no-playlist')
+                    cmd.extend(['--newline', '--progress', '-o', temp_output_template, url])
+                else:
+                    # --- Normal single-pass path ---
+                    temp_dir = None
+
+                    cmd = [
+                        self.ytdlp_path,
+                        '--concurrent-fragments', '5',
+                        '--buffer-size', BUFFER_SIZE,
+                        '--http-chunk-size', CHUNK_SIZE,
+                        '-f', f'bestvideo[height<={height}]+bestaudio/best[height<={height}]',
+                        '--merge-output-format', 'mp4',
+                    ]
+
+                    if trim_enabled:
+                        start_hms = self.seconds_to_hms(start_time)
+                        end_hms = self.seconds_to_hms(end_time)
+                        cmd.extend([
+                            '--download-sections', f'*{start_hms}-{end_hms}',
+                            '--force-keyframes-at-cuts',
+                        ])
+
+                    # Build ffmpeg postprocessor args for video (only if needed)
+                    needs_processing = trim_enabled or volume_multiplier != 1.0
+
+                    if needs_processing:
+                        ffmpeg_video_args = ['-c:v', 'libx264', '-crf', str(VIDEO_CRF), '-preset', 'faster', '-c:a', 'aac', '-b:a', AUDIO_BITRATE]
+                        if volume_multiplier != 1.0:
+                            ffmpeg_video_args.extend(['-af', f'volume={volume_multiplier}'])
+                        cmd.extend(['--postprocessor-args', 'ffmpeg:' + ' '.join(ffmpeg_video_args)])
+
+                    cmd.extend(self._get_speed_limit_args())
+                    if is_playlist_url:
+                        cmd.append('--no-playlist')
                     cmd.extend([
-                        '--download-sections', f'*{start_hms}-{end_hms}',
-                        '--force-keyframes-at-cuts',
+                        '--newline', '--progress',
+                        '-o', os.path.join(self.download_path, output_template),
+                        url
                     ])
-
-                # Build ffmpeg postprocessor args for video (only if needed)
-                volume_multiplier = self.validate_volume(self.volume_var.get())
-                needs_processing = trim_enabled or volume_multiplier != 1.0
-
-                if needs_processing:
-                    # Need to re-encode due to trimming or volume change
-                    ffmpeg_video_args = ['-c:v', 'libx264', '-crf', str(VIDEO_CRF), '-preset', 'faster', '-c:a', 'aac', '-b:a', AUDIO_BITRATE]
-
-                    # Add volume filter if needed
-                    if volume_multiplier != 1.0:
-                        ffmpeg_video_args.extend(['-af', f'volume={volume_multiplier}'])
-
-                    cmd.extend(['--postprocessor-args', 'ffmpeg:' + ' '.join(ffmpeg_video_args)])
-
-                # Add speed limit if set
-                cmd.extend(self._get_speed_limit_args())
-
-                # Always use --no-playlist in trimmer mode
-                if is_playlist_url:
-                    cmd.append('--no-playlist')
-
-                cmd.extend([
-                    '--newline',
-                    '--progress',
-                    '-o', os.path.join(self.download_path, output_template),
-                    url
-                ])
 
             logger.info(f"Download command: {' '.join(cmd)}")
 
@@ -3759,19 +4177,62 @@ class YouTubeDownloader:
             self.current_process.wait()
 
             if self.current_process.returncode == 0 and self.is_downloading:
-                self.update_progress(100)
-                self.update_status(tr('status_download_complete'), "green")
-                logger.info(f"Download completed successfully: {url}")
+                # yt-dlp download succeeded — check if two-pass encoding is needed
+                if not audio_only and keep_below_10mb and temp_dir:
+                    # Find the downloaded file in temp dir
+                    temp_files = glob.glob(os.path.join(temp_dir, '*.mp4'))
+                    if not temp_files:
+                        self.update_status(tr('status_download_failed'), "red")
+                        logger.error("Two-pass: no temp file found after yt-dlp download")
+                    else:
+                        temp_file = temp_files[0]
+                        # Build final output filename
+                        video_title = os.path.splitext(os.path.basename(temp_file))[0]
+                        if custom_name:
+                            final_base = custom_name
+                        else:
+                            final_base = self.sanitize_filename(video_title) or video_title
 
-                # Enable upload button with the most recent file
-                latest_file = self._find_latest_file()
-                self._enable_upload_button(latest_file)
+                        if trim_enabled:
+                            final_name = f'{final_base}_{height}p_[{start_hms_file}_to_{end_hms_file}].mp4'
+                        else:
+                            final_name = f'{final_base}_{height}p.mp4'
+
+                        final_output = os.path.join(self.download_path, final_name)
+                        clip_duration = (end_time - start_time) if trim_enabled else self.video_duration
+
+                        success = self._two_pass_encode(
+                            temp_file, final_output, target_bitrate, clip_duration,
+                            volume_multiplier=volume_multiplier)
+
+                        if success and self.is_downloading:
+                            self.update_progress(100)
+                            self.update_status(tr('status_download_complete'), "green")
+                            logger.info(f"Two-pass download completed: {final_output}")
+                            latest_file = self._find_latest_file()
+                            self._enable_upload_button(latest_file)
+                        elif self.is_downloading:
+                            self.update_status(tr('status_download_failed'), "red")
+                            logger.error("Two-pass encoding failed")
+
+                    # Clean up temp dir
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                else:
+                    # Normal completion
+                    self.update_progress(100)
+                    self.update_status(tr('status_download_complete'), "green")
+                    logger.info(f"Download completed successfully: {url}")
+                    latest_file = self._find_latest_file()
+                    self._enable_upload_button(latest_file)
 
             elif self.is_downloading:
                 self.update_status(tr('status_download_failed'), "red")
                 logger.error(f"Download failed with return code {self.current_process.returncode}")
                 if error_lines:
                     logger.error(f"yt-dlp errors: {'; '.join(error_lines)}")
+                # Clean up temp dir on failure
+                if not audio_only and keep_below_10mb and temp_dir:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
 
         except FileNotFoundError as e:
             if self.is_downloading:
@@ -3877,21 +4338,50 @@ class YouTubeDownloader:
                         self.is_downloading = False
                     return
 
-                height = quality
-                output_file = os.path.join(self.download_path, f"{output_name}.mp4")
+                keep_below_10mb = self.keep_below_10mb_var.get()
 
-                cmd = [self.ffmpeg_path, '-i', filepath]
+                if keep_below_10mb:
+                    clip_duration = (end_time - start_time) if trim_enabled else self.video_duration
+                    height, target_bitrate = self._calculate_optimal_quality(clip_duration)
+                    height = str(height)
+                    logger.info(f"10MB two-pass (local): auto-selected {height}p at {target_bitrate}bps for {clip_duration}s clip")
+                else:
+                    height = quality
 
-                if trim_enabled:
-                    cmd.extend(['-ss', str(start_time), '-to', str(end_time)])
+                output_file = os.path.join(self.download_path, f"{output_name}_{height}p.mp4")
 
-                cmd.extend(['-vf', f'scale=-2:{height}', '-c:v', 'libx264', '-crf', str(VIDEO_CRF),
-                           '-preset', 'faster', '-c:a', 'aac', '-b:a', AUDIO_BITRATE])
+                if keep_below_10mb:
+                    # Two-pass encode for optimal 10MB quality
+                    clip_duration = (end_time - start_time) if trim_enabled else self.video_duration
+                    success = self._two_pass_encode(
+                        filepath, output_file, target_bitrate, clip_duration,
+                        volume_multiplier=volume_multiplier,
+                        scale_height=height,
+                        start_time=start_time if trim_enabled else None,
+                        end_time=end_time if trim_enabled else None)
 
-                if volume_multiplier != 1.0:
-                    cmd.extend(['-af', f'volume={volume_multiplier}'])
+                    if success and self.is_downloading:
+                        self.update_progress(100)
+                        self.update_status(tr('status_processing_complete'), "green")
+                        logger.info(f"Two-pass local file processing complete: {output_file}")
+                        latest_file = self._find_latest_file()
+                        self._enable_upload_button(latest_file)
+                    elif self.is_downloading:
+                        self.update_status(tr('status_processing_failed'), "red")
+                    return
+                else:
+                    cmd = [self.ffmpeg_path, '-i', filepath]
 
-                cmd.extend(['-progress', 'pipe:1', '-y', output_file])
+                    if trim_enabled:
+                        cmd.extend(['-ss', str(start_time), '-to', str(end_time)])
+
+                    cmd.extend(['-vf', f'scale=-2:{height}', '-c:v', 'libx264', '-crf', str(VIDEO_CRF),
+                               '-preset', 'faster', '-c:a', 'aac', '-b:a', AUDIO_BITRATE])
+
+                    if volume_multiplier != 1.0:
+                        cmd.extend(['-af', f'volume={volume_multiplier}'])
+
+                    cmd.extend(['-progress', 'pipe:1', '-y', output_file])
 
             logger.info(f"Processing local file: {' '.join(cmd)}")
 
@@ -3956,20 +4446,18 @@ class YouTubeDownloader:
             audio_only = quality.startswith("none")
             volume_multiplier = self.validate_volume(self.volume_var.get())
 
-            # Check for custom filename
             custom_name = self.sanitize_filename(self.filename_entry.get().strip())
-            if custom_name:
-                # Use custom name with playlist index: MyVideo-1, MyVideo-2, etc.
-                output_template = f'{custom_name}-%(playlist_index)s.%(ext)s'
-            else:
-                # Use default: index-title format
-                output_template = '%(playlist_index)s-%(title)s.%(ext)s'
 
             self.update_status(tr('status_playlist_downloading'), "blue")
             logger.info(f"Starting playlist download: {url}")
 
             if audio_only:
-                # Audio-only playlist
+                # Audio-only playlist — no resolution in filename
+                if custom_name:
+                    output_template = f'{custom_name}-%(playlist_index)s.%(ext)s'
+                else:
+                    output_template = '%(playlist_index)s-%(title)s.%(ext)s'
+
                 cmd = [
                     self.ytdlp_path,
                     '--concurrent-fragments', '5',  # Download fragments in parallel
@@ -4004,6 +4492,13 @@ class YouTubeDownloader:
                     return
 
                 height = quality
+
+                # Video playlist — include resolution in filename
+                if custom_name:
+                    output_template = f'{custom_name}_{height}p-%(playlist_index)s.%(ext)s'
+                else:
+                    output_template = f'%(playlist_index)s-%(title)s_{height}p.%(ext)s'
+
                 cmd = [
                     self.ytdlp_path,
                     '--concurrent-fragments', '5',  # Download fragments in parallel

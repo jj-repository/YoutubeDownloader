@@ -43,6 +43,20 @@ BUFFER_SIZE = '16K'
 CHUNK_SIZE = '10M'
 CONCURRENT_FRAGMENTS = '5'
 PROGRESS_COMPLETE = 100
+TARGET_MAX_SIZE_MB = 10
+TARGET_MAX_SIZE_BYTES = TARGET_MAX_SIZE_MB * 1024 * 1024
+TARGET_AUDIO_BITRATE_BPS = 128000
+
+# Resolution tiers for auto-quality when constraining file size.
+# Ordered highest to lowest — the algorithm picks the highest resolution
+# where the available bitrate still exceeds the minimum threshold.
+SIZE_CONSTRAINED_RESOLUTIONS = [1080, 720, 480, 360]
+SIZE_CONSTRAINED_MIN_BITRATES = {
+    1080: 2000000,  # 2 Mbps — below this 1080p looks blocky
+    720:  1000000,  # 1 Mbps
+    480:   500000,  # 500 kbps
+    360:   100000,  # floor — use whatever is available
+}
 
 # Validation limits
 MAX_VOLUME = 2.0
