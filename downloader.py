@@ -4,6 +4,11 @@ from tkinter import ttk, messagebox, filedialog
 import os
 import sys
 import subprocess
+
+# On Windows, prevent subprocess calls from opening visible console windows
+_subprocess_kwargs = {}
+if sys.platform == 'win32':
+    _subprocess_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
 import threading
 import re
 import logging
@@ -624,10 +629,11 @@ class YouTubeDownloader:
             result = subprocess.run(
                 [self.ytdlp_path, '--version'],
                 capture_output=True,
-                timeout=10
+                timeout=10,
+                **_subprocess_kwargs
             )
             if result.returncode == 0:
-                return result.stdout.decode().strip()
+                return result.stdout.decode('utf-8', errors='replace').strip()
         except Exception as e:
             logger.error(f"Error getting yt-dlp version: {e}")
         return None
@@ -724,7 +730,8 @@ class YouTubeDownloader:
             result = subprocess.run(
                 [pip_path, 'install', '--upgrade', 'yt-dlp'],
                 capture_output=True,
-                timeout=120  # 2 minute timeout for download/install
+                timeout=120,  # 2 minute timeout for download/install
+                **_subprocess_kwargs
             )
 
             if result.returncode == 0:
@@ -740,7 +747,7 @@ class YouTubeDownloader:
                     tr('ytdlp_update_success_msg', version=new_version)
                 ))
             else:
-                error_msg = result.stderr.decode().strip() or result.stdout.decode().strip()
+                error_msg = result.stderr.decode('utf-8', errors='replace').strip() or result.stdout.decode('utf-8', errors='replace').strip()
                 raise RuntimeError(error_msg or "pip returned non-zero exit code")
 
         except subprocess.TimeoutExpired:
@@ -884,10 +891,12 @@ class YouTubeDownloader:
         if not filename:
             return ""
 
-        # Remove path separators and parent directory references
-        dangerous_chars = ['/', '\\', '..', '\x00']
-        for char in dangerous_chars:
+        # Remove path separators and null bytes
+        for char in ['/', '\\', '\x00']:
             filename = filename.replace(char, '')
+        # Remove parent directory references (loop to handle '....' -> '..' -> '')
+        while '..' in filename:
+            filename = filename.replace('..', '')
 
         # Remove shell metacharacters that could be dangerous
         shell_chars = ['$', '`', '|', ';', '&', '<', '>', '(', ')', '{', '}', '[', ']', '!', '*', '?', '~', '^']
@@ -2151,7 +2160,7 @@ class YouTubeDownloader:
                 logger.info(f"Clipboard download starting: {url}")
 
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                       universal_newlines=True, bufsize=1)
+                                       encoding='utf-8', errors='replace', bufsize=1, **_subprocess_kwargs)
 
             # Track current download phase for status messages
             current_phase = "video" if not audio_only else "audio"
@@ -2544,14 +2553,14 @@ class YouTubeDownloader:
             # Fetch duration
             def _fetch_duration():
                 cmd = [self.ytdlp_path, '--get-duration', url]
-                return subprocess.run(cmd, capture_output=True, text=True, timeout=METADATA_FETCH_TIMEOUT)
+                return subprocess.run(cmd, capture_output=True, encoding='utf-8', errors='replace', timeout=METADATA_FETCH_TIMEOUT, **_subprocess_kwargs)
 
             result = self.retry_network_operation(_fetch_duration, "Fetch duration")
 
             # Fetch title in parallel
             def _fetch_title():
                 cmd = [self.ytdlp_path, '--get-title', url]
-                return subprocess.run(cmd, capture_output=True, text=True, timeout=METADATA_FETCH_TIMEOUT)
+                return subprocess.run(cmd, capture_output=True, encoding='utf-8', errors='replace', timeout=METADATA_FETCH_TIMEOUT, **_subprocess_kwargs)
 
             title_result = self.retry_network_operation(_fetch_title, "Fetch title")
 
@@ -2587,61 +2596,70 @@ class YouTubeDownloader:
                 except (ValueError, OverflowError) as e:
                     raise ValueError(f"Invalid duration format: {duration_str} ({e})")
 
-                # Update sliders
-                self.start_slider.config(from_=0, to=self.video_duration, state='normal')
-                self.end_slider.config(from_=0, to=self.video_duration, state='normal')
-                self.start_time_var.set(0)
-                self.end_time_var.set(self.video_duration)
-
-                # Update entry fields
-                self.start_time_entry.config(state='normal')
-                self.end_time_entry.config(state='normal')
-                self.start_time_entry.delete(0, tk.END)
-                self.start_time_entry.insert(0, self.seconds_to_hms(0))
-                self.end_time_entry.delete(0, tk.END)
-                self.end_time_entry.insert(0, self.seconds_to_hms(self.video_duration))
-
-                # Update duration label
-                self.trim_duration_label.config(text=tr('label_selected_duration_value', duration=self.seconds_to_hms(self.video_duration)))
-
-                # Display video title if available
+                # Update UI on main thread
+                video_title = None
                 if title_result and title_result.returncode == 0:
                     video_title = title_result.stdout.strip()
                     self.video_title = video_title
-                    self.video_info_label.config(text=tr('label_video_title', title=video_title))
                     logger.info(f"Video title: {video_title}")
+
+                self.root.after(0, lambda: self._update_duration_ui(video_title))
 
                 # Fetch estimated file size
                 self._fetch_file_size(url)
 
                 self.update_status(tr('status_duration_fetched'), "green")
-
-                # Trigger initial preview update
-                self.root.after(UI_INITIAL_DELAY_MS, self.update_previews)
                 logger.info(f"Successfully fetched video duration: {self.video_duration}s")
             else:
                 raise Exception(f"yt-dlp returned error: {result.stderr}")
 
         except subprocess.TimeoutExpired:
             error_msg = tr('error_request_timeout')
-            messagebox.showerror(tr('error_title'), error_msg)
+            self.root.after(0, lambda: messagebox.showerror(tr('error_title'), error_msg))
             self.update_status(tr('status_duration_timeout'), "red")
             logger.error("Timeout fetching video duration")
         except ValueError as e:
             error_msg = tr('error_invalid_duration', error=str(e))
-            messagebox.showerror(tr('error_title'), error_msg)
+            self.root.after(0, lambda: messagebox.showerror(tr('error_title'), error_msg))
             self.update_status(tr('status_invalid_duration_format'), "red")
             logger.error(f"Duration parsing error: {e}")
         except Exception as e:
-            messagebox.showerror(tr('error_title'), tr('error_fetch_duration_failed', error=str(e)))
+            err_msg = tr('error_fetch_duration_failed', error=str(e))
+            self.root.after(0, lambda: messagebox.showerror(tr('error_title'), err_msg))
             self.update_status(tr('status_duration_fetch_failed'), "red")
             logger.exception(f"Unexpected error fetching duration: {e}")
 
         finally:
             with self.fetch_lock:
                 self.is_fetching_duration = False
-            if self.trim_enabled_var.get():
-                self.fetch_duration_btn.config(state='normal')
+            self.root.after(0, lambda: self.fetch_duration_btn.config(state='normal') if self.trim_enabled_var.get() else None)
+
+    def _update_duration_ui(self, video_title=None):
+        """Update duration-related UI elements on the main thread"""
+        self.start_slider.config(from_=0, to=self.video_duration, state='normal')
+        self.end_slider.config(from_=0, to=self.video_duration, state='normal')
+        self.start_time_var.set(0)
+        self.end_time_var.set(self.video_duration)
+
+        self.start_time_entry.config(state='normal')
+        self.end_time_entry.config(state='normal')
+        self.start_time_entry.delete(0, tk.END)
+        self.start_time_entry.insert(0, self.seconds_to_hms(0))
+        self.end_time_entry.delete(0, tk.END)
+        self.end_time_entry.insert(0, self.seconds_to_hms(self.video_duration))
+
+        self.trim_duration_label.config(text=tr('label_selected_duration_value', duration=self.seconds_to_hms(self.video_duration)))
+
+        if video_title:
+            self.video_info_label.config(text=tr('label_video_title', title=video_title))
+
+        self.root.after(UI_INITIAL_DELAY_MS, self.update_previews)
+
+    def _update_duration_ui_local(self, video_title):
+        """Update duration-related UI for local files on the main thread"""
+        self._update_duration_ui()
+        if video_title:
+            self.video_info_label.config(text=tr('label_file', filename=video_title))
 
     def _fetch_file_size(self, url):
         """Fetch estimated file size for the video (runs in background thread)"""
@@ -2656,7 +2674,7 @@ class YouTubeDownloader:
                     format_selector = f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]'
 
                 cmd = [self.ytdlp_path, '--dump-json', '-f', format_selector, url]
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=STREAM_FETCH_TIMEOUT)
+                result = subprocess.run(cmd, capture_output=True, encoding='utf-8', errors='replace', timeout=STREAM_FETCH_TIMEOUT, **_subprocess_kwargs)
 
                 if result.returncode == 0:
                     info = json.loads(result.stdout)
@@ -2745,57 +2763,36 @@ class YouTubeDownloader:
                 filepath
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=FFPROBE_TIMEOUT, check=True)
+            result = subprocess.run(cmd, capture_output=True, encoding='utf-8', errors='replace', timeout=FFPROBE_TIMEOUT, check=True, **_subprocess_kwargs)
             duration_seconds = float(result.stdout.strip())
             self.video_duration = int(duration_seconds)
 
             video_title = Path(filepath).stem
 
-            # Update sliders
-            self.start_slider.config(from_=0, to=self.video_duration, state='normal')
-            self.end_slider.config(from_=0, to=self.video_duration, state='normal')
-            self.start_time_var.set(0)
-            self.end_time_var.set(self.video_duration)
-
-            # Update entry fields
-            self.start_time_entry.config(state='normal')
-            self.end_time_entry.config(state='normal')
-            self.start_time_entry.delete(0, tk.END)
-            self.start_time_entry.insert(0, self.seconds_to_hms(0))
-            self.end_time_entry.delete(0, tk.END)
-            self.end_time_entry.insert(0, self.seconds_to_hms(self.video_duration))
-
-            # Update duration label
-            self.trim_duration_label.config(text=tr('label_selected_duration_value', duration=self.seconds_to_hms(self.video_duration)))
-
-            # Display filename
-            self.video_info_label.config(text=tr('label_file', filename=video_title))
-            logger.info(f"Local file duration: {self.video_duration}s")
-
+            # Update UI on main thread
+            self.root.after(0, lambda vt=video_title: self._update_duration_ui_local(vt))
             self.update_status(tr('status_duration_fetched'), "green")
-
-            # Trigger initial preview update
-            self.root.after(100, self.update_previews)
+            logger.info(f"Local file duration: {self.video_duration}s")
 
         except subprocess.CalledProcessError as e:
             error_msg = tr('error_read_video_failed', error=(e.stderr if e.stderr else str(e)))
-            messagebox.showerror(tr('error_title'), error_msg)
+            self.root.after(0, lambda: messagebox.showerror(tr('error_title'), error_msg))
             self.update_status(tr('error_read_file_failed', error=''), "red")
             logger.error(f"ffprobe error: {e}")
         except ValueError as e:
             error_msg = tr('error_invalid_video_format')
-            messagebox.showerror(tr('error_title'), error_msg)
+            self.root.after(0, lambda: messagebox.showerror(tr('error_title'), error_msg))
             self.update_status(tr('error_invalid_video_format'), "red")
             logger.error(f"Duration parsing error: {e}")
         except Exception as e:
-            messagebox.showerror(tr('error_title'), tr('error_read_file_failed', error=str(e)))
+            err_msg = tr('error_read_file_failed', error=str(e))
+            self.root.after(0, lambda: messagebox.showerror(tr('error_title'), err_msg))
             self.update_status(tr('error_read_file_failed', error=''), "red")
             logger.exception(f"Unexpected error reading local file: {e}")
         finally:
             with self.fetch_lock:
                 self.is_fetching_duration = False
-            if self.trim_enabled_var.get():
-                self.fetch_duration_btn.config(state='normal')
+            self.root.after(0, lambda: self.fetch_duration_btn.config(state='normal') if self.trim_enabled_var.get() else None)
 
     def on_slider_change(self, event=None):
         """Handle slider changes and enforce valid time ranges.
@@ -2983,8 +2980,11 @@ class YouTubeDownloader:
                           tr('info_upload_complete', url=file_url))
 
         # Auto-copy to clipboard
-        self.root.clipboard_clear()
-        self.root.clipboard_append(file_url)
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(file_url)
+        except tk.TclError:
+            logger.warning("Failed to copy URL to clipboard")
 
     def _upload_failed(self, error_msg):
         """Handle failed upload (called on main thread)"""
@@ -3109,9 +3109,11 @@ class YouTubeDownloader:
 
     def _process_uploader_queue(self):
         """Process upload queue sequentially"""
-        total_count = len(self.uploader_file_queue)
+        with self.uploader_lock:
+            queue_snapshot = list(self.uploader_file_queue)
+        total_count = len(queue_snapshot)
 
-        for index, item in enumerate(self.uploader_file_queue):
+        for index, item in enumerate(queue_snapshot):
             with self.uploader_lock:
                 is_uploading = self.uploader_is_uploading
             if not is_uploading:
@@ -3170,8 +3172,11 @@ class YouTubeDownloader:
         self.uploader_url_frame.grid()
 
         # Auto-copy to clipboard
-        self.root.clipboard_clear()
-        self.root.clipboard_append(file_url)
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(file_url)
+        except tk.TclError:
+            logger.warning("Failed to copy URL to clipboard")
 
     def _finish_uploader_queue(self):
         """Clean up after queue upload completes"""
@@ -3222,20 +3227,24 @@ class YouTubeDownloader:
             return None
 
     def _enable_upload_button(self, filepath):
-        """Enable upload button after successful download"""
+        """Enable upload button after successful download (thread-safe)"""
         if filepath and os.path.isfile(filepath):
             self.last_output_file = filepath
-            self.upload_btn.config(state='normal')
-            logger.info(f"Upload enabled for: {filepath}")
+            self.root.after(0, lambda: self._do_enable_upload(filepath))
 
-            # Auto-upload if enabled (but not for playlists)
-            if self.auto_upload_var.get():
-                url = self.url_entry.get().strip()
-                if url and self.is_playlist_url(url):
-                    logger.info("Auto-upload skipped for playlist URL")
-                else:
-                    logger.info("Auto-upload enabled, starting upload...")
-                    self.root.after(AUTO_UPLOAD_DELAY_MS, self.start_upload)  # Small delay to ensure UI updates
+    def _do_enable_upload(self, filepath):
+        """Actual upload button enable on main thread"""
+        self.upload_btn.config(state='normal')
+        logger.info(f"Upload enabled for: {filepath}")
+
+        # Auto-upload if enabled (but not for playlists)
+        if self.auto_upload_var.get():
+            url = self.url_entry.get().strip()
+            if url and self.is_playlist_url(url):
+                logger.info("Auto-upload skipped for playlist URL")
+            else:
+                logger.info("Auto-upload enabled, starting upload...")
+                self.root.after(AUTO_UPLOAD_DELAY_MS, self.start_upload)
 
     def schedule_preview_update(self):
         """Schedule preview update with debouncing to avoid excessive calls"""
@@ -3309,7 +3318,7 @@ class YouTubeDownloader:
                         '-g',
                         self.current_video_url
                     ]
-                    return subprocess.run(get_url_cmd, capture_output=True, text=True, timeout=STREAM_FETCH_TIMEOUT, check=True)
+                    return subprocess.run(get_url_cmd, capture_output=True, encoding='utf-8', errors='replace', timeout=STREAM_FETCH_TIMEOUT, check=True, **_subprocess_kwargs)
 
                 result = self.retry_network_operation(_get_stream_url, f"Get stream URL for frame at {timestamp}s")
                 video_url = result.stdout.strip().split('\n')[0]
@@ -3345,7 +3354,7 @@ class YouTubeDownloader:
                     '-y',
                     temp_file
                 ])
-                return subprocess.run(cmd, capture_output=True, timeout=STREAM_FETCH_TIMEOUT, check=True)
+                return subprocess.run(cmd, capture_output=True, timeout=STREAM_FETCH_TIMEOUT, check=True, **_subprocess_kwargs)
 
             self.retry_network_operation(_extract_frame, f"Extract frame at {timestamp}s")
 
@@ -3374,8 +3383,8 @@ class YouTubeDownloader:
                 return
             self.preview_thread_running = True
 
-        start_time = int(self.start_time_var.get())
-        end_time = int(self.end_time_var.get())
+        start_time = int(float(self.start_time_var.get()))
+        end_time = int(float(self.end_time_var.get()))
 
         # Show loading indicators
         self.start_preview_label.config(image=self.loading_image)
@@ -3606,8 +3615,8 @@ class YouTubeDownloader:
             if os.path.isfile(self.ytdlp_path) and os.access(self.ytdlp_path, os.X_OK):
                 # Try to get version but don't fail if it doesn't work
                 result = subprocess.run([self.ytdlp_path, '--version'],
-                                      capture_output=True, timeout=DEPENDENCY_CHECK_TIMEOUT)
-                version = result.stdout.decode().strip()
+                                      capture_output=True, timeout=DEPENDENCY_CHECK_TIMEOUT, **_subprocess_kwargs)
+                version = result.stdout.decode('utf-8', errors='replace').strip()
                 if version:
                     logger.info(f"yt-dlp version: {version}")
                 else:
@@ -3615,15 +3624,15 @@ class YouTubeDownloader:
             elif shutil.which(self.ytdlp_path):
                 # System PATH yt-dlp
                 result = subprocess.run([self.ytdlp_path, '--version'],
-                                      capture_output=True, timeout=DEPENDENCY_CHECK_TIMEOUT)
-                logger.info(f"yt-dlp version: {result.stdout.decode().strip()}")
+                                      capture_output=True, timeout=DEPENDENCY_CHECK_TIMEOUT, **_subprocess_kwargs)
+                logger.info(f"yt-dlp version: {result.stdout.decode('utf-8', errors='replace').strip()}")
             else:
                 logger.error(f"yt-dlp not found at: {self.ytdlp_path}")
                 return False
 
             # Check ffmpeg (use bundled or system)
             result = subprocess.run([self.ffmpeg_path, '-version'],
-                                  capture_output=True, timeout=DEPENDENCY_CHECK_TIMEOUT)
+                                  capture_output=True, timeout=DEPENDENCY_CHECK_TIMEOUT, **_subprocess_kwargs)
             if result.returncode == 0:
                 logger.info(f"ffmpeg is available at: {self.ffmpeg_path}")
             else:
@@ -3632,7 +3641,7 @@ class YouTubeDownloader:
 
             # Check ffprobe (use bundled or system)
             result = subprocess.run([self.ffprobe_path, '-version'],
-                                  capture_output=True, timeout=DEPENDENCY_CHECK_TIMEOUT)
+                                  capture_output=True, timeout=DEPENDENCY_CHECK_TIMEOUT, **_subprocess_kwargs)
             if result.returncode == 0:
                 logger.info(f"ffprobe is available at: {self.ffprobe_path}")
             else:
@@ -3802,17 +3811,19 @@ class YouTubeDownloader:
             self.update_progress(0)
             pass1_cmd = input_args + vf_args + encoding_args + [
                 '-pass', '1', '-passlogfile', passlogfile,
-                '-an', '-f', 'null', '/dev/null',
+                '-an', '-f', 'null', os.devnull,
                 '-progress', 'pipe:1',
             ]
             logger.info(f"Two-pass pass 1: {' '.join(pass1_cmd)}")
 
-            self.current_process = subprocess.Popen(
-                pass1_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                universal_newlines=True, bufsize=1)
+            with self.download_lock:
+                self.current_process = subprocess.Popen(
+                    pass1_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    encoding='utf-8', errors='replace', bufsize=1, **_subprocess_kwargs)
 
             for line in self.current_process.stdout:
                 if not self.is_downloading:
+                    self.safe_process_cleanup(self.current_process)
                     return False
                 if 'out_time_ms=' in line:
                     try:
@@ -3833,6 +3844,12 @@ class YouTubeDownloader:
                 logger.error(f"Two-pass pass 1 failed (rc {self.current_process.returncode}): {stderr}")
                 return False
 
+            # Close pass 1 pipes before starting pass 2
+            if self.current_process.stdout:
+                self.current_process.stdout.close()
+            if self.current_process.stderr:
+                self.current_process.stderr.close()
+
             # --- Pass 2: encode ---
             self.update_status(tr('status_two_pass_2'), 'blue')
             self.update_progress(0)
@@ -3846,12 +3863,14 @@ class YouTubeDownloader:
 
             logger.info(f"Two-pass pass 2: {' '.join(pass2_cmd)}")
 
-            self.current_process = subprocess.Popen(
-                pass2_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                universal_newlines=True, bufsize=1)
+            with self.download_lock:
+                self.current_process = subprocess.Popen(
+                    pass2_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    encoding='utf-8', errors='replace', bufsize=1, **_subprocess_kwargs)
 
             for line in self.current_process.stdout:
                 if not self.is_downloading:
+                    self.safe_process_cleanup(self.current_process)
                     return False
                 if 'out_time_ms=' in line:
                     try:
@@ -3905,6 +3924,8 @@ class YouTubeDownloader:
         return (360, available_bitrate)
 
     def download(self, url):
+        keep_below_10mb = False
+        temp_dir = None
         try:
             # Route to local file handler if needed
             if self.is_local_file(url):
@@ -3924,19 +3945,17 @@ class YouTubeDownloader:
             if trim_enabled:
                 if self.video_duration <= 0:
                     self.update_status(tr('error_fetch_duration_first'), "red")
-                    self.download_btn.config(state='normal')
-                    self.stop_btn.config(state='disabled')
+                    self._reset_buttons()
                     with self.download_lock:
                         self.is_downloading = False
                     return
 
-                start_time = int(self.start_time_var.get())
-                end_time = int(self.end_time_var.get())
+                start_time = int(float(self.start_time_var.get()))
+                end_time = int(float(self.end_time_var.get()))
 
                 if start_time >= end_time:
                     self.update_status(tr('error_invalid_time_range'), "red")
-                    self.download_btn.config(state='normal')
-                    self.stop_btn.config(state='disabled')
+                    self._reset_buttons()
                     with self.download_lock:
                         self.is_downloading = False
                     return
@@ -3999,8 +4018,7 @@ class YouTubeDownloader:
             else:
                 if quality.startswith("none"):
                     self.update_status(tr('error_select_quality'), "red")
-                    self.download_btn.config(state='normal')
-                    self.stop_btn.config(state='disabled')
+                    self._reset_buttons()
                     with self.download_lock:
                         self.is_downloading = False
                     return
@@ -4100,13 +4118,16 @@ class YouTubeDownloader:
 
             logger.info(f"Download command: {' '.join(cmd)}")
 
-            self.current_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True,
-                bufsize=1
-            )
+            with self.download_lock:
+                self.current_process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    encoding='utf-8',
+                    errors='replace',
+                    bufsize=1,
+                    **_subprocess_kwargs
+                )
 
             # Parse output for progress
             error_lines = []  # Capture error output for debugging
@@ -4203,14 +4224,13 @@ class YouTubeDownloader:
 
                         success = self._two_pass_encode(
                             temp_file, final_output, target_bitrate, clip_duration,
-                            volume_multiplier=volume_multiplier)
+                            volume_multiplier=volume_multiplier, scale_height=height)
 
                         if success and self.is_downloading:
                             self.update_progress(100)
                             self.update_status(tr('status_download_complete'), "green")
                             logger.info(f"Two-pass download completed: {final_output}")
-                            latest_file = self._find_latest_file()
-                            self._enable_upload_button(latest_file)
+                            self._enable_upload_button(final_output)
                         elif self.is_downloading:
                             self.update_status(tr('status_download_failed'), "red")
                             logger.error("Two-pass encoding failed")
@@ -4255,11 +4275,18 @@ class YouTubeDownloader:
                 logger.exception(f"Unexpected error during download: {e}")
 
         finally:
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
             with self.download_lock:
                 self.is_downloading = False
-            self.download_btn.config(state='normal')
-            self.stop_btn.config(state='disabled')
-            self.current_process = None
+                proc = self.current_process
+                self.current_process = None
+            if proc:
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
+            self._reset_buttons()
 
     def download_local_file(self, filepath):
         """Process local video file with trimming, quality adjustment, and volume control"""
@@ -4274,19 +4301,17 @@ class YouTubeDownloader:
             if trim_enabled:
                 if self.video_duration <= 0:
                     self.update_status(tr('error_fetch_duration_first'), "red")
-                    self.download_btn.config(state='normal')
-                    self.stop_btn.config(state='disabled')
+                    self._reset_buttons()
                     with self.download_lock:
                         self.is_downloading = False
                     return
 
-                start_time = int(self.start_time_var.get())
-                end_time = int(self.end_time_var.get())
+                start_time = int(float(self.start_time_var.get()))
+                end_time = int(float(self.end_time_var.get()))
 
                 if start_time >= end_time:
                     self.update_status(tr('error_invalid_time_range'), "red")
-                    self.download_btn.config(state='normal')
-                    self.stop_btn.config(state='disabled')
+                    self._reset_buttons()
                     with self.download_lock:
                         self.is_downloading = False
                     return
@@ -4332,8 +4357,7 @@ class YouTubeDownloader:
                 # Video processing
                 if quality.startswith("none"):
                     self.update_status(tr('error_select_quality'), "red")
-                    self.download_btn.config(state='normal')
-                    self.stop_btn.config(state='disabled')
+                    self._reset_buttons()
                     with self.download_lock:
                         self.is_downloading = False
                     return
@@ -4364,8 +4388,7 @@ class YouTubeDownloader:
                         self.update_progress(100)
                         self.update_status(tr('status_processing_complete'), "green")
                         logger.info(f"Two-pass local file processing complete: {output_file}")
-                        latest_file = self._find_latest_file()
-                        self._enable_upload_button(latest_file)
+                        self._enable_upload_button(output_file)
                     elif self.is_downloading:
                         self.update_status(tr('status_processing_failed'), "red")
                     return
@@ -4386,8 +4409,9 @@ class YouTubeDownloader:
             logger.info(f"Processing local file: {' '.join(cmd)}")
 
             # Execute ffmpeg
-            self.current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                                     universal_newlines=True, bufsize=1)
+            with self.download_lock:
+                self.current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                                         encoding='utf-8', errors='replace', bufsize=1, **_subprocess_kwargs)
 
             # Parse ffmpeg progress
             total_duration = self.video_duration if not trim_enabled else (end_time - start_time)
@@ -4435,9 +4459,14 @@ class YouTubeDownloader:
         finally:
             with self.download_lock:
                 self.is_downloading = False
-            self.download_btn.config(state='normal')
-            self.stop_btn.config(state='disabled')
-            self.current_process = None
+                proc = self.current_process
+                self.current_process = None
+            if proc:
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
+            self._reset_buttons()
 
     def download_playlist(self, url):
         """Download entire YouTube playlist with quality and volume settings"""
@@ -4485,8 +4514,7 @@ class YouTubeDownloader:
                 # Video playlist
                 if quality.startswith("none"):
                     self.update_status(tr('error_select_quality'), "red")
-                    self.download_btn.config(state='normal')
-                    self.stop_btn.config(state='disabled')
+                    self._reset_buttons()
                     with self.download_lock:
                         self.is_downloading = False
                     return
@@ -4528,8 +4556,9 @@ class YouTubeDownloader:
             logger.info(f"Playlist download command: {' '.join(cmd)}")
 
             # Execute yt-dlp
-            self.current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                                     universal_newlines=True, bufsize=1)
+            with self.download_lock:
+                self.current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                                         encoding='utf-8', errors='replace', bufsize=1, **_subprocess_kwargs)
 
             # Parse yt-dlp output
             for line in self.current_process.stdout:
@@ -4578,22 +4607,39 @@ class YouTubeDownloader:
         finally:
             with self.download_lock:
                 self.is_downloading = False
-            self.download_btn.config(state='normal')
-            self.stop_btn.config(state='disabled')
-            self.current_process = None
+                proc = self.current_process
+                self.current_process = None
+            if proc:
+                if proc.stdout:
+                    proc.stdout.close()
+                if proc.stderr:
+                    proc.stderr.close()
+            self._reset_buttons()
 
     def update_progress(self, value):
-        """Update main progress bar with validation"""
+        """Update main progress bar with validation (thread-safe)"""
         try:
             value = float(value)
             value = max(0, min(100, value))  # Clamp to 0-100
-            self.progress['value'] = value
-            self.progress_label.config(text=f"{value:.1f}%")
+            self.root.after(0, lambda v=value: self._do_update_progress(v))
         except (ValueError, TypeError) as e:
             logger.warning(f"Invalid progress value: {value} - {e}")
 
+    def _do_update_progress(self, value):
+        """Actual progress update on main thread"""
+        self.progress['value'] = value
+        self.progress_label.config(text=f"{value:.1f}%")
+
     def update_status(self, message, color):
-        self.status_label.config(text=message, foreground=color)
+        """Update status label (thread-safe)"""
+        self.root.after(0, lambda m=message, c=color: self.status_label.config(text=m, foreground=c))
+
+    def _reset_buttons(self):
+        """Reset download/stop buttons to idle state (thread-safe)"""
+        self.root.after(0, lambda: (
+            self.download_btn.config(state='normal'),
+            self.stop_btn.config(state='disabled')
+        ))
 
     def cleanup_temp_files(self):
         """Clean up temporary preview files"""
@@ -4624,7 +4670,6 @@ class YouTubeDownloader:
         with self.clipboard_lock:
             if self.clipboard_downloading:
                 self.clipboard_downloading = False
-        time.sleep(SHUTDOWN_GRACE_PERIOD_SEC)
 
         # Stop any ongoing downloads gracefully
         with self.download_lock:
@@ -4641,14 +4686,15 @@ class YouTubeDownloader:
         except Exception as e:
             logger.error(f"Error cleaning temp files: {e}")
 
-        # Shutdown thread pool gracefully with timeout
+        # Shutdown thread pool — cancel pending tasks, don't wait forever
         logger.info("Shutting down thread pool...")
+        with self.download_lock:
+            self.is_downloading = False
         try:
-            # cancel_futures parameter was added in Python 3.9
-            self.thread_pool.shutdown(wait=True, cancel_futures=False)
+            self.thread_pool.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             # Python 3.6-3.8 compatibility: cancel_futures not supported
-            self.thread_pool.shutdown(wait=True)
+            self.thread_pool.shutdown(wait=False)
         except Exception as e:
             logger.error(f"Error shutting down thread pool: {e}")
 
@@ -4668,7 +4714,8 @@ def main():
         root.after(0, app.on_closing)
 
     signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    if sys.platform != 'win32':
+        signal.signal(signal.SIGTERM, signal_handler)
 
     root.mainloop()
 

@@ -71,7 +71,7 @@ DEFAULT_VIDEO_QUALITY = "480"
 CLIPBOARD_URL_LIST_HEIGHT = 12
 
 # Version and Update
-APP_VERSION = "3.3.2"
+APP_VERSION = "3.4.0"
 GITHUB_REPO = "jj-repository/YoutubeDownloader"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
