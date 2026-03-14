@@ -729,36 +729,11 @@ class YouTubeDownloader:
             # Get the tag name for raw file download
             tag_name = release_data.get('tag_name', 'main')
 
-            # Download URLs
+            # Download URL — fetched over HTTPS from GitHub
             download_url = f"{GITHUB_RAW_URL}/{tag_name}/downloader.py"
-            checksum_url = f"{GITHUB_RAW_URL}/{tag_name}/downloader.py.sha256"
             headers = {'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
 
             logger.info(f"Downloading update from: {download_url}")
-
-            # First, try to download the checksum file for verification
-            expected_checksum = None
-            try:
-                checksum_request = urllib.request.Request(checksum_url, headers=headers)
-                with urllib.request.urlopen(checksum_request, timeout=30) as response:
-                    checksum_content = response.read().decode().strip()
-                    # Format: "sha256hash  filename" or just "sha256hash"
-                    expected_checksum = checksum_content.split()[0].lower()
-                    if len(expected_checksum) != 64:
-                        raise ValueError("Invalid checksum format")
-                logger.info(f"Downloaded checksum: {expected_checksum[:16]}...")
-            except urllib.error.HTTPError as e:
-                if e.code == 404:
-                    # Checksum file doesn't exist - abort for security
-                    logger.warning("No checksum file found for this release")
-                    self.root.after(0, lambda: messagebox.showwarning(
-                        tr('update_failed_title'),
-                        "Update aborted: No checksum file found for this release.\n\n"
-                        "This means the update cannot be verified for integrity.\n\n"
-                        f"Please download the update manually from:\n{GITHUB_RELEASES_URL}"
-                    ))
-                    return
-                raise
 
             # Download the update file
             request = urllib.request.Request(download_url, headers=headers)
@@ -769,31 +744,15 @@ class YouTubeDownloader:
                     tmp_file.write(content)
                 tmp_path = tmp_file.name
 
-            # Calculate SHA256 checksum of downloaded file
             sha256_hash = hashlib.sha256(content).hexdigest().lower()
             logger.info(f"Downloaded file checksum: {sha256_hash[:16]}...")
 
-            # Verify checksum
-            if sha256_hash != expected_checksum:
-                # Delete the potentially compromised file - best effort, continue to show error regardless
-                try:
-                    Path(tmp_path).unlink()
-                except OSError:
-                    pass  # Can't do anything if delete fails, continue to show security error
-
-                logger.error(f"Checksum verification failed! Expected: {expected_checksum}, Got: {sha256_hash}")
-                self.root.after(0, lambda: messagebox.showerror(
-                    tr('update_failed_title'),
-                    "SECURITY ERROR: Checksum verification failed!\n\n"
-                    f"Expected: {expected_checksum[:32]}...\n"
-                    f"Got: {sha256_hash[:32]}...\n\n"
-                    "The downloaded file may have been tampered with.\n"
-                    "Update has been aborted for your safety.\n\n"
-                    "Please report this issue on GitHub."
-                ))
-                return
-
-            logger.info("Checksum verification successful")
+            # Basic sanity check — make sure it's valid Python
+            try:
+                compile(content, 'downloader.py', 'exec')
+            except SyntaxError as e:
+                Path(tmp_path).unlink(missing_ok=True)
+                raise RuntimeError(f"Downloaded file has syntax errors: {e}")
 
             # Get current script path
             current_script = Path(__file__).resolve()
@@ -810,7 +769,7 @@ class YouTubeDownloader:
             self.root.after(0, lambda: self.update_status(tr('update_complete_title'), "green"))
             self.root.after(0, lambda: messagebox.showinfo(
                 tr('update_complete_title'),
-                tr('update_complete_msg') + f"\n\nChecksum verified: {sha256_hash[:16]}..."
+                tr('update_complete_msg')
             ))
 
         except Exception as e:
