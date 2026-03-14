@@ -520,10 +520,6 @@ class YouTubeDownloader:
 
     def _apply_theme_to_tk_widgets(self, colors):
         """Apply theme colors to pure tk widgets that don't use ttk styling"""
-        # Main scrollable canvas
-        if hasattr(self, 'main_canvas'):
-            self.main_canvas.configure(bg=colors['bg'])
-
         # Preview labels
         if hasattr(self, 'start_preview_label'):
             self.start_preview_label.configure(bg=colors['preview_bg'], fg=colors['preview_fg'])
@@ -1482,63 +1478,12 @@ class YouTubeDownloader:
         self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
 
-        # Apply theme before creating widgets (sets ttk.Style and root bg)
+        # Apply theme before creating widgets
         self._apply_theme()
 
-        # Create canvas with scrollbar for scrollable content
-        self.main_canvas = tk.Canvas(self.root, bg=THEMES[self.current_theme]['bg'])
-        canvas = self.main_canvas
-        scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas)
-
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
-        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-
-        # Enable mouse wheel scrolling
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-
-        def _on_mousewheel_linux(event):
-            # Linux uses Button-4 (scroll up) and Button-5 (scroll down)
-            if event.num == 4:
-                canvas.yview_scroll(-1, "units")
-            elif event.num == 5:
-                canvas.yview_scroll(1, "units")
-
-        # Bind mousewheel to canvas and scrollable frame for better UX
-        canvas.bind("<MouseWheel>", _on_mousewheel)  # Windows/MacOS
-        canvas.bind("<Button-4>", _on_mousewheel_linux)  # Linux scroll up
-        canvas.bind("<Button-5>", _on_mousewheel_linux)  # Linux scroll down
-
-        scrollable_frame.bind("<MouseWheel>", _on_mousewheel)
-        scrollable_frame.bind("<Button-4>", _on_mousewheel_linux)
-        scrollable_frame.bind("<Button-5>", _on_mousewheel_linux)
-
-        # Recursively bind mousewheel to all children widgets
-        def bind_to_mousewheel(widget):
-            widget.bind("<MouseWheel>", _on_mousewheel)
-            widget.bind("<Button-4>", _on_mousewheel_linux)
-            widget.bind("<Button-5>", _on_mousewheel_linux)
-            for child in widget.winfo_children():
-                bind_to_mousewheel(child)
-
-        # This will be called after all widgets are created
-        self.root.after(UI_INITIAL_DELAY_MS, lambda: bind_to_mousewheel(scrollable_frame))
-
-        # Store canvas reference for cleanup
-        self.canvas = canvas
-
-        # Create notebook for tabs
-        self.notebook = ttk.Notebook(scrollable_frame)
-        self.notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
+        # Create notebook directly in root — no canvas wrapper
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
 
         # Tab padding - smaller on Windows to reduce wasted space
         tab_pad = "10" if sys.platform == 'win32' else "20"
