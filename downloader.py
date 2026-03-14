@@ -101,8 +101,8 @@ class YouTubeDownloader:
         self.root = root
         self.root.title(tr('window_title'))
         if sys.platform == 'win32':
-            self.root.geometry("900x800")
-            self.root.minsize(750, 550)
+            self.root.geometry("900x620")
+            self.root.minsize(750, 400)
         else:
             self.root.geometry("900x1140")
             self.root.minsize(750, 600)
