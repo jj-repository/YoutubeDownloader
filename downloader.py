@@ -461,58 +461,34 @@ class YouTubeDownloader:
         else:
             return os.path.join(os.path.dirname(__file__), filename)
 
-    def _setup_tab_tooltips(self):
-        """Setup hover tooltips for notebook tabs"""
-        tooltip_map = {
-            0: tr('tooltip_clipboard'),
-            1: tr('tooltip_trimmer'),
-            2: tr('tooltip_uploader'),
-        }
+    def _create_tooltip_icon(self, parent, tooltip_text):
+        """Create a small question mark icon with hover tooltip"""
+        icon_label = ttk.Label(parent, text=" ?", font=('Arial', 10, 'bold'), foreground='gray', cursor='question_arrow')
+        icon_label.pack(side=tk.LEFT, padx=(5, 0))
 
-        self._tab_tooltip = None
-        self._tab_tooltip_tab_index = None
+        tooltip_win = [None]
 
-        def show_tooltip(event):
-            # Determine which tab is under the cursor
-            try:
-                tab_index = self.notebook.index(f"@{event.x},{event.y}")
-            except tk.TclError:
-                hide_tooltip(event)
+        def show(event):
+            if tooltip_win[0]:
                 return
-
-            text = tooltip_map.get(tab_index)
-            if not text:
-                hide_tooltip(event)
-                return
-
-            # Already showing tooltip for this tab
-            if self._tab_tooltip_tab_index == tab_index and self._tab_tooltip and self._tab_tooltip.winfo_exists():
-                return
-
-            # Hide old tooltip if switching tabs
-            hide_tooltip(event)
-
             colors = THEMES[self.current_theme]
-            self._tab_tooltip_tab_index = tab_index
-            self._tab_tooltip = tk.Toplevel(self.root)
-            self._tab_tooltip.wm_overrideredirect(True)
-            self._tab_tooltip.wm_geometry(f"+{event.x_root + 10}+{event.y_root + 20}")
-
+            tooltip_win[0] = tk.Toplevel(self.root)
+            tooltip_win[0].wm_overrideredirect(True)
+            tooltip_win[0].wm_geometry(f"+{event.x_root + 10}+{event.y_root + 15}")
             tk.Label(
-                self._tab_tooltip, text=text, justify=tk.LEFT,
+                tooltip_win[0], text=tooltip_text, justify=tk.LEFT,
                 bg=colors['entry_bg'], fg=colors['fg'],
                 relief='solid', borderwidth=1,
                 font=('Arial', 9), wraplength=300, padx=8, pady=4
             ).pack()
 
-        def hide_tooltip(event):
-            if self._tab_tooltip and self._tab_tooltip.winfo_exists():
-                self._tab_tooltip.destroy()
-            self._tab_tooltip = None
-            self._tab_tooltip_tab_index = None
+        def hide(event):
+            if tooltip_win[0]:
+                tooltip_win[0].destroy()
+                tooltip_win[0] = None
 
-        self.notebook.bind('<Motion>', show_tooltip)
-        self.notebook.bind('<Leave>', hide_tooltip)
+        icon_label.bind('<Enter>', show)
+        icon_label.bind('<Leave>', hide)
 
     def _apply_theme(self):
         """Apply the current theme colors to all widgets"""
@@ -1664,23 +1640,25 @@ class YouTubeDownloader:
         self.notebook = ttk.Notebook(scrollable_frame)
         self.notebook.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
 
+        # Tab padding - smaller on Windows to reduce wasted space
+        tab_pad = "10" if sys.platform == 'win32' else "20"
+
         # Clipboard Mode tab (first tab)
-        clipboard_tab_frame = ttk.Frame(self.notebook, padding="20")
-        self.notebook.add(clipboard_tab_frame, text=f"  {tr('tab_clipboard')}  \u2753")
-        # Setup will be called after Trimmer tab is created
+        clipboard_tab_frame = ttk.Frame(self.notebook, padding=tab_pad)
+        self.notebook.add(clipboard_tab_frame, text=f"  {tr('tab_clipboard')}  ")
 
         # Trimmer tab (second tab)
-        main_tab_frame = ttk.Frame(self.notebook, padding="20")
-        self.notebook.add(main_tab_frame, text=f"  {tr('tab_trimmer')}  \u2753")
+        main_tab_frame = ttk.Frame(self.notebook, padding=tab_pad)
+        self.notebook.add(main_tab_frame, text=f"  {tr('tab_trimmer')}  ")
 
         # Uploader tab (third tab)
-        uploader_tab_frame = ttk.Frame(self.notebook, padding="20")
-        self.notebook.add(uploader_tab_frame, text=f"  {tr('tab_uploader')}  \u2753")
+        uploader_tab_frame = ttk.Frame(self.notebook, padding=tab_pad)
+        self.notebook.add(uploader_tab_frame, text=f"  {tr('tab_uploader')}  ")
 
-        # Bind tooltip to notebook tabs
-        self._setup_tab_tooltips()
-
-        ttk.Label(main_tab_frame, text=tr('label_youtube_url'), font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
+        trimmer_header = ttk.Frame(main_tab_frame)
+        trimmer_header.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 3))
+        ttk.Label(trimmer_header, text=tr('label_youtube_url'), font=('Arial', 12)).pack(side=tk.LEFT)
+        self._create_tooltip_icon(trimmer_header, tr('tooltip_trimmer'))
 
         # URL/File input frame
         url_input_frame = ttk.Frame(main_tab_frame)
@@ -1693,7 +1671,7 @@ class YouTubeDownloader:
         ttk.Button(url_input_frame, text=tr('btn_browse_local'), command=self.browse_local_file).pack(side=tk.LEFT)
 
         # Mode indicator label
-        self.mode_label = ttk.Label(main_tab_frame, text="", foreground="blue", font=('Arial', 9))
+        self.mode_label = ttk.Label(main_tab_frame, text="", foreground="green", font=('Arial', 9))
         self.mode_label.grid(row=2, column=0, sticky=tk.W, pady=(0, 10))
 
         # Video Quality section - dropdown
@@ -1758,7 +1736,7 @@ class YouTubeDownloader:
         self.fetch_duration_btn.pack(side=tk.LEFT, padx=(10, 0))
 
         # Video info label
-        self.video_info_label = ttk.Label(main_tab_frame, text="", foreground="blue", wraplength=500, justify=tk.LEFT)
+        self.video_info_label = ttk.Label(main_tab_frame, text="", foreground="green", wraplength=500, justify=tk.LEFT)
         self.video_info_label.grid(row=7, column=0, sticky=tk.W, padx=(20, 0), pady=(2, 0))
 
         # File size estimation label
@@ -1833,7 +1811,7 @@ class YouTubeDownloader:
         path_frame.grid(row=14, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
 
         ttk.Label(path_frame, text=tr('label_save_to')).pack(side=tk.LEFT)
-        self.path_label = ttk.Label(path_frame, text=self.download_path, foreground="blue")
+        self.path_label = ttk.Label(path_frame, text=self.download_path, foreground="green")
         self.path_label.pack(side=tk.LEFT, padx=(10, 10))
         ttk.Button(path_frame, text=tr('btn_change'), command=self.change_path).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(path_frame, text=tr('btn_open_folder'), command=self.open_download_folder).pack(side=tk.LEFT)
@@ -1866,7 +1844,7 @@ class YouTubeDownloader:
         self.progress = ttk.Progressbar(main_tab_frame, mode='determinate', length=560, maximum=100)
         self.progress.grid(row=17, column=0, columnspan=2)
 
-        self.progress_label = ttk.Label(main_tab_frame, text="0%", foreground="blue")
+        self.progress_label = ttk.Label(main_tab_frame, text="0%", foreground="green")
         self.progress_label.grid(row=18, column=0, columnspan=2, pady=(5, 0))
 
         self.status_label = ttk.Label(main_tab_frame, text=tr('status_ready'), foreground="green")
@@ -1885,7 +1863,7 @@ class YouTubeDownloader:
 
         ttk.Button(upload_frame, text=tr('btn_view_history'), command=self.view_upload_history).pack(side=tk.LEFT, padx=(0, 10))
 
-        self.upload_status_label = ttk.Label(upload_frame, text="", foreground="blue", font=('Arial', 9))
+        self.upload_status_label = ttk.Label(upload_frame, text="", foreground="green", font=('Arial', 9))
         self.upload_status_label.pack(side=tk.LEFT)
 
         # Auto-upload checkbox
@@ -1926,16 +1904,18 @@ class YouTubeDownloader:
         """Setup Clipboard Mode tab UI"""
 
         # Header
-        ttk.Label(parent, text=tr('header_clipboard_mode'), font=('Arial', 14, 'bold')).grid(
-            row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
+        header_frame = ttk.Frame(parent)
+        header_frame.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 3))
+        ttk.Label(header_frame, text=tr('header_clipboard_mode'), font=('Arial', 14, 'bold')).pack(side=tk.LEFT)
+        self._create_tooltip_icon(header_frame, tr('tooltip_clipboard'))
 
         ttk.Label(parent, text=tr('desc_clipboard_mode'),
                   foreground="gray", font=('Arial', 9)).grid(
-            row=1, column=0, columnspan=2, sticky=tk.W, pady=(0, 15))
+            row=1, column=0, columnspan=2, sticky=tk.W, pady=(0, 5))
 
         # Mode Toggle
         mode_frame = ttk.Frame(parent)
-        mode_frame.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
+        mode_frame.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(0, 3))
 
         ttk.Label(mode_frame, text=tr('label_download_mode'), font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 10))
         self.clipboard_auto_download_var = tk.BooleanVar(value=False)
@@ -1943,11 +1923,11 @@ class YouTubeDownloader:
                        variable=self.clipboard_auto_download_var).pack(side=tk.LEFT)
 
         # Settings
-        ttk.Separator(parent, orient='horizontal').grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
-        ttk.Label(parent, text=tr('header_settings'), font=('Arial', 11, 'bold')).grid(row=4, column=0, sticky=tk.W, pady=(0, 5))
+        ttk.Separator(parent, orient='horizontal').grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=3)
+        ttk.Label(parent, text=tr('header_settings'), font=('Arial', 11, 'bold')).grid(row=4, column=0, sticky=tk.W, pady=(0, 3))
 
         settings_frame = ttk.Frame(parent)
-        settings_frame.grid(row=5, column=0, columnspan=2, sticky=tk.W, padx=(20, 0), pady=(0, 10))
+        settings_frame.grid(row=5, column=0, columnspan=2, sticky=tk.W, padx=(20, 0), pady=(0, 3))
 
         # Quality dropdown
         ttk.Label(settings_frame, text=tr('label_quality'), font=('Arial', 9)).grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
@@ -1972,22 +1952,22 @@ class YouTubeDownloader:
         self.clipboard_full_playlist_check.grid(row=1, column=0, columnspan=5, sticky=tk.W, pady=(5, 0))
 
         # Output Folder
-        ttk.Separator(parent, orient='horizontal').grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
+        ttk.Separator(parent, orient='horizontal').grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=3)
 
         folder_frame = ttk.Frame(parent)
-        folder_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        folder_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 3))
 
         ttk.Label(folder_frame, text=tr('label_save_to'), font=('Arial', 9)).pack(side=tk.LEFT)
-        self.clipboard_path_label = ttk.Label(folder_frame, text=self.clipboard_download_path, foreground="blue")
+        self.clipboard_path_label = ttk.Label(folder_frame, text=self.clipboard_download_path, foreground="green")
         self.clipboard_path_label.pack(side=tk.LEFT, padx=(10, 10))
         ttk.Button(folder_frame, text=tr('btn_change'), command=self.change_clipboard_path).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(folder_frame, text=tr('btn_open_folder'), command=self.open_clipboard_folder).pack(side=tk.LEFT)
 
         # URL List
-        ttk.Separator(parent, orient='horizontal').grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
+        ttk.Separator(parent, orient='horizontal').grid(row=8, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=3)
 
         url_header_frame = ttk.Frame(parent)
-        url_header_frame.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 5))
+        url_header_frame.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 3))
 
         ttk.Label(url_header_frame, text=tr('label_detected_urls'), font=('Arial', 11, 'bold')).pack(side=tk.LEFT)
         self.clipboard_url_count_label = ttk.Label(url_header_frame, text=tr('label_url_count', count=0, s='s'), foreground="gray", font=('Arial', 9))
@@ -1996,7 +1976,7 @@ class YouTubeDownloader:
 
         # Scrollable URL list
         url_list_container = ttk.Frame(parent)
-        url_list_container.grid(row=10, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        url_list_container.grid(row=10, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 3))
 
         theme_colors = THEMES[self.current_theme]
         self.clipboard_url_canvas = tk.Canvas(url_list_container, height=CLIPBOARD_URL_LIST_HEIGHT,
@@ -2016,10 +1996,10 @@ class YouTubeDownloader:
         url_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         # Progress & Controls
-        ttk.Separator(parent, orient='horizontal').grid(row=11, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
+        ttk.Separator(parent, orient='horizontal').grid(row=11, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=3)
 
         button_frame = ttk.Frame(parent)
-        button_frame.grid(row=12, column=0, columnspan=2, pady=(0, 10))
+        button_frame.grid(row=12, column=0, columnspan=2, pady=(0, 3))
 
         self.clipboard_download_btn = ttk.Button(button_frame, text=tr('btn_download_all'),
             command=self.start_clipboard_downloads, state='disabled')
@@ -2035,7 +2015,7 @@ class YouTubeDownloader:
         self.clipboard_progress = ttk.Progressbar(parent, mode='determinate', length=560, maximum=100)
         self.clipboard_progress.grid(row=14, column=0, columnspan=2)
 
-        self.clipboard_progress_label = ttk.Label(parent, text="0%", foreground="blue")
+        self.clipboard_progress_label = ttk.Label(parent, text="0%", foreground="green")
         self.clipboard_progress_label.grid(row=15, column=0, columnspan=2, pady=(5, 0))
 
         # Total progress
@@ -2045,18 +2025,20 @@ class YouTubeDownloader:
 
         # Status
         self.clipboard_status_label = ttk.Label(parent, text=tr('status_ready'), foreground="green")
-        self.clipboard_status_label.grid(row=17, column=0, columnspan=2, pady=(10, 0))
+        self.clipboard_status_label.grid(row=17, column=0, columnspan=2, pady=(3, 0))
 
     def setup_uploader_ui(self, parent):
         """Setup Uploader tab UI"""
 
         # Header
-        ttk.Label(parent, text=tr('header_upload_file'), font=('Arial', 14, 'bold')).grid(
-            row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 10))
+        upload_header = ttk.Frame(parent)
+        upload_header.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 3))
+        ttk.Label(upload_header, text=tr('header_upload_file'), font=('Arial', 14, 'bold')).pack(side=tk.LEFT)
+        self._create_tooltip_icon(upload_header, tr('tooltip_uploader'))
 
         ttk.Label(parent, text=tr('desc_upload_file'),
                   foreground="gray", font=('Arial', 9)).grid(
-            row=1, column=0, columnspan=2, sticky=tk.W, pady=(0, 15))
+            row=1, column=0, columnspan=2, sticky=tk.W, pady=(0, 5))
 
         # File selection
         ttk.Separator(parent, orient='horizontal').grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
@@ -2107,7 +2089,7 @@ class YouTubeDownloader:
 
         ttk.Button(upload_controls_frame, text=tr('btn_view_history'), command=self.view_upload_history).pack(side=tk.LEFT)
 
-        self.uploader_status_label = ttk.Label(parent, text="", foreground="blue", font=('Arial', 9))
+        self.uploader_status_label = ttk.Label(parent, text="", foreground="green", font=('Arial', 9))
         self.uploader_status_label.grid(row=8, column=0, columnspan=2, sticky=tk.W, pady=(5, 10))
 
         # Upload URL display (initially hidden)
@@ -2812,7 +2794,7 @@ class YouTubeDownloader:
                     self.url_entry.delete(0, tk.END)
                     self.url_entry.insert(0, url)
                     self.is_playlist = False
-                    self.video_info_label.config(text=tr('info_playlist_params_stripped'), foreground="blue")
+                    self.video_info_label.config(text=tr('info_playlist_params_stripped'), foreground="green")
                     logger.info(f"Stripped playlist params from video URL: {url}")
             else:
                 self.is_playlist = False
@@ -3844,7 +3826,7 @@ class YouTubeDownloader:
             self.local_file_path = None
             self.mode_label.config(
                 text=tr('label_mode_youtube'),
-                foreground="blue"
+                foreground="green"
             )
 
     def is_local_file(self, input_text):
