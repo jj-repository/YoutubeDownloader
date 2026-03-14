@@ -122,7 +122,6 @@ jobs:
         OutputBaseFilename=YTDownloaderInstaller-Win
         Compression=lzma2
         SolidCompression=yes
-        SetupIconFile=
         UninstallDisplayIcon={app}\YoutubeDownloader.exe
         ArchitecturesInstallIn64BitMode=x64compatible
         WizardStyle=modern
@@ -136,7 +135,7 @@ jobs:
         Name: "{autodesktop}\YoutubeDownloader"; Filename: "{app}\YoutubeDownloader.exe"; Tasks: desktopicon
 
         [Tasks]
-        Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: checked
+        Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
 
         [Run]
         Filename: "{app}\YoutubeDownloader.exe"; Description: "Launch YoutubeDownloader"; Flags: nowait postinstall skipifsilent
