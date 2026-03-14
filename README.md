@@ -76,6 +76,18 @@ All dependencies (ffmpeg, ffprobe, yt-dlp) are bundled inside the executable. Ju
 
 Get the latest release from the [Releases](../../releases) page.
 
+#### Recommended Setup
+
+Create a dedicated folder (e.g. `YoutubeDownloader/`) and place the executable inside. When you update yt-dlp through the app (Help > Check for Updates), a `yt-dlp` / `yt-dlp.exe` file will be downloaded next to the executable. This file is required for the app to function and must stay in the same folder. Your folder will look like:
+
+```
+YoutubeDownloader/
+  YoutubeDownloader.exe   (or YoutubeDownloader on Linux)
+  yt-dlp.exe              (created after first yt-dlp update)
+```
+
+To keep your desktop clean, create a shortcut to `YoutubeDownloader.exe` and place it on your desktop — that way you only see one icon while the actual files stay organized in the folder.
+
 ### For Developers
 
 1. **Clone the repository:**

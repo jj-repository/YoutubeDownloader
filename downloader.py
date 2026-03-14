@@ -374,7 +374,7 @@ class YouTubeDownloader:
         self.thread_pool.submit(self._check_for_updates, False)
 
     def _check_for_updates(self, silent=True):
-        """Check GitHub for new app version and PyPI for yt-dlp updates.
+        """Check GitHub for new app version and yt-dlp updates.
 
         Args:
             silent: If True, don't show dialog when up-to-date or on error
@@ -382,7 +382,6 @@ class YouTubeDownloader:
         import urllib.request
         import urllib.error
 
-        app_update_available = False
         ytdlp_update_available = False
         ytdlp_current = None
         ytdlp_latest = None
@@ -405,8 +404,6 @@ class YouTubeDownloader:
 
                 if latest_version and self._version_newer(latest_version, APP_VERSION):
                     logger.info(f"App update available: {APP_VERSION} -> {latest_version}")
-                    app_update_available = True
-                    # Show app update dialog and return (app update takes priority)
                     self.root.after(0, lambda: self._show_update_dialog(latest_version, data))
                     return
                 else:
@@ -414,20 +411,20 @@ class YouTubeDownloader:
 
             except Exception as e:
                 logger.error(f"Error checking app updates: {e}")
-                # Continue to check yt-dlp even if app check fails
 
-            # Check yt-dlp update from PyPI
+            # Check yt-dlp update (PyPI for source, GitHub releases for bundled)
             try:
                 ytdlp_current = self._get_ytdlp_version()
                 if ytdlp_current:
+                    # Get latest version from GitHub releases (works for both modes)
                     request = urllib.request.Request(
-                        'https://pypi.org/pypi/yt-dlp/json',
+                        'https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest',
                         headers={'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
                     )
                     with urllib.request.urlopen(request, timeout=10) as response:
-                        pypi_data = json.loads(response.read().decode())
+                        release_data = json.loads(response.read().decode())
 
-                    ytdlp_latest = pypi_data.get('info', {}).get('version', '')
+                    ytdlp_latest = release_data.get('tag_name', '').lstrip('v')
 
                     if ytdlp_latest:
                         current_parsed = self._parse_ytdlp_version(ytdlp_current)
@@ -446,7 +443,6 @@ class YouTubeDownloader:
             if ytdlp_update_available:
                 self.root.after(0, lambda: self._show_ytdlp_update_dialog(ytdlp_current, ytdlp_latest))
             elif not silent:
-                # Everything is up to date
                 self.root.after(0, lambda: messagebox.showinfo(
                     tr('update_up_to_date_title'),
                     tr('update_up_to_date_msg', version=APP_VERSION)
@@ -642,35 +638,31 @@ class YouTubeDownloader:
         """Get the pip path for the venv.
 
         Returns:
-            str: Path to pip executable or None if not in venv mode
+            str: Path to pip executable or None
         """
-        # When running from source with venv
-        if not getattr(sys, 'frozen', False):
-            script_dir = Path(__file__).parent
-            if sys.platform == 'win32':
-                pip_path = script_dir / 'venv' / 'Scripts' / 'pip.exe'
-            else:
-                pip_path = script_dir / 'venv' / 'bin' / 'pip'
+        script_dir = Path(__file__).parent
+        if sys.platform == 'win32':
+            pip_path = script_dir / 'venv' / 'Scripts' / 'pip.exe'
+        else:
+            pip_path = script_dir / 'venv' / 'bin' / 'pip'
 
-            if pip_path.exists():
-                return str(pip_path)
+        if pip_path.exists():
+            return str(pip_path)
 
-            # Try current Python's pip
-            python_bin = Path(sys.executable).parent
-            if sys.platform == 'win32':
-                pip_path = python_bin / 'pip.exe'
-            else:
-                pip_path = python_bin / 'pip'
+        # Try current Python's pip
+        python_bin = Path(sys.executable).parent
+        if sys.platform == 'win32':
+            pip_path = python_bin / 'pip.exe'
+        else:
+            pip_path = python_bin / 'pip'
 
-            if pip_path.exists():
-                return str(pip_path)
+        if pip_path.exists():
+            return str(pip_path)
 
         return None
 
     def _parse_ytdlp_version(self, version_str):
         """Parse yt-dlp version string into comparable tuple.
-
-        Handles versions like '2026.02.04' and '2026.2.4' correctly.
 
         Args:
             version_str: Version string (e.g., '2026.02.04')
@@ -679,63 +671,44 @@ class YouTubeDownloader:
             tuple: Version as tuple of integers (e.g., (2026, 2, 4))
         """
         try:
-            # Split by '.' and convert each part to int (removes leading zeros)
             return tuple(int(part) for part in version_str.split('.'))
         except (ValueError, AttributeError):
             return (0,)
 
     def _show_ytdlp_update_dialog(self, current_version, latest_version):
-        """Show yt-dlp update available dialog.
-
-        Args:
-            current_version: Current yt-dlp version string
-            latest_version: Latest yt-dlp version string
-        """
-        # Check if we can auto-update (not in bundled mode)
-        if getattr(sys, 'frozen', False):
-            messagebox.showwarning(
-                tr('ytdlp_update_not_supported_title'),
-                tr('ytdlp_update_not_supported_msg')
-            )
-            return
-
-        pip_path = self._get_pip_path()
-        if not pip_path:
-            messagebox.showwarning(
-                tr('ytdlp_update_not_supported_title'),
-                tr('ytdlp_update_not_supported_msg')
-            )
-            return
-
-        # Show update dialog
+        """Show yt-dlp update available dialog."""
         result = messagebox.askyesno(
             tr('ytdlp_update_available_title'),
             tr('ytdlp_update_available_msg', current=current_version, latest=latest_version)
         )
 
         if result:
-            self.thread_pool.submit(self._apply_ytdlp_update, pip_path)
+            if getattr(sys, 'frozen', False):
+                self.thread_pool.submit(self._apply_ytdlp_update_binary, latest_version)
+            else:
+                pip_path = self._get_pip_path()
+                if pip_path:
+                    self.thread_pool.submit(self._apply_ytdlp_update_pip, pip_path)
+                else:
+                    messagebox.showwarning(
+                        tr('ytdlp_update_not_supported_title'),
+                        tr('ytdlp_update_not_supported_msg')
+                    )
 
-    def _apply_ytdlp_update(self, pip_path):
-        """Apply yt-dlp update using pip.
-
-        Args:
-            pip_path: Path to pip executable
-        """
+    def _apply_ytdlp_update_pip(self, pip_path):
+        """Apply yt-dlp update using pip (when running from source)."""
         try:
-            logger.info("Updating yt-dlp...")
+            logger.info("Updating yt-dlp via pip...")
             self.root.after(0, lambda: self.update_status(tr('ytdlp_updating'), "blue"))
 
-            # Run pip install --upgrade yt-dlp
             result = subprocess.run(
                 [pip_path, 'install', '--upgrade', 'yt-dlp'],
                 capture_output=True,
-                timeout=120,  # 2 minute timeout for download/install
+                timeout=120,
                 **_subprocess_kwargs
             )
 
             if result.returncode == 0:
-                # Get new version
                 new_version = self._get_ytdlp_version() or "unknown"
                 logger.info(f"yt-dlp updated successfully to {new_version}")
 
@@ -758,6 +731,69 @@ class YouTubeDownloader:
             ))
         except Exception as e:
             logger.error(f"Error updating yt-dlp: {e}")
+            self.root.after(0, lambda: messagebox.showerror(
+                tr('ytdlp_update_failed_title'),
+                tr('ytdlp_update_failed_msg', error=str(e))
+            ))
+
+    def _apply_ytdlp_update_binary(self, latest_version):
+        """Download latest yt-dlp binary from GitHub releases (for bundled mode)."""
+        import urllib.request
+
+        try:
+            logger.info("Downloading latest yt-dlp binary...")
+            self.root.after(0, lambda: self.update_status(tr('ytdlp_updating'), "blue"))
+
+            # Determine download URL and target path
+            exe_dir = os.path.dirname(sys.executable)
+            if sys.platform == 'win32':
+                download_url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
+                target_path = os.path.join(exe_dir, 'yt-dlp.exe')
+            else:
+                download_url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp'
+                target_path = os.path.join(exe_dir, 'yt-dlp')
+
+            # Download to temp file first
+            tmp_path = target_path + '.tmp'
+            request = urllib.request.Request(
+                download_url,
+                headers={'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
+            )
+            with urllib.request.urlopen(request, timeout=120) as response:
+                with open(tmp_path, 'wb') as f:
+                    shutil.copyfileobj(response, f)
+
+            # Replace the old binary
+            if os.path.exists(target_path):
+                os.remove(target_path)
+            os.rename(tmp_path, target_path)
+
+            # Make executable on Linux
+            if sys.platform != 'win32':
+                os.chmod(target_path, 0o755)
+
+            # Update the path so the app uses the new binary immediately
+            self.ytdlp_path = target_path
+
+            new_version = self._get_ytdlp_version() or latest_version
+            logger.info(f"yt-dlp binary updated successfully to {new_version}")
+
+            self.root.after(0, lambda: self.update_status(
+                tr('ytdlp_current_version', version=new_version), "green"
+            ))
+            self.root.after(0, lambda: messagebox.showinfo(
+                tr('ytdlp_update_success_title'),
+                tr('ytdlp_update_success_msg', version=new_version)
+            ))
+
+        except Exception as e:
+            # Clean up temp file on failure
+            if 'tmp_path' in locals() and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+            logger.error(f"Error downloading yt-dlp binary: {e}")
             self.root.after(0, lambda: messagebox.showerror(
                 tr('ytdlp_update_failed_title'),
                 tr('ytdlp_update_failed_msg', error=str(e))
@@ -3570,12 +3606,20 @@ class YouTubeDownloader:
         # When packaged with PyInstaller, bundled files are in sys._MEIPASS
         if getattr(sys, 'frozen', False):
             # Running as compiled executable
-            bundle_dir = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
             if sys.platform == 'win32':
                 exe_name = f"{name}.exe"
             else:
                 exe_name = name
 
+            # Check next to the main executable first (user-updated copy takes priority)
+            exe_dir = os.path.dirname(sys.executable)
+            local_path = os.path.join(exe_dir, exe_name)
+            if os.path.exists(local_path):
+                logger.info(f"Using local {name}: {local_path}")
+                return local_path
+
+            # Fall back to bundled copy in _MEIPASS temp dir
+            bundle_dir = getattr(sys, '_MEIPASS', exe_dir)
             bundled_path = os.path.join(bundle_dir, exe_name)
             if os.path.exists(bundled_path):
                 logger.info(f"Using bundled {name}: {bundled_path}")
