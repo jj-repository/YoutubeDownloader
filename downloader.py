@@ -396,60 +396,47 @@ class YouTubeDownloader:
         self._apply_theme()
         self._save_theme_preference()
 
-    def _open_settings(self):
-        """Open settings window"""
-        settings_win = tk.Toplevel(self.root)
-        settings_win.title(tr('btn_settings'))
-        settings_win.geometry("380x560")
-        settings_win.resizable(False, False)
-        settings_win.transient(self.root)
-        settings_win.grab_set()
-
-        colors = THEMES[self.current_theme]
-        settings_win.configure(bg=colors['bg'])
-
-        main_frame = ttk.Frame(settings_win, padding=20)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-
+    def _setup_settings_tab(self, parent):
+        """Setup Settings tab UI"""
         # Language section
-        ttk.Label(main_frame, text=tr('language'), font=('Arial', 11, 'bold')).pack(anchor=tk.W, pady=(0, 5))
+        ttk.Label(parent, text=tr('language'), font=('Arial', 11, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
 
         language_options = ["🇬🇧 English", "🇩🇪 Deutsch", "🇵🇱 Polski"]
         lang_map_reverse = {'en': 0, 'de': 1, 'pl': 2}
         initial_index = lang_map_reverse.get(translations.get_language(), 0)
 
         self.language_var = tk.StringVar(value=language_options[initial_index])
-        self.language_combo = ttk.Combobox(main_frame, textvariable=self.language_var,
+        self.language_combo = ttk.Combobox(parent, textvariable=self.language_var,
             values=language_options, state='readonly', width=15)
-        self.language_combo.pack(anchor=tk.W, pady=(0, 10))
+        self.language_combo.grid(row=1, column=0, sticky=tk.W, pady=(0, 10))
         self.language_combo.bind('<<ComboboxSelected>>', self.on_language_change)
 
         # Dark mode toggle
         self.dark_mode_var = tk.BooleanVar(value=self.current_theme == 'dark')
-        ttk.Checkbutton(main_frame, text=tr('theme_dark_mode'),
+        ttk.Checkbutton(parent, text=tr('theme_dark_mode'),
                        variable=self.dark_mode_var,
-                       command=self._toggle_theme).pack(anchor=tk.W, pady=(0, 10))
+                       command=self._toggle_theme).grid(row=2, column=0, sticky=tk.W, pady=(0, 10))
 
-        ttk.Separator(main_frame).pack(fill=tk.X, pady=5)
+        ttk.Separator(parent).grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
         # Update section
-        ttk.Label(main_frame, text="Updates", font=('Arial', 11, 'bold')).pack(anchor=tk.W, pady=(5, 5))
+        ttk.Label(parent, text="Updates", font=('Arial', 11, 'bold')).grid(row=4, column=0, sticky=tk.W, pady=(5, 5))
 
         self.auto_check_updates_var = tk.BooleanVar(value=self._load_auto_check_updates_setting())
-        ttk.Checkbutton(main_frame, text=tr('update_auto_check'),
+        ttk.Checkbutton(parent, text=tr('update_auto_check'),
                        variable=self.auto_check_updates_var,
-                       command=self._save_auto_check_updates_setting).pack(anchor=tk.W, pady=(0, 5))
+                       command=self._save_auto_check_updates_setting).grid(row=5, column=0, sticky=tk.W, pady=(0, 5))
 
-        ttk.Button(main_frame, text=tr('update_check_btn'),
-                  command=self._check_for_updates_clicked).pack(anchor=tk.W, pady=(0, 10))
+        ttk.Button(parent, text=tr('update_check_btn'),
+                  command=self._check_for_updates_clicked).grid(row=6, column=0, sticky=tk.W, pady=(0, 10))
 
-        ttk.Separator(main_frame).pack(fill=tk.X, pady=5)
+        ttk.Separator(parent).grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
         # Readme link
-        ttk.Button(main_frame, text="Readme",
-                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme')).pack(anchor=tk.W, pady=(5, 10))
+        ttk.Button(parent, text="Readme",
+                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme')).grid(row=8, column=0, sticky=tk.W, pady=(5, 10))
 
-        ttk.Separator(main_frame).pack(fill=tk.X, pady=5)
+        ttk.Separator(parent).grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
         # Takodachi image
         try:
@@ -458,15 +445,15 @@ class YouTubeDownloader:
                 with Image.open(img_path) as img:
                     img.thumbnail((120, 120), Image.Resampling.LANCZOS)
                     photo = ImageTk.PhotoImage(img)
-                img_label = ttk.Label(main_frame, image=photo)
+                img_label = ttk.Label(parent, image=photo)
                 img_label.image = photo  # Keep reference
-                img_label.pack(pady=(10, 5))
+                img_label.grid(row=10, column=0, pady=(10, 5))
         except Exception as e:
             logger.error(f"Error loading settings image: {e}")
 
         # Credits
-        ttk.Label(main_frame, text="by JJ", font=('Arial', 10, 'bold')).pack(pady=(5, 2))
-        ttk.Label(main_frame, text=f"v{APP_VERSION}", font=('Arial', 9)).pack()
+        ttk.Label(parent, text="by JJ", font=('Arial', 10, 'bold')).grid(row=11, column=0, pady=(5, 2))
+        ttk.Label(parent, text=f"v{APP_VERSION}", font=('Arial', 9)).grid(row=12, column=0)
 
     def _get_resource_path(self, filename):
         """Get path to a resource file (works for both source and bundled mode)"""
@@ -1556,26 +1543,37 @@ class YouTubeDownloader:
         # Tab padding - smaller on Windows to reduce wasted space
         tab_pad = "10" if sys.platform == 'win32' else "20"
 
-        # Clipboard Mode tab (first tab)
+        # Clipboard Mode tab
         clipboard_tab_frame = ttk.Frame(self.notebook, padding=tab_pad)
         self.notebook.add(clipboard_tab_frame, text=f"  {tr('tab_clipboard')}  ")
 
-        # Trimmer tab (second tab)
+        # Trimmer tab
         main_tab_frame = ttk.Frame(self.notebook, padding=tab_pad)
         self.notebook.add(main_tab_frame, text=f"  {tr('tab_trimmer')}  ")
 
-        # Uploader tab (third tab)
+        # Uploader tab
         uploader_tab_frame = ttk.Frame(self.notebook, padding=tab_pad)
         self.notebook.add(uploader_tab_frame, text=f"  {tr('tab_uploader')}  ")
 
-        # Settings and Help buttons next to tabs
-        btn_frame = ttk.Frame(scrollable_frame)
-        btn_frame.grid(row=0, column=0, sticky=tk.NE, padx=10, pady=8)
+        # Settings tab
+        settings_tab_frame = ttk.Frame(self.notebook, padding=tab_pad)
+        self.notebook.add(settings_tab_frame, text=f"  {tr('btn_settings')}  ")
 
-        ttk.Button(btn_frame, text=tr('btn_settings'),
-                  command=self._open_settings).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(btn_frame, text=tr('btn_help'),
-                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme')).pack(side=tk.LEFT)
+        # Help tab — opens README in browser when clicked
+        help_tab_frame = ttk.Frame(self.notebook)
+        self.notebook.add(help_tab_frame, text=f"  {tr('btn_help')}  ")
+        self._last_real_tab = 0
+
+        def on_tab_changed(event):
+            current = self.notebook.index('current')
+            help_index = self.notebook.index(help_tab_frame)
+            if current == help_index:
+                webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme')
+                self.notebook.select(self._last_real_tab)
+            else:
+                self._last_real_tab = current
+
+        self.notebook.bind('<<NotebookTabChanged>>', on_tab_changed)
 
         ttk.Label(main_tab_frame, text=tr('label_youtube_url'), font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
@@ -1812,6 +1810,9 @@ class YouTubeDownloader:
 
         # Setup Uploader UI
         self.setup_uploader_ui(uploader_tab_frame)
+
+        # Setup Settings tab
+        self._setup_settings_tab(settings_tab_frame)
 
         # Restore persisted clipboard URLs
         self._restore_clipboard_urls()
