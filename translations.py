@@ -14,6 +14,9 @@ TRANSLATIONS = {
         # Window & Language
         'window_title': 'YoutubeDownloader',
         'language': 'Language',
+        'theme_dark_mode': 'Dark Mode',
+        'btn_settings': 'Settings',
+        'btn_help': 'Help',
         'info_language_changed_title': 'Language Changed',
         'info_language_changed_msg': 'Language has been changed. Please restart the application for changes to take effect.',
 
@@ -21,6 +24,11 @@ TRANSLATIONS = {
         'tab_trimmer': 'Trimmer',
         'tab_clipboard': 'Clipboard Mode',
         'tab_uploader': 'Uploader',
+
+        # Tab tooltips
+        'tooltip_clipboard': 'Copy YouTube URLs to your clipboard and they will be automatically detected here. You can download them individually or all at once.',
+        'tooltip_trimmer': 'Download YouTube videos with quality selection. Enable trimming to cut specific parts of the video with frame-accurate preview.',
+        'tooltip_uploader': 'Upload local video/audio files to Catbox.moe for easy sharing. Files up to 200MB are supported.',
 
         # Common buttons
         'btn_download': 'Download',
@@ -266,6 +274,9 @@ TRANSLATIONS = {
         # Window & Language
         'window_title': 'YoutubeDownloader',
         'language': 'Sprache',
+        'theme_dark_mode': 'Dunkelmodus',
+        'btn_settings': 'Einstellungen',
+        'btn_help': 'Hilfe',
         'info_language_changed_title': 'Sprache geändert',
         'info_language_changed_msg': 'Die Sprache wurde geändert. Bitte starten Sie die Anwendung neu, damit die Änderungen wirksam werden.',
 
@@ -273,6 +284,11 @@ TRANSLATIONS = {
         'tab_trimmer': 'Trimmer',
         'tab_clipboard': 'Zwischenablage-Modus',
         'tab_uploader': 'Uploader',
+
+        # Tab tooltips
+        'tooltip_clipboard': 'YouTube URLs in die Zwischenablage kopieren und sie werden hier automatisch erkannt. Einzeln oder alle auf einmal herunterladen.',
+        'tooltip_trimmer': 'YouTube Videos mit Qualitätsauswahl herunterladen. Trimmen aktivieren, um bestimmte Teile des Videos mit Frame-genauer Vorschau zu schneiden.',
+        'tooltip_uploader': 'Lokale Video-/Audiodateien auf Catbox.moe hochladen. Dateien bis zu 200MB werden unterstützt.',
 
         # Common buttons
         'btn_download': 'Herunterladen',
@@ -518,6 +534,9 @@ TRANSLATIONS = {
         # Window & Language
         'window_title': 'YoutubeDownloader',
         'language': 'Język',
+        'theme_dark_mode': 'Tryb ciemny',
+        'btn_settings': 'Ustawienia',
+        'btn_help': 'Pomoc',
         'info_language_changed_title': 'Język zmieniony',
         'info_language_changed_msg': 'Język został zmieniony. Uruchom ponownie aplikację, aby zmiany zaczęły obowiązywać.',
 
@@ -525,6 +544,11 @@ TRANSLATIONS = {
         'tab_trimmer': 'Przycinanie',
         'tab_clipboard': 'Tryb schowka',
         'tab_uploader': 'Przesyłanie',
+
+        # Tab tooltips
+        'tooltip_clipboard': 'Skopiuj URL YouTube do schowka, a zostaną automatycznie wykryte tutaj. Możesz je pobrać pojedynczo lub wszystkie naraz.',
+        'tooltip_trimmer': 'Pobieraj filmy z YouTube z wyborem jakości. Włącz przycinanie, aby wyciąć określone części wideo z podglądem klatek.',
+        'tooltip_uploader': 'Przesyłaj lokalne pliki wideo/audio na Catbox.moe. Obsługiwane są pliki do 200MB.',
 
         # Common buttons
         'btn_download': 'Pobierz',

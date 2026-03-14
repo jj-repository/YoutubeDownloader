@@ -12,18 +12,9 @@ permissions:
 jobs:
   build:
     strategy:
-      fail-fast: false  # Let Windows build continue even if Linux fails
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        include:
-          - os: ubuntu-latest
-            output_name: YoutubeDownloader
-            artifact_name: YoutubeDownloader-Linux.tar.gz
-            setup_script: setup.sh
-          - os: windows-latest
-            output_name: YoutubeDownloader.exe
-            artifact_name: YoutubeDownloader-Windows.zip
-            setup_script: setup.bat
 
     runs-on: ${{ matrix.os }}
 
@@ -46,7 +37,6 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install pyinstaller
-        # Install core dependencies (without optional ones)
         pip install yt-dlp Pillow catboxpy pyperclip
 
     - name: Install optional dependencies (Linux)
@@ -77,13 +67,12 @@ jobs:
     - name: Build executable (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
-        pyinstaller --onefile --name YoutubeDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
+        pyinstaller --onefile --name YoutubeDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
 
     - name: Download and bundle ffmpeg (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
-        # Download ffmpeg static build for Windows
         Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile "ffmpeg.zip"
         Expand-Archive -Path ffmpeg.zip -DestinationPath .
         Move-Item -Path ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe -Destination ffmpeg.exe
@@ -94,350 +83,86 @@ jobs:
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
-        # Download yt-dlp for Windows
         Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile "yt-dlp.exe"
 
     - name: Build executable (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        pyinstaller --onefile --name YoutubeDownloader --windowed --icon=NONE --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
+        pyinstaller --onefile --name YoutubeDownloader --windowed --icon=NONE --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
 
     - name: Create release package (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
         mkdir -p release
         cp dist/YoutubeDownloader release/
-        cat > release/README.txt << 'EOF'
-        YoutubeDownloader - Production Release
-        ================================================
-
-        A professional YouTube video downloader with advanced trimming capabilities,
-        clipboard monitoring, multi-language support, and catbox.moe upload integration.
-
-        ## Features
-
-        - 📹 Multiple Quality Options: 240p to 1440p, plus audio-only
-        - ✂️ Video Trimming: Precise trimming with visual frame previews
-        - 📋 Clipboard Mode: Auto-detect YouTube URLs from clipboard
-        - ☁️ Catbox Upload: Upload files directly to catbox.moe
-        - 🌍 Multi-Language: Full UI translation (English, German, Polish)
-        - 🔄 Auto-Retry: Network failures handled automatically
-        - 📊 Real-Time Progress: Download speed and ETA displayed
-        - 🛑 Smart Caching: LRU preview cache for instant frame loading
-
-        ## Quick Start
-
-        ### On Linux:
-
-        1. Extract this archive:
-           tar -xzf YoutubeDownloader-Linux.tar.gz
-           cd YoutubeDownloader-Linux
-
-        2. Run the executable:
-           ./YoutubeDownloader
-
-           Or double-click the file in your file manager
-
-        ### System Requirements:
-
-        - Linux (64-bit)
-        - ~100 MB RAM during operation
-        - Internet connection for downloads
-
-        ### Dependencies:
-
-        The executable is self-contained with all Python dependencies bundled.
-        However, you need these system tools installed:
-
-        - ffmpeg (for video processing)
-        - yt-dlp (for downloading videos)
-
-        On Arch Linux:
-          sudo pacman -S ffmpeg yt-dlp
-
-        On Ubuntu/Debian:
-          sudo apt install ffmpeg yt-dlp
-
-        On Fedora:
-          sudo dnf install ffmpeg yt-dlp
-
-        ## Usage
-
-        1. **Simple Download**
-           - Paste a YouTube URL
-           - Select quality (default: 480p)
-           - Click "Download"
-
-        2. **Video Trimming**
-           - Enable "Enable video trimming" checkbox
-           - Click "Fetch Video Duration"
-           - Use sliders to select start/end times
-           - Preview frames update automatically
-           - Click "Download"
-
-        3. **Clipboard Mode**
-           - Switch to "Clipboard Mode" tab
-           - Copy YouTube URLs (Ctrl+C)
-           - URLs are automatically detected
-           - Click "Download All" or enable auto-download
-
-        4. **Upload to Catbox**
-           - Switch to "Uploader" tab
-           - Click "Add Files" to select videos
-           - Click "Upload All"
-           - URLs are copied to clipboard automatically
-
-        5. **Language Selection**
-           - Use the dropdown at the top
-           - Choose: 🇬🇧 English, 🇩🇪 Deutsch, or 🇵🇱 Polski
-           - Restart app for changes to take effect
-
-        ## Downloads Location
-
-        - Main tab: ~/Downloads/
-        - Clipboard mode: ~/Downloads/ClipboardMode/
-
-        ## Logs
-
-        Comprehensive logs are saved to:
-          ~/.youtubedownloader/youtubedownloader.log
-
-        Check this file if you encounter any issues.
-
-        ## Support
-
-        - GitHub: https://github.com/jj-repository/YoutubeDownloader
-        - Issues: https://github.com/jj-repository/YoutubeDownloader/issues
-
-        ## License
-
-        MIT License - See full documentation for details
-
-        ## Credits
-
-        Built with:
-        - yt-dlp - YouTube download engine
-        - FFmpeg - Video/audio processing
-        - Pillow - Image processing
-        - Python - Runtime environment
-        EOF
-        cat > release/setup.sh << 'EOF'
-        #!/bin/bash
-
-        echo "=================================="
-        echo "  YoutubeDownloader Setup"
-        echo "=================================="
-        echo ""
-
-        # Detect Linux distribution
-        if [ -f /etc/os-release ]; then
-            . /etc/os-release
-            DISTRO=$ID
-        else
-            echo "Cannot detect Linux distribution"
-            DISTRO="unknown"
-        fi
-
-        # Check if ffmpeg is installed
-        if command -v ffmpeg &> /dev/null; then
-            echo "✓ ffmpeg is installed"
-        else
-            echo "✗ ffmpeg is NOT installed"
-            NEED_FFMPEG=1
-        fi
-
-        # Check if yt-dlp is installed
-        if command -v yt-dlp &> /dev/null; then
-            echo "✓ yt-dlp is installed"
-        else
-            echo "✗ yt-dlp is NOT installed"
-            NEED_YTDLP=1
-        fi
-
-        echo ""
-
-        if [ -z "$NEED_FFMPEG" ] && [ -z "$NEED_YTDLP" ]; then
-            echo "All dependencies are installed! You're ready to go."
-            echo ""
-            echo "Run YoutubeDownloader with: ./YoutubeDownloader"
-            exit 0
-        fi
-
-        echo "Missing dependencies need to be installed."
-        echo ""
-
-        # Provide installation commands based on distro
-        case $DISTRO in
-            arch|manjaro|cachyos|endeavouros)
-                echo "To install missing packages, run:"
-                [ -n "$NEED_FFMPEG" ] && [ -n "$NEED_YTDLP" ] && echo "  sudo pacman -S ffmpeg yt-dlp"
-                [ -n "$NEED_FFMPEG" ] && [ -z "$NEED_YTDLP" ] && echo "  sudo pacman -S ffmpeg"
-                [ -z "$NEED_FFMPEG" ] && [ -n "$NEED_YTDLP" ] && echo "  sudo pacman -S yt-dlp"
-                ;;
-            ubuntu|debian|linuxmint|pop)
-                echo "To install missing packages, run:"
-                [ -n "$NEED_FFMPEG" ] && [ -n "$NEED_YTDLP" ] && echo "  sudo apt install ffmpeg yt-dlp"
-                [ -n "$NEED_FFMPEG" ] && [ -z "$NEED_YTDLP" ] && echo "  sudo apt install ffmpeg"
-                [ -z "$NEED_FFMPEG" ] && [ -n "$NEED_YTDLP" ] && echo "  sudo apt install yt-dlp"
-                ;;
-            fedora|rhel|centos)
-                echo "To install missing packages, run:"
-                [ -n "$NEED_FFMPEG" ] && [ -n "$NEED_YTDLP" ] && echo "  sudo dnf install ffmpeg yt-dlp"
-                [ -n "$NEED_FFMPEG" ] && [ -z "$NEED_YTDLP" ] && echo "  sudo dnf install ffmpeg"
-                [ -z "$NEED_FFMPEG" ] && [ -n "$NEED_YTDLP" ] && echo "  sudo dnf install yt-dlp"
-                ;;
-            *)
-                echo "Your distribution: $DISTRO"
-                echo "Please install the missing packages using your package manager:"
-                [ -n "$NEED_FFMPEG" ] && echo "  - ffmpeg"
-                [ -n "$NEED_YTDLP" ] && echo "  - yt-dlp"
-                ;;
-        esac
-
-        echo ""
-        echo "After installing dependencies, run: ./YoutubeDownloader"
-        EOF
-        chmod +x release/setup.sh release/YoutubeDownloader
+        chmod +x release/YoutubeDownloader
         tar -czf YoutubeDownloader-Linux.tar.gz -C release .
 
-    - name: Create release package (Windows)
+    - name: Create portable package (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
-        New-Item -ItemType Directory -Force -Path release
-        Copy-Item dist\YoutubeDownloader.exe release\
+        New-Item -ItemType Directory -Force -Path portable
+        Copy-Item dist\YoutubeDownloader.exe portable\YoutubeDownloader.exe
+        Compress-Archive -Path portable\* -DestinationPath YTDownloaderPortable-Win.zip
 
+    - name: Create installer (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        # Create Inno Setup script
         @"
-        YoutubeDownloader - Production Release
-        ================================================
+        [Setup]
+        AppName=YoutubeDownloader
+        AppVersion=${{ github.ref_name }}
+        AppPublisher=JJ
+        DefaultDirName={autopf}\YoutubeDownloader
+        DefaultGroupName=YoutubeDownloader
+        OutputDir=.
+        OutputBaseFilename=YTDownloaderInstaller-Win
+        Compression=lzma2
+        SolidCompression=yes
+        SetupIconFile=
+        UninstallDisplayIcon={app}\YoutubeDownloader.exe
+        ArchitecturesInstallIn64BitMode=x64compatible
+        WizardStyle=modern
+        DisableProgramGroupPage=yes
 
-        A professional YouTube video downloader with advanced trimming capabilities,
-        clipboard monitoring, multi-language support, and catbox.moe upload integration.
+        [Files]
+        Source: "dist\YoutubeDownloader.exe"; DestDir: "{app}"; Flags: ignoreversion
 
-        ## Features
+        [Icons]
+        Name: "{group}\YoutubeDownloader"; Filename: "{app}\YoutubeDownloader.exe"
+        Name: "{autodesktop}\YoutubeDownloader"; Filename: "{app}\YoutubeDownloader.exe"; Tasks: desktopicon
 
-        - 📹 Multiple Quality Options: 240p to 1440p, plus audio-only
-        - ✂️ Video Trimming: Precise trimming with visual frame previews
-        - 📋 Clipboard Mode: Auto-detect YouTube URLs from clipboard
-        - ☁️ Catbox Upload: Upload files directly to catbox.moe
-        - 🌍 Multi-Language: Full UI translation (English, German, Polish)
-        - 🔄 Auto-Retry: Network failures handled automatically
-        - 📊 Real-Time Progress: Download speed and ETA displayed
-        - 🛑 Smart Caching: LRU preview cache for instant frame loading
+        [Tasks]
+        Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: checked
 
-        ## Quick Start
+        [Run]
+        Filename: "{app}\YoutubeDownloader.exe"; Description: "Launch YoutubeDownloader"; Flags: nowait postinstall skipifsilent
+        "@ | Out-File -FilePath installer.iss -Encoding ASCII
 
-        ### On Windows:
+        # Install Inno Setup
+        choco install innosetup -y --no-progress
 
-        1. Extract this archive
-        2. Double-click YoutubeDownloader.exe to run
+        # Build installer
+        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 
-        ### System Requirements:
-
-        - Windows (64-bit)
-        - ~100 MB RAM during operation
-        - Internet connection for downloads
-
-        ### Dependencies:
-
-        The executable is self-contained with all Python dependencies bundled.
-        However, you need these system tools installed:
-
-        - ffmpeg (for video processing)
-        - yt-dlp (for downloading videos)
-
-        Installation options:
-        1. Via winget:
-           winget install ffmpeg
-           winget install yt-dlp
-
-        2. Via chocolatey:
-           choco install ffmpeg
-           choco install yt-dlp
-
-        3. Manual download:
-           - ffmpeg: https://github.com/BtbN/FFmpeg-Builds/releases
-           - yt-dlp: https://github.com/yt-dlp/yt-dlp/releases
-
-        ## Usage
-
-        1. **Simple Download**
-           - Paste a YouTube URL
-           - Select quality (default: 480p)
-           - Click "Download"
-
-        2. **Video Trimming**
-           - Enable "Enable video trimming" checkbox
-           - Click "Fetch Video Duration"
-           - Use sliders to select start/end times
-           - Preview frames update automatically
-           - Click "Download"
-
-        3. **Clipboard Mode**
-           - Switch to "Clipboard Mode" tab
-           - Copy YouTube URLs (Ctrl+C)
-           - URLs are automatically detected
-           - Click "Download All" or enable auto-download
-
-        4. **Upload to Catbox**
-           - Switch to "Uploader" tab
-           - Click "Add Files" to select videos
-           - Click "Upload All"
-           - URLs are copied to clipboard automatically
-
-        5. **Language Selection**
-           - Use the dropdown at the top
-           - Choose: 🇬🇧 English, 🇩🇪 Deutsch, or 🇵🇱 Polski
-           - Restart app for changes to take effect
-
-        ## Downloads Location
-
-        - Main tab: %USERPROFILE%\Downloads\
-        - Clipboard mode: %USERPROFILE%\Downloads\ClipboardMode\
-
-        ## Logs
-
-        Comprehensive logs are saved to:
-          %USERPROFILE%\.youtubedownloader\youtubedownloader.log
-
-        Check this file if you encounter any issues.
-
-        ## Troubleshooting
-
-        If the app doesn't start:
-        - Make sure ffmpeg and yt-dlp are installed
-        - Windows Defender might block it - click "More info" then "Run anyway"
-
-        If downloads fail:
-        - Check your internet connection
-        - Make sure the YouTube URL is valid
-        - Ensure ffmpeg and yt-dlp are in PATH or same folder
-
-        ## Support
-
-        - GitHub: https://github.com/jj-repository/YoutubeDownloader
-        - Issues: https://github.com/jj-repository/YoutubeDownloader/issues
-
-        ## License
-
-        MIT License - See full documentation for details
-
-        ## Credits
-
-        Built with:
-        - yt-dlp - YouTube download engine
-        - FFmpeg - Video/audio processing
-        - Pillow - Image processing
-        - Python - Runtime environment
-        "@ | Out-File -FilePath release\README.txt -Encoding UTF8
-
-        Compress-Archive -Path release\* -DestinationPath YoutubeDownloader-Windows.zip
-
-    - name: Upload artifact
+    - name: Upload Linux artifact
+      if: matrix.os == 'ubuntu-latest'
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.os }}-executable
-        path: ${{ matrix.artifact_name }}
+        name: linux-build
+        path: YoutubeDownloader-Linux.tar.gz
+
+    - name: Upload Windows artifacts
+      if: matrix.os == 'windows-latest'
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-build
+        path: |
+          YTDownloaderPortable-Win.zip
+          YTDownloaderInstaller-Win.exe
 
   create-release:
     needs: build
@@ -452,47 +177,32 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          ubuntu-latest-executable/YoutubeDownloader-Linux.tar.gz
-          windows-latest-executable/YoutubeDownloader-Windows.zip
+          linux-build/YoutubeDownloader-Linux.tar.gz
+          windows-build/YTDownloaderPortable-Win.zip
+          windows-build/YTDownloaderInstaller-Win.exe
         body: |
-          ## YoutubeDownloader ${{ github.ref_name }} - Production Release
+          ## YoutubeDownloader ${{ github.ref_name }}
 
-          A professional YouTube video downloader with advanced trimming capabilities, clipboard monitoring, multi-language support, and catbox.moe upload integration.
+          ### Downloads
+          | Platform | Type | File |
+          |----------|------|------|
+          | Windows | Installer (recommended) | `YTDownloaderInstaller-Win.exe` |
+          | Windows | Portable (no install) | `YTDownloaderPortable-Win.zip` |
+          | Linux | Portable | `YoutubeDownloader-Linux.tar.gz` |
 
-          ### 📥 Downloads
-          - **Windows (64-bit)**: Download `YoutubeDownloader-Windows.zip`
-          - **Linux (64-bit)**: Download `YoutubeDownloader-Linux.tar.gz`
+          ### What's New
+          - Dark mode (enabled by default)
+          - Settings window with update controls and about info
+          - Help button linking to README
+          - Tab tooltips explaining each section
+          - yt-dlp auto-update support on all platforms
+          - Windows installer with desktop shortcut
 
-          ### ✨ Key Features
-          - 📹 **Multiple Quality Options**: 240p to 1440p, plus audio-only extraction
-          - ✂️ **Video Trimming**: Precise trimming with visual frame previews
-          - 📋 **Clipboard Mode**: Auto-detect and download YouTube URLs from clipboard
-          - ☁️ **Catbox.moe Upload**: Direct file upload for easy sharing
-          - 🌍 **Multi-Language Support**: Full UI translation (English, German, Polish)
-          - 🔄 **Auto-Retry**: Automatic recovery from network failures
-          - 📊 **Real-Time Progress**: Download speed, ETA, and progress tracking
-          - 🛑 **Smart Caching**: LRU preview cache for instant frame loading
+          ### Setup
+          - **Windows Installer**: Run `YTDownloaderInstaller-Win.exe` and follow the wizard
+          - **Windows Portable**: Extract `YTDownloaderPortable-Win.zip` and run `YoutubeDownloader.exe`
+          - **Linux**: Extract and run `./YoutubeDownloader`
 
-          ### 🚀 What's New in v3.0.0
-          - ✅ **100% Thread Safety**: All state variables protected with proper locks
-          - ✅ **Zero Race Conditions**: All timing vulnerabilities eliminated
-          - ✅ **Perfect Resource Management**: No memory or file descriptor leaks
-          - ✅ **Production-Grade Quality**: Code review score 100/100, zero critical bugs
-          - ✅ **Complete Internationalization**: 170+ strings translated across 3 languages
-          - ✅ **Enterprise Standards**: All magic numbers replaced with named constants
-          - ✅ **Comprehensive Testing**: 60+ tests passed, all systems verified
-
-          ### 📋 System Requirements
-          - **OS**: Windows or Linux (64-bit)
-          - **RAM**: ~100 MB during operation
-          - **Dependencies**: ffmpeg and yt-dlp (installation instructions in README.txt)
-
-          ### 🔧 Setup
-          See `README.txt` in the downloaded archive for detailed installation and usage instructions.
-
-          ### 📞 Support
-          - **Issues**: [GitHub Issues](https://github.com/jj-repository/YoutubeDownloader/issues)
-          - **Documentation**: See README.md in repository
-          - **Logs**: Check `~/.youtubedownloader/youtubedownloader.log` for debugging
+          See [README](https://github.com/jj-repository/YoutubeDownloader#readme) for full documentation.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

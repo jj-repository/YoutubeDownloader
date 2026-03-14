@@ -13,6 +13,7 @@ import threading
 import re
 import logging
 import json
+import webbrowser
 from pathlib import Path
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 import tempfile
@@ -43,6 +44,7 @@ from constants import (
     APP_VERSION, GITHUB_REPO,
     GITHUB_RELEASES_URL, GITHUB_API_LATEST, GITHUB_RAW_URL, APP_DATA_DIR,
     UPLOAD_HISTORY_FILE, CLIPBOARD_URLS_FILE, CONFIG_FILE, LOG_FILE,
+    THEMES,
 )
 from translations import (
     TRANSLATIONS, tr, set_language, get_language,
@@ -98,9 +100,13 @@ class YouTubeDownloader:
         logger.info("Initializing YoutubeDownloader")
         self.root = root
         self.root.title(tr('window_title'))
-        self.root.geometry("900x1140")
+        if sys.platform == 'win32':
+            self.root.geometry("900x800")
+            self.root.minsize(750, 550)
+        else:
+            self.root.geometry("900x1140")
+            self.root.minsize(750, 600)
         self.root.resizable(True, True)
-        self.root.minsize(750, 600)
 
         self.download_path = str(Path.home() / "Downloads")
         self.current_process = None
@@ -179,7 +185,7 @@ class YouTubeDownloader:
         self.klipper_interface = None  # KDE Klipper D-Bus interface
 
         # Theme mode
-        self.current_theme = 'light'  # Default to light theme
+        self.current_theme = self._load_theme_preference()
 
         # Auto-upload feature
         self.auto_upload_var = tk.BooleanVar(value=False)  # Auto-upload after download/trim
@@ -352,6 +358,238 @@ class YouTubeDownloader:
         except Exception as e:
             logger.error(f"Error saving auto_check_updates setting: {e}")
 
+    def _load_theme_preference(self):
+        """Load saved theme preference from config"""
+        try:
+            if CONFIG_FILE.exists():
+                with open(CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+                    theme = config.get('theme', 'dark')
+                    if theme in THEMES:
+                        return theme
+        except Exception as e:
+            logger.error(f"Error loading theme preference: {e}")
+        return 'dark'
+
+    def _save_theme_preference(self):
+        """Save theme preference to config"""
+        try:
+            CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            config = {}
+            if CONFIG_FILE.exists():
+                with open(CONFIG_FILE, 'r') as f:
+                    config = json.load(f)
+
+            config['theme'] = self.current_theme
+
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(config, f, indent=2)
+
+            logger.info(f"Saved theme preference: {self.current_theme}")
+        except Exception as e:
+            logger.error(f"Error saving theme preference: {e}")
+
+    def _toggle_theme(self):
+        """Toggle between light and dark theme"""
+        self.current_theme = 'dark' if self.current_theme == 'light' else 'light'
+        self._apply_theme()
+        self._save_theme_preference()
+
+    def _open_settings(self):
+        """Open settings window"""
+        settings_win = tk.Toplevel(self.root)
+        settings_win.title(tr('btn_settings'))
+        settings_win.geometry("380x480")
+        settings_win.resizable(False, False)
+        settings_win.transient(self.root)
+        settings_win.grab_set()
+
+        colors = THEMES[self.current_theme]
+        settings_win.configure(bg=colors['bg'])
+
+        main_frame = ttk.Frame(settings_win, padding=20)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Update section
+        ttk.Label(main_frame, text="Updates", font=('Arial', 11, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+
+        self.auto_check_updates_var = tk.BooleanVar(value=self._load_auto_check_updates_setting())
+        ttk.Checkbutton(main_frame, text=tr('update_auto_check'),
+                       variable=self.auto_check_updates_var,
+                       command=self._save_auto_check_updates_setting).pack(anchor=tk.W, pady=(0, 5))
+
+        ttk.Button(main_frame, text=tr('update_check_btn'),
+                  command=self._check_for_updates_clicked).pack(anchor=tk.W, pady=(0, 15))
+
+        ttk.Separator(main_frame).pack(fill=tk.X, pady=10)
+
+        # Readme link
+        ttk.Button(main_frame, text="Readme",
+                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme')).pack(anchor=tk.W, pady=(0, 15))
+
+        ttk.Separator(main_frame).pack(fill=tk.X, pady=10)
+
+        # Takodachi image
+        try:
+            img_path = self._get_resource_path('takodachi.webp')
+            if os.path.exists(img_path):
+                with Image.open(img_path) as img:
+                    img.thumbnail((120, 120), Image.Resampling.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                img_label = ttk.Label(main_frame, image=photo)
+                img_label.image = photo  # Keep reference
+                img_label.pack(pady=(10, 5))
+        except Exception as e:
+            logger.error(f"Error loading settings image: {e}")
+
+        # Credits
+        ttk.Label(main_frame, text="by JJ", font=('Arial', 10, 'bold')).pack(pady=(5, 2))
+        ttk.Label(main_frame, text=f"v{APP_VERSION}", font=('Arial', 9)).pack()
+
+    def _get_resource_path(self, filename):
+        """Get path to a resource file (works for both source and bundled mode)"""
+        if getattr(sys, 'frozen', False):
+            # Check next to executable first
+            exe_dir = os.path.dirname(sys.executable)
+            local_path = os.path.join(exe_dir, filename)
+            if os.path.exists(local_path):
+                return local_path
+            # Fall back to _MEIPASS
+            bundle_dir = getattr(sys, '_MEIPASS', exe_dir)
+            return os.path.join(bundle_dir, filename)
+        else:
+            return os.path.join(os.path.dirname(__file__), filename)
+
+    def _setup_tab_tooltips(self):
+        """Setup hover tooltips for notebook tabs"""
+        tooltip_map = {
+            0: tr('tooltip_clipboard'),
+            1: tr('tooltip_trimmer'),
+            2: tr('tooltip_uploader'),
+        }
+
+        self._tab_tooltip = None
+        self._tab_tooltip_tab_index = None
+
+        def show_tooltip(event):
+            # Determine which tab is under the cursor
+            try:
+                tab_index = self.notebook.index(f"@{event.x},{event.y}")
+            except tk.TclError:
+                hide_tooltip(event)
+                return
+
+            text = tooltip_map.get(tab_index)
+            if not text:
+                hide_tooltip(event)
+                return
+
+            # Already showing tooltip for this tab
+            if self._tab_tooltip_tab_index == tab_index and self._tab_tooltip and self._tab_tooltip.winfo_exists():
+                return
+
+            # Hide old tooltip if switching tabs
+            hide_tooltip(event)
+
+            colors = THEMES[self.current_theme]
+            self._tab_tooltip_tab_index = tab_index
+            self._tab_tooltip = tk.Toplevel(self.root)
+            self._tab_tooltip.wm_overrideredirect(True)
+            self._tab_tooltip.wm_geometry(f"+{event.x_root + 10}+{event.y_root + 20}")
+
+            tk.Label(
+                self._tab_tooltip, text=text, justify=tk.LEFT,
+                bg=colors['entry_bg'], fg=colors['fg'],
+                relief='solid', borderwidth=1,
+                font=('Arial', 9), wraplength=300, padx=8, pady=4
+            ).pack()
+
+        def hide_tooltip(event):
+            if self._tab_tooltip and self._tab_tooltip.winfo_exists():
+                self._tab_tooltip.destroy()
+            self._tab_tooltip = None
+            self._tab_tooltip_tab_index = None
+
+        self.notebook.bind('<Motion>', show_tooltip)
+        self.notebook.bind('<Leave>', hide_tooltip)
+
+    def _apply_theme(self):
+        """Apply the current theme colors to all widgets"""
+        colors = THEMES[self.current_theme]
+        style = ttk.Style()
+
+        # Use 'clam' theme as base (most customizable)
+        style.theme_use('clam')
+
+        # Configure ttk styles
+        style.configure('.', background=colors['bg'], foreground=colors['fg'],
+                       fieldbackground=colors['entry_bg'], bordercolor=colors['border'],
+                       darkcolor=colors['bg'], lightcolor=colors['bg'],
+                       troughcolor=colors['canvas_bg'], selectbackground=colors['select_bg'],
+                       selectforeground=colors['select_fg'], arrowcolor=colors['fg'])
+
+        style.configure('TFrame', background=colors['bg'])
+        style.configure('TLabel', background=colors['bg'], foreground=colors['fg'])
+        style.configure('TButton', background=colors['canvas_bg'], foreground=colors['fg'])
+        style.map('TButton',
+                  background=[('active', colors['select_bg']), ('pressed', colors['select_bg'])],
+                  foreground=[('active', colors['select_fg']), ('pressed', colors['select_fg'])])
+        style.configure('TCheckbutton', background=colors['bg'], foreground=colors['fg'])
+        style.map('TCheckbutton', background=[('active', colors['bg'])])
+        style.configure('TRadiobutton', background=colors['bg'], foreground=colors['fg'])
+        style.map('TRadiobutton', background=[('active', colors['bg'])])
+        style.configure('TEntry', fieldbackground=colors['entry_bg'], foreground=colors['entry_fg'],
+                       insertcolor=colors['fg'])
+        style.configure('TCombobox', fieldbackground=colors['entry_bg'], foreground=colors['entry_fg'],
+                       selectbackground=colors['select_bg'], selectforeground=colors['select_fg'])
+        style.map('TCombobox', fieldbackground=[('readonly', colors['entry_bg'])],
+                  selectbackground=[('readonly', colors['select_bg'])])
+        style.configure('TNotebook', background=colors['bg'])
+        style.configure('TNotebook.Tab', background=colors['canvas_bg'], foreground=colors['fg'],
+                       padding=[10, 4])
+        style.map('TNotebook.Tab',
+                  background=[('selected', colors['bg']), ('active', colors['select_bg'])],
+                  foreground=[('selected', colors['fg']), ('active', colors['select_fg'])])
+        style.configure('TProgressbar', background=colors['select_bg'], troughcolor=colors['canvas_bg'])
+        style.configure('TSeparator', background=colors['border'])
+        style.configure('TScale', background=colors['bg'], troughcolor=colors['canvas_bg'])
+        style.configure('TScrollbar', background=colors['canvas_bg'], troughcolor=colors['bg'],
+                       arrowcolor=colors['fg'])
+
+        # Configure root window
+        self.root.configure(bg=colors['bg'])
+
+        # Configure tk widgets (non-ttk) that need explicit colors
+        self._apply_theme_to_tk_widgets(colors)
+
+    def _apply_theme_to_tk_widgets(self, colors):
+        """Apply theme colors to pure tk widgets that don't use ttk styling"""
+        # Main scrollable canvas
+        if hasattr(self, 'main_canvas'):
+            self.main_canvas.configure(bg=colors['bg'])
+
+        # Preview labels
+        if hasattr(self, 'start_preview_label'):
+            self.start_preview_label.configure(bg=colors['preview_bg'], fg=colors['preview_fg'])
+        if hasattr(self, 'end_preview_label'):
+            self.end_preview_label.configure(bg=colors['preview_bg'], fg=colors['preview_fg'])
+
+        # Clipboard URL list canvas
+        if hasattr(self, 'clipboard_url_canvas'):
+            self.clipboard_url_canvas.configure(bg=colors['canvas_bg'],
+                                                highlightbackground=colors['border'])
+        # Uploader file list canvas
+        if hasattr(self, 'uploader_file_canvas'):
+            self.uploader_file_canvas.configure(bg=colors['canvas_bg'],
+                                                highlightbackground=colors['border'])
+
+        # Status indicator canvases in clipboard URL list
+        if hasattr(self, 'clipboard_url_widgets'):
+            for url, widgets in self.clipboard_url_widgets.items():
+                if 'status_canvas' in widgets:
+                    widgets['status_canvas'].configure(bg=colors['status_canvas_bg'])
+
     def _version_newer(self, latest, current):
         """Compare version strings to check if latest is newer than current.
 
@@ -493,7 +731,6 @@ class YouTubeDownloader:
 
         def open_releases():
             dialog.destroy()
-            import webbrowser
             webbrowser.open(GITHUB_RELEASES_URL)
 
         ttk.Button(btn_frame, text=tr('update_now_btn'), command=update_now).pack(side=tk.LEFT, padx=5)
@@ -836,6 +1073,7 @@ class YouTubeDownloader:
         history_window = tk.Toplevel(self.root)
         history_window.title(tr('window_history_title'))
         history_window.geometry("800x500")
+        history_window.configure(bg=THEMES[self.current_theme]['bg'])
 
         # Create text widget with scrollbar
         frame = ttk.Frame(history_window, padding="10")
@@ -844,7 +1082,10 @@ class YouTubeDownloader:
         scrollbar = ttk.Scrollbar(frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        text_widget = tk.Text(frame, wrap=tk.WORD, yscrollcommand=scrollbar.set, font=('Consolas', 9))
+        theme_colors = THEMES[self.current_theme]
+        text_widget = tk.Text(frame, wrap=tk.WORD, yscrollcommand=scrollbar.set, font=('Consolas', 9),
+                             bg=theme_colors['entry_bg'], fg=theme_colors['entry_fg'],
+                             insertbackground=theme_colors['fg'])
         text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=text_widget.yview)
 
@@ -1013,6 +1254,7 @@ class YouTubeDownloader:
         allowed_keys = {
             'language': str,
             'auto_check_updates': bool,
+            'theme': str,
         }
 
         for key, value in config.items():
@@ -1326,8 +1568,12 @@ class YouTubeDownloader:
         self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
 
+        # Apply theme before creating widgets (sets ttk.Style and root bg)
+        self._apply_theme()
+
         # Create canvas with scrollbar for scrollable content
-        canvas = tk.Canvas(self.root)
+        self.main_canvas = tk.Canvas(self.root, bg=THEMES[self.current_theme]['bg'])
+        canvas = self.main_canvas
         scrollbar = ttk.Scrollbar(self.root, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
 
@@ -1399,16 +1645,20 @@ class YouTubeDownloader:
         self.language_combo.pack(side=tk.LEFT)
         self.language_combo.bind('<<ComboboxSelected>>', self.on_language_change)
 
-        # Update controls - separator and checkbox
+        # Settings and Help buttons
         ttk.Separator(language_frame, orient='vertical').pack(side=tk.LEFT, padx=15, fill='y', pady=2)
 
-        self.auto_check_updates_var = tk.BooleanVar(value=self._load_auto_check_updates_setting())
-        ttk.Checkbutton(language_frame, text=tr('update_auto_check'),
-                       variable=self.auto_check_updates_var,
-                       command=self._save_auto_check_updates_setting).pack(side=tk.LEFT, padx=(0, 10))
+        # Dark mode toggle
+        self.dark_mode_var = tk.BooleanVar(value=self.current_theme == 'dark')
+        ttk.Checkbutton(language_frame, text=tr('theme_dark_mode'),
+                       variable=self.dark_mode_var,
+                       command=self._toggle_theme).pack(side=tk.LEFT, padx=(0, 10))
 
-        ttk.Button(language_frame, text=tr('update_check_btn'),
-                  command=self._check_for_updates_clicked).pack(side=tk.LEFT)
+        ttk.Button(language_frame, text=tr('btn_settings'),
+                  command=self._open_settings).pack(side=tk.LEFT, padx=(0, 5))
+
+        ttk.Button(language_frame, text=tr('btn_help'),
+                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme')).pack(side=tk.LEFT)
 
         # Create notebook for tabs
         self.notebook = ttk.Notebook(scrollable_frame)
@@ -1416,16 +1666,19 @@ class YouTubeDownloader:
 
         # Clipboard Mode tab (first tab)
         clipboard_tab_frame = ttk.Frame(self.notebook, padding="20")
-        self.notebook.add(clipboard_tab_frame, text=tr('tab_clipboard'))
+        self.notebook.add(clipboard_tab_frame, text=f"  {tr('tab_clipboard')}  \u2753")
         # Setup will be called after Trimmer tab is created
 
         # Trimmer tab (second tab)
         main_tab_frame = ttk.Frame(self.notebook, padding="20")
-        self.notebook.add(main_tab_frame, text=tr('tab_trimmer'))
+        self.notebook.add(main_tab_frame, text=f"  {tr('tab_trimmer')}  \u2753")
 
         # Uploader tab (third tab)
         uploader_tab_frame = ttk.Frame(self.notebook, padding="20")
-        self.notebook.add(uploader_tab_frame, text=tr('tab_uploader'))
+        self.notebook.add(uploader_tab_frame, text=f"  {tr('tab_uploader')}  \u2753")
+
+        # Bind tooltip to notebook tabs
+        self._setup_tab_tooltips()
 
         ttk.Label(main_tab_frame, text=tr('label_youtube_url'), font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
@@ -1745,8 +1998,10 @@ class YouTubeDownloader:
         url_list_container = ttk.Frame(parent)
         url_list_container.grid(row=10, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
 
-        self.clipboard_url_canvas = tk.Canvas(url_list_container, height=CLIPBOARD_URL_LIST_HEIGHT, bg='white',
-                                             highlightthickness=1, highlightbackground='gray')
+        theme_colors = THEMES[self.current_theme]
+        self.clipboard_url_canvas = tk.Canvas(url_list_container, height=CLIPBOARD_URL_LIST_HEIGHT,
+                                             bg=theme_colors['canvas_bg'],
+                                             highlightthickness=1, highlightbackground=theme_colors['border'])
         url_scrollbar = ttk.Scrollbar(url_list_container, orient="vertical",
                                       command=self.clipboard_url_canvas.yview)
         self.clipboard_url_list_frame = ttk.Frame(self.clipboard_url_canvas)
@@ -1823,8 +2078,10 @@ class YouTubeDownloader:
         file_list_container = ttk.Frame(parent)
         file_list_container.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
 
-        self.uploader_file_canvas = tk.Canvas(file_list_container, height=75, bg='white',
-                                             highlightthickness=1, highlightbackground='gray')
+        theme_colors = THEMES[self.current_theme]
+        self.uploader_file_canvas = tk.Canvas(file_list_container, height=75,
+                                             bg=theme_colors['canvas_bg'],
+                                             highlightthickness=1, highlightbackground=theme_colors['border'])
         file_scrollbar = ttk.Scrollbar(file_list_container, orient="vertical",
                                       command=self.uploader_file_canvas.yview)
         self.uploader_file_list_frame = ttk.Frame(self.uploader_file_canvas)
@@ -1976,7 +2233,8 @@ class YouTubeDownloader:
         url_frame = ttk.Frame(self.clipboard_url_list_frame, relief='solid', borderwidth=1)
         url_frame.pack(fill=tk.X, padx=5, pady=2)
 
-        status_canvas = tk.Canvas(url_frame, width=12, height=12, bg='white', highlightthickness=0)
+        theme_colors = THEMES[self.current_theme]
+        status_canvas = tk.Canvas(url_frame, width=12, height=12, bg=theme_colors['status_canvas_bg'], highlightthickness=0)
         status_canvas.pack(side=tk.LEFT, padx=(5, 5))
         status_circle = status_canvas.create_oval(2, 2, 10, 10, fill='gray', outline='')
 

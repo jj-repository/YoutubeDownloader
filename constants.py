@@ -71,7 +71,7 @@ DEFAULT_VIDEO_QUALITY = "480"
 CLIPBOARD_URL_LIST_HEIGHT = 12
 
 # Version and Update
-APP_VERSION = "3.4.1"
+APP_VERSION = "3.5.0"
 GITHUB_REPO = "jj-repository/YoutubeDownloader"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -86,3 +86,33 @@ LOG_FILE = APP_DATA_DIR / "youtubedownloader.log"
 
 # Default language
 DEFAULT_LANGUAGE = 'en'
+
+# Theme colors
+THEMES = {
+    'light': {
+        'bg': '#f0f0f0',
+        'fg': '#000000',
+        'canvas_bg': '#ffffff',
+        'entry_bg': '#ffffff',
+        'entry_fg': '#000000',
+        'border': '#cccccc',
+        'preview_bg': 'gray20',
+        'preview_fg': 'white',
+        'select_bg': '#0078d7',
+        'select_fg': '#ffffff',
+        'status_canvas_bg': '#ffffff',
+    },
+    'dark': {
+        'bg': '#1e1e1e',
+        'fg': '#d4d4d4',
+        'canvas_bg': '#252525',
+        'entry_bg': '#2d2d2d',
+        'entry_fg': '#d4d4d4',
+        'border': '#555555',
+        'preview_bg': '#1a1a1a',
+        'preview_fg': '#d4d4d4',
+        'select_bg': '#264f78',
+        'select_fg': '#ffffff',
+        'status_canvas_bg': '#2d2d2d',
+    },
+}
