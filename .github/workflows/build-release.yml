@@ -85,10 +85,15 @@ jobs:
       run: |
         Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile "yt-dlp.exe"
 
-    - name: Build executable (Windows)
+    - name: Build portable executable (Windows onefile)
       if: matrix.os == 'windows-latest'
       run: |
         pyinstaller --onefile --name YoutubeDownloader --windowed --icon=NONE --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
+
+    - name: Build installer executable (Windows onedir)
+      if: matrix.os == 'windows-latest'
+      run: |
+        pyinstaller --onedir --name YoutubeDownloader --windowed --icon=NONE --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL --distpath dist_onedir downloader.py
 
     - name: Create release package (Linux)
       if: matrix.os == 'ubuntu-latest'
@@ -128,7 +133,7 @@ jobs:
         DisableProgramGroupPage=yes
 
         [Files]
-        Source: "dist\YoutubeDownloader.exe"; DestDir: "{app}"; Flags: ignoreversion
+        Source: "dist_onedir\YoutubeDownloader\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
         [Icons]
         Name: "{group}\YoutubeDownloader"; Filename: "{app}\YoutubeDownloader.exe"
