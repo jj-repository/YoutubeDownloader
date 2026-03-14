@@ -400,7 +400,7 @@ class YouTubeDownloader:
         """Open settings window"""
         settings_win = tk.Toplevel(self.root)
         settings_win.title(tr('btn_settings'))
-        settings_win.geometry("380x480")
+        settings_win.geometry("380x560")
         settings_win.resizable(False, False)
         settings_win.transient(self.root)
         settings_win.grab_set()
@@ -411,8 +411,29 @@ class YouTubeDownloader:
         main_frame = ttk.Frame(settings_win, padding=20)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
+        # Language section
+        ttk.Label(main_frame, text=tr('language'), font=('Arial', 11, 'bold')).pack(anchor=tk.W, pady=(0, 5))
+
+        language_options = ["🇬🇧 English", "🇩🇪 Deutsch", "🇵🇱 Polski"]
+        lang_map_reverse = {'en': 0, 'de': 1, 'pl': 2}
+        initial_index = lang_map_reverse.get(translations.get_language(), 0)
+
+        self.language_var = tk.StringVar(value=language_options[initial_index])
+        self.language_combo = ttk.Combobox(main_frame, textvariable=self.language_var,
+            values=language_options, state='readonly', width=15)
+        self.language_combo.pack(anchor=tk.W, pady=(0, 10))
+        self.language_combo.bind('<<ComboboxSelected>>', self.on_language_change)
+
+        # Dark mode toggle
+        self.dark_mode_var = tk.BooleanVar(value=self.current_theme == 'dark')
+        ttk.Checkbutton(main_frame, text=tr('theme_dark_mode'),
+                       variable=self.dark_mode_var,
+                       command=self._toggle_theme).pack(anchor=tk.W, pady=(0, 10))
+
+        ttk.Separator(main_frame).pack(fill=tk.X, pady=5)
+
         # Update section
-        ttk.Label(main_frame, text="Updates", font=('Arial', 11, 'bold')).pack(anchor=tk.W, pady=(0, 10))
+        ttk.Label(main_frame, text="Updates", font=('Arial', 11, 'bold')).pack(anchor=tk.W, pady=(5, 5))
 
         self.auto_check_updates_var = tk.BooleanVar(value=self._load_auto_check_updates_setting())
         ttk.Checkbutton(main_frame, text=tr('update_auto_check'),
@@ -420,15 +441,15 @@ class YouTubeDownloader:
                        command=self._save_auto_check_updates_setting).pack(anchor=tk.W, pady=(0, 5))
 
         ttk.Button(main_frame, text=tr('update_check_btn'),
-                  command=self._check_for_updates_clicked).pack(anchor=tk.W, pady=(0, 15))
+                  command=self._check_for_updates_clicked).pack(anchor=tk.W, pady=(0, 10))
 
-        ttk.Separator(main_frame).pack(fill=tk.X, pady=10)
+        ttk.Separator(main_frame).pack(fill=tk.X, pady=5)
 
         # Readme link
         ttk.Button(main_frame, text="Readme",
-                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme')).pack(anchor=tk.W, pady=(0, 15))
+                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme')).pack(anchor=tk.W, pady=(5, 10))
 
-        ttk.Separator(main_frame).pack(fill=tk.X, pady=10)
+        ttk.Separator(main_frame).pack(fill=tk.X, pady=5)
 
         # Takodachi image
         try:
@@ -460,35 +481,6 @@ class YouTubeDownloader:
             return os.path.join(bundle_dir, filename)
         else:
             return os.path.join(os.path.dirname(__file__), filename)
-
-    def _create_tooltip_icon(self, parent, tooltip_text):
-        """Create a small question mark icon with hover tooltip"""
-        icon_label = ttk.Label(parent, text=" ?", font=('Arial', 10, 'bold'), foreground='gray', cursor='question_arrow')
-        icon_label.pack(side=tk.LEFT, padx=(5, 0))
-
-        tooltip_win = [None]
-
-        def show(event):
-            if tooltip_win[0]:
-                return
-            colors = THEMES[self.current_theme]
-            tooltip_win[0] = tk.Toplevel(self.root)
-            tooltip_win[0].wm_overrideredirect(True)
-            tooltip_win[0].wm_geometry(f"+{event.x_root + 10}+{event.y_root + 15}")
-            tk.Label(
-                tooltip_win[0], text=tooltip_text, justify=tk.LEFT,
-                bg=colors['entry_bg'], fg=colors['fg'],
-                relief='solid', borderwidth=1,
-                font=('Arial', 9), wraplength=300, padx=8, pady=4
-            ).pack()
-
-        def hide(event):
-            if tooltip_win[0]:
-                tooltip_win[0].destroy()
-                tooltip_win[0] = None
-
-        icon_label.bind('<Enter>', show)
-        icon_label.bind('<Leave>', hide)
 
     def _apply_theme(self):
         """Apply the current theme colors to all widgets"""
@@ -1598,47 +1590,9 @@ class YouTubeDownloader:
         # Store canvas reference for cleanup
         self.canvas = canvas
 
-        # Language selector at top
-        language_frame = ttk.Frame(scrollable_frame)
-        language_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5, pady=(5, 0))
-
-        ttk.Label(language_frame, text=tr('language') + ":", font=('Arial', 9)).pack(side=tk.LEFT, padx=(0, 5))
-
-        # Language options with flag emojis
-        language_options = [
-            "🇬🇧 English",
-            "🇩🇪 Deutsch",
-            "🇵🇱 Polski"
-        ]
-
-        # Set initial language based on loaded preference
-        lang_map_reverse = {'en': 0, 'de': 1, 'pl': 2}
-        initial_index = lang_map_reverse.get(translations.get_language(), 0)
-
-        self.language_var = tk.StringVar(value=language_options[initial_index])
-        self.language_combo = ttk.Combobox(language_frame, textvariable=self.language_var,
-            values=language_options, state='readonly', width=15)
-        self.language_combo.pack(side=tk.LEFT)
-        self.language_combo.bind('<<ComboboxSelected>>', self.on_language_change)
-
-        # Settings and Help buttons
-        ttk.Separator(language_frame, orient='vertical').pack(side=tk.LEFT, padx=15, fill='y', pady=2)
-
-        # Dark mode toggle
-        self.dark_mode_var = tk.BooleanVar(value=self.current_theme == 'dark')
-        ttk.Checkbutton(language_frame, text=tr('theme_dark_mode'),
-                       variable=self.dark_mode_var,
-                       command=self._toggle_theme).pack(side=tk.LEFT, padx=(0, 10))
-
-        ttk.Button(language_frame, text=tr('btn_settings'),
-                  command=self._open_settings).pack(side=tk.LEFT, padx=(0, 5))
-
-        ttk.Button(language_frame, text=tr('btn_help'),
-                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme')).pack(side=tk.LEFT)
-
         # Create notebook for tabs
         self.notebook = ttk.Notebook(scrollable_frame)
-        self.notebook.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
+        self.notebook.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
 
         # Tab padding - smaller on Windows to reduce wasted space
         tab_pad = "10" if sys.platform == 'win32' else "20"
@@ -1655,10 +1609,16 @@ class YouTubeDownloader:
         uploader_tab_frame = ttk.Frame(self.notebook, padding=tab_pad)
         self.notebook.add(uploader_tab_frame, text=f"  {tr('tab_uploader')}  ")
 
-        trimmer_header = ttk.Frame(main_tab_frame)
-        trimmer_header.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 3))
-        ttk.Label(trimmer_header, text=tr('label_youtube_url'), font=('Arial', 12)).pack(side=tk.LEFT)
-        self._create_tooltip_icon(trimmer_header, tr('tooltip_trimmer'))
+        # Settings and Help buttons next to tabs
+        btn_frame = ttk.Frame(scrollable_frame)
+        btn_frame.grid(row=0, column=0, sticky=tk.NE, padx=10, pady=8)
+
+        ttk.Button(btn_frame, text=tr('btn_settings'),
+                  command=self._open_settings).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text=tr('btn_help'),
+                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme')).pack(side=tk.LEFT)
+
+        ttk.Label(main_tab_frame, text=tr('label_youtube_url'), font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
         # URL/File input frame
         url_input_frame = ttk.Frame(main_tab_frame)
@@ -1904,10 +1864,8 @@ class YouTubeDownloader:
         """Setup Clipboard Mode tab UI"""
 
         # Header
-        header_frame = ttk.Frame(parent)
-        header_frame.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 3))
-        ttk.Label(header_frame, text=tr('header_clipboard_mode'), font=('Arial', 14, 'bold')).pack(side=tk.LEFT)
-        self._create_tooltip_icon(header_frame, tr('tooltip_clipboard'))
+        ttk.Label(parent, text=tr('header_clipboard_mode'), font=('Arial', 14, 'bold')).grid(
+            row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 3))
 
         ttk.Label(parent, text=tr('desc_clipboard_mode'),
                   foreground="gray", font=('Arial', 9)).grid(
@@ -2031,10 +1989,8 @@ class YouTubeDownloader:
         """Setup Uploader tab UI"""
 
         # Header
-        upload_header = ttk.Frame(parent)
-        upload_header.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 3))
-        ttk.Label(upload_header, text=tr('header_upload_file'), font=('Arial', 14, 'bold')).pack(side=tk.LEFT)
-        self._create_tooltip_icon(upload_header, tr('tooltip_uploader'))
+        ttk.Label(parent, text=tr('header_upload_file'), font=('Arial', 14, 'bold')).grid(
+            row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 3))
 
         ttk.Label(parent, text=tr('desc_upload_file'),
                   foreground="gray", font=('Arial', 9)).grid(
