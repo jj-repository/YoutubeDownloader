@@ -103,13 +103,11 @@ jobs:
         chmod +x release/YoutubeDownloader
         tar -czf YoutubeDownloader-Linux.tar.gz -C release .
 
-    - name: Create portable package (Windows)
+    - name: Rename portable executable (Windows)
       if: matrix.os == 'windows-latest'
       shell: pwsh
       run: |
-        New-Item -ItemType Directory -Force -Path portable
-        Copy-Item dist\YoutubeDownloader.exe portable\YoutubeDownloader.exe
-        Compress-Archive -Path portable\* -DestinationPath YTDownloaderPortable-Win.zip
+        Copy-Item dist\YoutubeDownloader.exe YTDownloaderPortable-Win.exe
 
     - name: Create installer (Windows)
       if: matrix.os == 'windows-latest'
@@ -166,7 +164,7 @@ jobs:
       with:
         name: windows-build
         path: |
-          YTDownloaderPortable-Win.zip
+          YTDownloaderPortable-Win.exe
           YTDownloaderInstaller-Win.exe
 
   create-release:
@@ -183,7 +181,7 @@ jobs:
       with:
         files: |
           linux-build/YoutubeDownloader-Linux.tar.gz
-          windows-build/YTDownloaderPortable-Win.zip
+          windows-build/YTDownloaderPortable-Win.exe
           windows-build/YTDownloaderInstaller-Win.exe
         body: |
           ## YoutubeDownloader ${{ github.ref_name }}
@@ -192,7 +190,7 @@ jobs:
           | Platform | Type | File |
           |----------|------|------|
           | Windows | Installer (recommended) | `YTDownloaderInstaller-Win.exe` |
-          | Windows | Portable (no install) | `YTDownloaderPortable-Win.zip` |
+          | Windows | Portable (no install) | `YTDownloaderPortable-Win.exe` |
           | Linux | Portable | `YoutubeDownloader-Linux.tar.gz` |
 
           ### What's New
@@ -205,7 +203,7 @@ jobs:
 
           ### Setup
           - **Windows Installer**: Run `YTDownloaderInstaller-Win.exe` and follow the wizard
-          - **Windows Portable**: Extract `YTDownloaderPortable-Win.zip` and run `YoutubeDownloader.exe`
+          - **Windows Portable**: Download `YTDownloaderPortable-Win.exe` and run it directly
           - **Linux**: Extract and run `./YoutubeDownloader`
 
           See [README](https://github.com/jj-repository/YoutubeDownloader#readme) for full documentation.
