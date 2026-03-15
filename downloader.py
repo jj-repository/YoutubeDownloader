@@ -1527,7 +1527,7 @@ class YouTubeDownloader:
             outer.grid_rowconfigure(0, weight=1)
             outer.grid_columnconfigure(0, weight=1)
 
-            canvas = tk.Canvas(outer, highlightthickness=0, borderwidth=0)
+            canvas = tk.Canvas(outer, highlightthickness=0, borderwidth=0, bg=THEMES[self.current_theme]['bg'])
             scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
             inner = ttk.Frame(canvas, padding=tab_pad)
 
