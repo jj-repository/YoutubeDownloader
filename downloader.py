@@ -171,7 +171,7 @@ class YouTubeDownloader:
         self.auto_download_lock = threading.Lock()  # Protect auto-download state
         self.download_lock = threading.Lock()  # Protect download state
         self.upload_lock = threading.Lock()  # Protect upload state
-        self.uploader_lock = threading.Lock()  # Protect uploader queue state
+        self.uploader_lock = threading.RLock()  # Protect uploader queue state (reentrant for nested calls)
         self.fetch_lock = threading.Lock()  # Protect duration fetch state
         self.config_lock = threading.Lock()  # Protect config read-modify-write
 
@@ -287,21 +287,22 @@ class YouTubeDownloader:
     def _load_language_preference(self):
         """Load saved language preference"""
         try:
-            if CONFIG_FILE.exists():
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    # Validate config structure
-                    if not self.validate_config_json(config):
-                        logger.warning("Invalid config structure, using defaults")
-                        translations.set_language('en')
-                        return
-                    lang_code = config.get('language', 'en')
-                    # Validate language code
-                    if lang_code not in ['en', 'de', 'pl']:
-                        logger.warning(f"Unknown language code '{lang_code}', using 'en'")
-                        lang_code = 'en'
-                    translations.set_language(lang_code)
-                    logger.info(f"Loaded language preference: {lang_code}")
+            with self.config_lock:
+                if CONFIG_FILE.exists():
+                    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                        # Validate config structure
+                        if not self.validate_config_json(config):
+                            logger.warning("Invalid config structure, using defaults")
+                            translations.set_language('en')
+                            return
+                        lang_code = config.get('language', 'en')
+                        # Validate language code
+                        if lang_code not in ['en', 'de', 'pl']:
+                            logger.warning(f"Unknown language code '{lang_code}', using 'en'")
+                            lang_code = 'en'
+                        translations.set_language(lang_code)
+                        logger.info(f"Loaded language preference: {lang_code}")
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in config file: {e}")
             translations.set_language('en')
@@ -335,10 +336,11 @@ class YouTubeDownloader:
     def _load_auto_check_updates_setting(self):
         """Load auto-check updates setting from config"""
         try:
-            if CONFIG_FILE.exists():
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    return config.get('auto_check_updates', True)  # Default to True
+            with self.config_lock:
+                if CONFIG_FILE.exists():
+                    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                        return config.get('auto_check_updates', True)  # Default to True
         except Exception as e:
             logger.error(f"Error loading auto_check_updates setting: {e}")
         return True  # Default to True
@@ -366,12 +368,13 @@ class YouTubeDownloader:
     def _load_theme_preference(self):
         """Load saved theme preference from config"""
         try:
-            if CONFIG_FILE.exists():
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    theme = config.get('theme', 'dark')
-                    if theme in THEMES:
-                        return theme
+            with self.config_lock:
+                if CONFIG_FILE.exists():
+                    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
+                        theme = config.get('theme', 'dark')
+                        if theme in THEMES:
+                            return theme
         except Exception as e:
             logger.error(f"Error loading theme preference: {e}")
         return 'dark'
@@ -616,7 +619,7 @@ class YouTubeDownloader:
         try:
             logger.info("Checking for updates...")
             if not silent:
-                self.root.after(0, lambda: self.update_status(tr('update_checking'), "blue"))
+                self._safe_after(0, lambda: self.update_status(tr('update_checking'), "blue"))
 
             # Check app update from GitHub
             try:
@@ -631,7 +634,7 @@ class YouTubeDownloader:
 
                 if latest_version and self._version_newer(latest_version, APP_VERSION):
                     logger.info(f"App update available: {APP_VERSION} -> {latest_version}")
-                    self.root.after(0, lambda: self._show_update_dialog(latest_version, data))
+                    self._safe_after(0, lambda: self._show_update_dialog(latest_version, data))
                     return
                 else:
                     logger.info(f"App is up to date: {APP_VERSION}")
@@ -668,9 +671,9 @@ class YouTubeDownloader:
 
             # Show appropriate dialog based on what was found
             if ytdlp_update_available:
-                self.root.after(0, lambda: self._show_ytdlp_update_dialog(ytdlp_current, ytdlp_latest))
+                self._safe_after(0, lambda: self._show_ytdlp_update_dialog(ytdlp_current, ytdlp_latest))
             elif not silent:
-                self.root.after(0, lambda: messagebox.showinfo(
+                self._safe_after(0, lambda: messagebox.showinfo(
                     tr('update_up_to_date_title'),
                     tr('update_up_to_date_msg', version=APP_VERSION)
                 ))
@@ -678,14 +681,14 @@ class YouTubeDownloader:
         except urllib.error.URLError as e:
             logger.error(f"Network error checking for updates: {e}")
             if not silent:
-                self.root.after(0, lambda: messagebox.showerror(
+                self._safe_after(0, lambda: messagebox.showerror(
                     tr('update_error_title'),
                     tr('update_error_msg', error=str(e))
                 ))
         except Exception as e:
             logger.error(f"Error checking for updates: {e}")
             if not silent:
-                self.root.after(0, lambda: messagebox.showerror(
+                self._safe_after(0, lambda: messagebox.showerror(
                     tr('update_error_title'),
                     tr('update_error_msg', error=str(e))
                 ))
@@ -771,7 +774,7 @@ class YouTubeDownloader:
         import tempfile
 
         try:
-            self.root.after(0, lambda: self.update_status(tr('update_downloading'), "blue"))
+            self._safe_after(0, lambda: self.update_status(tr('update_downloading'), "blue"))
 
             tag_name = release_data.get('tag_name', 'main')
             headers = {'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
@@ -816,15 +819,15 @@ class YouTubeDownloader:
                 shutil.move(tmp_path, module_path)
                 logger.info(f"Updated: {module_path}")
 
-            self.root.after(0, lambda: self.update_status(tr('update_complete_title'), "green"))
-            self.root.after(0, lambda: messagebox.showinfo(
+            self._safe_after(0, lambda: self.update_status(tr('update_complete_title'), "green"))
+            self._safe_after(0, lambda: messagebox.showinfo(
                 tr('update_complete_title'),
                 tr('update_complete_msg')
             ))
 
         except Exception as e:
             logger.error(f"Error applying update: {e}")
-            self.root.after(0, lambda: messagebox.showerror(
+            self._safe_after(0, lambda: messagebox.showerror(
                 tr('update_failed_title'),
                 tr('update_failed_msg', error=str(e))
             ))
@@ -913,7 +916,7 @@ class YouTubeDownloader:
         """Apply yt-dlp update using pip (when running from source)."""
         try:
             logger.info("Updating yt-dlp via pip...")
-            self.root.after(0, lambda: self.update_status(tr('ytdlp_updating'), "blue"))
+            self._safe_after(0, lambda: self.update_status(tr('ytdlp_updating'), "blue"))
 
             result = subprocess.run(
                 [pip_path, 'install', '--upgrade', 'yt-dlp'],
@@ -926,10 +929,10 @@ class YouTubeDownloader:
                 new_version = self._get_ytdlp_version() or "unknown"
                 logger.info(f"yt-dlp updated successfully to {new_version}")
 
-                self.root.after(0, lambda: self.update_status(
+                self._safe_after(0, lambda: self.update_status(
                     tr('ytdlp_current_version', version=new_version), "green"
                 ))
-                self.root.after(0, lambda: messagebox.showinfo(
+                self._safe_after(0, lambda: messagebox.showinfo(
                     tr('ytdlp_update_success_title'),
                     tr('ytdlp_update_success_msg', version=new_version)
                 ))
@@ -939,13 +942,13 @@ class YouTubeDownloader:
 
         except subprocess.TimeoutExpired:
             logger.error("yt-dlp update timed out")
-            self.root.after(0, lambda: messagebox.showerror(
+            self._safe_after(0, lambda: messagebox.showerror(
                 tr('ytdlp_update_failed_title'),
                 tr('ytdlp_update_failed_msg', error="Update timed out")
             ))
         except Exception as e:
             logger.error(f"Error updating yt-dlp: {e}")
-            self.root.after(0, lambda: messagebox.showerror(
+            self._safe_after(0, lambda: messagebox.showerror(
                 tr('ytdlp_update_failed_title'),
                 tr('ytdlp_update_failed_msg', error=str(e))
             ))
@@ -957,7 +960,7 @@ class YouTubeDownloader:
 
         try:
             logger.info("Downloading latest yt-dlp binary...")
-            self.root.after(0, lambda: self.update_status(tr('ytdlp_updating'), "blue"))
+            self._safe_after(0, lambda: self.update_status(tr('ytdlp_updating'), "blue"))
 
             headers = {'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
             exe_dir = os.path.dirname(sys.executable)
@@ -1028,10 +1031,10 @@ class YouTubeDownloader:
             new_version = self._get_ytdlp_version() or latest_version
             logger.info(f"yt-dlp binary updated successfully to {new_version}")
 
-            self.root.after(0, lambda: self.update_status(
+            self._safe_after(0, lambda: self.update_status(
                 tr('ytdlp_current_version', version=new_version), "green"
             ))
-            self.root.after(0, lambda: messagebox.showinfo(
+            self._safe_after(0, lambda: messagebox.showinfo(
                 tr('ytdlp_update_success_title'),
                 tr('ytdlp_update_success_msg', version=new_version)
             ))
@@ -1043,7 +1046,7 @@ class YouTubeDownloader:
                 except OSError:
                     pass
             logger.error(f"Error downloading yt-dlp binary: {e}")
-            self.root.after(0, lambda: messagebox.showerror(
+            self._safe_after(0, lambda: messagebox.showerror(
                 tr('ytdlp_update_failed_title'),
                 tr('ytdlp_update_failed_msg', error=str(e))
             ))
@@ -2383,24 +2386,24 @@ class YouTubeDownloader:
 
             url = item['url']
 
-            self.root.after(0, lambda u=url: self._update_url_status(u, 'downloading'))
-            self.root.after(0, lambda i=index, t=total_count:
+            self._safe_after(0, lambda u=url: self._update_url_status(u, 'downloading'))
+            self._safe_after(0, lambda i=index, t=total_count:
                 self.clipboard_total_label.config(text=tr('label_completed_total', done=i, total=t)))
-            self.root.after(0, lambda u=url:
+            self._safe_after(0, lambda u=url:
                 self.update_clipboard_status(tr('status_clipboard_downloading', url=u[:50]), "blue"))
 
             success = self._download_clipboard_url(url, check_stop=True)
 
             if success:
-                self.root.after(0, lambda u=url: self._update_url_status(u, 'completed'))
+                self._safe_after(0, lambda u=url: self._update_url_status(u, 'completed'))
             else:
-                self.root.after(0, lambda u=url: self._update_url_status(u, 'failed'))
+                self._safe_after(0, lambda u=url: self._update_url_status(u, 'failed'))
 
             completed = index + 1
-            self.root.after(0, lambda c=completed, t=total_count:
+            self._safe_after(0, lambda c=completed, t=total_count:
                 self.clipboard_total_label.config(text=tr('label_completed_total', done=c, total=t)))
 
-        self.root.after(0, self._finish_clipboard_downloads)
+        self._safe_after(0, self._finish_clipboard_downloads)
 
     def _download_clipboard_url(self, url, check_stop=False, check_stop_auto=False):
         """Download single URL or playlist from clipboard mode (blocking, runs in thread). Returns True if successful."""
@@ -2417,8 +2420,8 @@ class YouTubeDownloader:
             # Determine if we're actually downloading as a playlist
             download_as_playlist = is_playlist_url and full_playlist_enabled
 
-            self.root.after(0, lambda: self.clipboard_progress.config(value=0))
-            self.root.after(0, lambda: self.clipboard_progress_label.config(text="0%"))
+            self._safe_after(0, lambda: self.clipboard_progress.config(value=0))
+            self._safe_after(0, lambda: self.clipboard_progress_label.config(text="0%"))
 
             # Use playlist-appropriate output template only when downloading full playlist
             if audio_only:
@@ -2492,26 +2495,26 @@ class YouTubeDownloader:
                     progress_match = PROGRESS_REGEX.search(line)
                     if progress_match:
                         progress = float(progress_match.group(1))
-                        self.root.after(0, lambda p=progress: self.update_clipboard_progress(p))
+                        self._safe_after(0, lambda p=progress: self.update_clipboard_progress(p))
 
                         # Show phase-specific status with playlist info if applicable
                         phase = current_phase
                         pinfo = playlist_item_info
-                        self.root.after(0, lambda p=progress, ph=phase, pi=pinfo: self.update_clipboard_status(
+                        self._safe_after(0, lambda p=progress, ph=phase, pi=pinfo: self.update_clipboard_status(
                             tr('status_clipboard_downloading_phase', phase=ph, info=pi, progress=f"{p:.1f}"), "blue"))
 
                 # Show merging/processing status
                 elif '[Merger]' in line or 'Merging' in line:
-                    self.root.after(0, lambda: self.update_clipboard_status(tr('status_merging'), "blue"))
+                    self._safe_after(0, lambda: self.update_clipboard_status(tr('status_merging'), "blue"))
                 elif '[ffmpeg]' in line:
-                    self.root.after(0, lambda: self.update_clipboard_status(tr('status_processing_ffmpeg'), "blue"))
+                    self._safe_after(0, lambda: self.update_clipboard_status(tr('status_processing_ffmpeg'), "blue"))
                 elif '[ExtractAudio]' in line:
-                    self.root.after(0, lambda: self.update_clipboard_status(tr('status_extracting_audio'), "blue"))
+                    self._safe_after(0, lambda: self.update_clipboard_status(tr('status_extracting_audio'), "blue"))
 
             process.wait()
 
             if process.returncode == 0:
-                self.root.after(0, lambda: self.update_clipboard_progress(PROGRESS_COMPLETE))
+                self._safe_after(0, lambda: self.update_clipboard_progress(PROGRESS_COMPLETE))
                 logger.info(f"Clipboard download completed: {url}")
                 success = True
             else:
@@ -2589,10 +2592,10 @@ class YouTubeDownloader:
         with self.auto_download_lock:
             is_auto_downloading = self.clipboard_auto_downloading
         if not is_auto_downloading:
-            self.root.after(0, lambda: self._update_url_status(url, 'pending'))
+            self._safe_after(0, lambda: self._update_url_status(url, 'pending'))
             return
 
-        self.root.after(0, lambda: self.update_clipboard_status(tr('status_auto_downloading', url=url[:50]), "blue"))
+        self._safe_after(0, lambda: self.update_clipboard_status(tr('status_auto_downloading', url=url[:50]), "blue"))
 
         success = self._download_clipboard_url(url, check_stop_auto=True)
 
@@ -2600,12 +2603,12 @@ class YouTubeDownloader:
         with self.auto_download_lock:
             is_auto_downloading = self.clipboard_auto_downloading
         if not is_auto_downloading:
-            self.root.after(0, lambda: self._update_url_status(url, 'pending'))
-            self.root.after(0, lambda: self.update_clipboard_status(tr('status_auto_download_stopped'), "orange"))
+            self._safe_after(0, lambda: self._update_url_status(url, 'pending'))
+            self._safe_after(0, lambda: self.update_clipboard_status(tr('status_auto_download_stopped'), "orange"))
             return
 
         # Schedule all UI updates and next download in a single callback to ensure order
-        self.root.after(0, lambda: self._handle_auto_download_complete(url, success))
+        self._safe_after(0, lambda: self._handle_auto_download_complete(url, success))
 
     def _handle_auto_download_complete(self, url, success):
         """Handle auto-download completion - runs on main thread"""
@@ -2896,7 +2899,7 @@ class YouTubeDownloader:
                     self.video_title = video_title
                     logger.info(f"Video title: {video_title}")
 
-                self.root.after(0, lambda: self._update_duration_ui(video_title))
+                self._safe_after(0, lambda: self._update_duration_ui(video_title))
 
                 # Fetch estimated file size
                 self._fetch_file_size(url)
@@ -2908,24 +2911,24 @@ class YouTubeDownloader:
 
         except subprocess.TimeoutExpired:
             error_msg = tr('error_request_timeout')
-            self.root.after(0, lambda: messagebox.showerror(tr('error_title'), error_msg))
+            self._safe_after(0, lambda: messagebox.showerror(tr('error_title'), error_msg))
             self.update_status(tr('status_duration_timeout'), "red")
             logger.error("Timeout fetching video duration")
         except ValueError as e:
             error_msg = tr('error_invalid_duration', error=str(e))
-            self.root.after(0, lambda: messagebox.showerror(tr('error_title'), error_msg))
+            self._safe_after(0, lambda: messagebox.showerror(tr('error_title'), error_msg))
             self.update_status(tr('status_invalid_duration_format'), "red")
             logger.error(f"Duration parsing error: {e}")
         except Exception as e:
             err_msg = tr('error_fetch_duration_failed', error=str(e))
-            self.root.after(0, lambda: messagebox.showerror(tr('error_title'), err_msg))
+            self._safe_after(0, lambda: messagebox.showerror(tr('error_title'), err_msg))
             self.update_status(tr('status_duration_fetch_failed'), "red")
             logger.exception(f"Unexpected error fetching duration: {e}")
 
         finally:
             with self.fetch_lock:
                 self.is_fetching_duration = False
-            self.root.after(0, lambda: self.fetch_duration_btn.config(state='normal') if self.trim_enabled_var.get() else None)
+            self._safe_after(0, lambda: self.fetch_duration_btn.config(state='normal') if self.trim_enabled_var.get() else None)
 
     def _update_duration_ui(self, video_title=None):
         """Update duration-related UI elements on the main thread"""
@@ -2961,7 +2964,7 @@ class YouTubeDownloader:
                 quality = self.quality_var.get()
 
                 # Build format selector based on quality
-                if quality.startswith("none"):
+                if quality.startswith("none") or quality == tr('quality_audio_only'):
                     format_selector = "bestaudio"
                 else:
                     format_selector = f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]'
@@ -2976,14 +2979,14 @@ class YouTubeDownloader:
                     if filesize:
                         # Convert to MB and update UI on main thread
                         filesize_mb = filesize / BYTES_PER_MB
-                        self.root.after(0, lambda: self._update_filesize_display(filesize, filesize_mb))
+                        self._safe_after(0, lambda: self._update_filesize_display(filesize, filesize_mb))
                     else:
-                        self.root.after(0, lambda: self._update_filesize_display(None, None))
+                        self._safe_after(0, lambda: self._update_filesize_display(None, None))
                 else:
-                    self.root.after(0, lambda: self._update_filesize_display(None, None))
+                    self._safe_after(0, lambda: self._update_filesize_display(None, None))
             except Exception as e:
                 logger.debug(f"Could not fetch file size: {e}")
-                self.root.after(0, lambda: self._update_filesize_display(None, None))
+                self._safe_after(0, lambda: self._update_filesize_display(None, None))
 
         # Run in background thread
         self.thread_pool.submit(_fetch)
@@ -3063,29 +3066,29 @@ class YouTubeDownloader:
             video_title = Path(filepath).stem
 
             # Update UI on main thread
-            self.root.after(0, lambda vt=video_title: self._update_duration_ui_local(vt))
+            self._safe_after(0, lambda vt=video_title: self._update_duration_ui_local(vt))
             self.update_status(tr('status_duration_fetched'), "green")
             logger.info(f"Local file duration: {self.video_duration}s")
 
         except subprocess.CalledProcessError as e:
             error_msg = tr('error_read_video_failed', error=(e.stderr if e.stderr else str(e)))
-            self.root.after(0, lambda: messagebox.showerror(tr('error_title'), error_msg))
+            self._safe_after(0, lambda: messagebox.showerror(tr('error_title'), error_msg))
             self.update_status(tr('error_read_file_failed', error=''), "red")
             logger.error(f"ffprobe error: {e}")
         except ValueError as e:
             error_msg = tr('error_invalid_video_format')
-            self.root.after(0, lambda: messagebox.showerror(tr('error_title'), error_msg))
+            self._safe_after(0, lambda: messagebox.showerror(tr('error_title'), error_msg))
             self.update_status(tr('error_invalid_video_format'), "red")
             logger.error(f"Duration parsing error: {e}")
         except Exception as e:
             err_msg = tr('error_read_file_failed', error=str(e))
-            self.root.after(0, lambda: messagebox.showerror(tr('error_title'), err_msg))
+            self._safe_after(0, lambda: messagebox.showerror(tr('error_title'), err_msg))
             self.update_status(tr('error_read_file_failed', error=''), "red")
             logger.exception(f"Unexpected error reading local file: {e}")
         finally:
             with self.fetch_lock:
                 self.is_fetching_duration = False
-            self.root.after(0, lambda: self.fetch_duration_btn.config(state='normal') if self.trim_enabled_var.get() else None)
+            self._safe_after(0, lambda: self.fetch_duration_btn.config(state='normal') if self.trim_enabled_var.get() else None)
 
     def on_slider_change(self, event=None):
         """Handle slider changes and enforce valid time ranges.
@@ -3241,12 +3244,12 @@ class YouTubeDownloader:
             file_url = self.catbox_client.upload(self.last_output_file)
 
             # Update UI on success
-            self.root.after(0, lambda: self._upload_success(file_url))
+            self._safe_after(0, lambda: self._upload_success(file_url))
             logger.info(f"Upload successful: {file_url}")
 
         except Exception as e:
             error_msg = str(e)
-            self.root.after(0, lambda: self._upload_failed(error_msg))
+            self._safe_after(0, lambda: self._upload_failed(error_msg))
             logger.exception(f"Upload failed: {e}")
 
         finally:
@@ -3319,7 +3322,9 @@ class YouTubeDownloader:
                     continue
 
                 # Add to queue if not already there
-                if not any(item['path'] == file_path for item in self.uploader_file_queue):
+                with self.uploader_lock:
+                    already_in_queue = any(item['path'] == file_path for item in self.uploader_file_queue)
+                if not already_in_queue:
                     self._add_file_to_uploader_queue(file_path)
                     logger.info(f"Added file to upload queue: {file_path}")
 
@@ -3338,26 +3343,29 @@ class YouTubeDownloader:
                               command=lambda: self._remove_file_from_queue(file_path))
         remove_btn.pack(side=tk.RIGHT, padx=5)
 
-        self.uploader_file_queue.append({'path': file_path, 'widget': file_frame})
+        with self.uploader_lock:
+            self.uploader_file_queue.append({'path': file_path, 'widget': file_frame})
         self._update_uploader_queue_count()
 
         with self.uploader_lock:
             is_uploading = self.uploader_is_uploading
-        if len(self.uploader_file_queue) > 0 and not is_uploading:
+            queue_len = len(self.uploader_file_queue)
+        if queue_len > 0 and not is_uploading:
             self.uploader_upload_btn.config(state='normal')
 
     def _remove_file_from_queue(self, file_path):
         """Remove a file from the upload queue"""
-        for i, item in enumerate(self.uploader_file_queue):
-            if item['path'] == file_path:
-                if item['widget']:
-                    item['widget'].destroy()
-                self.uploader_file_queue.pop(i)
-                self._update_uploader_queue_count()
-                if len(self.uploader_file_queue) == 0:
-                    self.uploader_upload_btn.config(state='disabled')
-                logger.info(f"Removed file from queue: {file_path}")
-                break
+        with self.uploader_lock:
+            for i, item in enumerate(self.uploader_file_queue):
+                if item['path'] == file_path:
+                    if item['widget']:
+                        item['widget'].destroy()
+                    self.uploader_file_queue.pop(i)
+                    self._update_uploader_queue_count()
+                    if len(self.uploader_file_queue) == 0:
+                        self.uploader_upload_btn.config(state='disabled')
+                    logger.info(f"Removed file from queue: {file_path}")
+                    break
 
     def clear_uploader_queue(self):
         """Clear all files from upload queue"""
@@ -3367,24 +3375,28 @@ class YouTubeDownloader:
             messagebox.showwarning(tr('warning_cannot_clear_title'), tr('warning_cannot_clear_uploading'))
             return
 
-        for item in self.uploader_file_queue:
-            if item['widget']:
-                item['widget'].destroy()
+        with self.uploader_lock:
+            for item in self.uploader_file_queue:
+                if item['widget']:
+                    item['widget'].destroy()
 
-        self.uploader_file_queue.clear()
+            self.uploader_file_queue.clear()
         self._update_uploader_queue_count()
         self.uploader_upload_btn.config(state='disabled')
         logger.info("Cleared all files from upload queue")
 
     def _update_uploader_queue_count(self):
         """Update file queue count label"""
-        count = len(self.uploader_file_queue)
+        with self.uploader_lock:
+            count = len(self.uploader_file_queue)
         s = 's' if count != 1 else ''
         self.uploader_queue_count_label.config(text=tr('label_file_count', count=count, s=s))
 
     def start_uploader_upload(self):
         """Start uploading all files in queue sequentially"""
-        if len(self.uploader_file_queue) == 0:
+        with self.uploader_lock:
+            queue_empty = len(self.uploader_file_queue) == 0
+        if queue_empty:
             messagebox.showinfo(tr('warning_no_files_title'), tr('warning_no_files'))
             return
 
@@ -3418,7 +3430,7 @@ class YouTubeDownloader:
             file_path = item['path']
             filename = os.path.basename(file_path)
 
-            self.root.after(0, lambda i=index, t=total_count, fn=filename:
+            self._safe_after(0, lambda i=index, t=total_count, fn=filename:
                 self.uploader_status_label.config(
                     text=tr('status_uploading_file', current=i+1, total=t, filename=fn),
                     foreground="blue"))
@@ -3429,7 +3441,7 @@ class YouTubeDownloader:
                 # Continue with next file even if one fails
                 continue
 
-        self.root.after(0, self._finish_uploader_queue)
+        self._safe_after(0, self._finish_uploader_queue)
 
     def _upload_single_file(self, file_path):
         """Upload a single file from the queue. Returns True if successful."""
@@ -3444,7 +3456,7 @@ class YouTubeDownloader:
             self.save_upload_link(file_url, filename)
 
             # Show latest URL in entry field
-            self.root.after(0, lambda url=file_url: self._show_upload_url(url))
+            self._safe_after(0, lambda url=file_url: self._show_upload_url(url))
 
             logger.info(f"Upload successful: {file_url}")
             return True
@@ -3454,7 +3466,7 @@ class YouTubeDownloader:
             error_msg = str(e)
             filename = os.path.basename(file_path)
             full_error = f"Failed to upload {filename}:\n\n{error_msg}"
-            self.root.after(0, lambda msg=full_error:
+            self._safe_after(0, lambda msg=full_error:
                 messagebox.showerror(tr('info_upload_failed_title'), msg))
             return False
 
@@ -3478,13 +3490,13 @@ class YouTubeDownloader:
         with self.uploader_lock:
             self.uploader_is_uploading = False
 
-        # Clear the queue
-        for item in self.uploader_file_queue:
-            if item['widget']:
-                item['widget'].destroy()
+            # Clear the queue
+            for item in self.uploader_file_queue:
+                if item['widget']:
+                    item['widget'].destroy()
 
-        count = len(self.uploader_file_queue)
-        self.uploader_file_queue.clear()
+            count = len(self.uploader_file_queue)
+            self.uploader_file_queue.clear()
         self._update_uploader_queue_count()
 
         self.uploader_status_label.config(text=tr('status_all_uploads_complete', count=count), foreground="green")
@@ -3525,7 +3537,7 @@ class YouTubeDownloader:
         """Enable upload button after successful download (thread-safe)"""
         if filepath and os.path.isfile(filepath):
             self.last_output_file = filepath
-            self.root.after(0, lambda: self._do_enable_upload(filepath))
+            self._safe_after(0, lambda: self._do_enable_upload(filepath))
 
     def _do_enable_upload(self, filepath):
         """Actual upload button enable on main thread"""
@@ -3713,7 +3725,7 @@ class YouTubeDownloader:
                 # Show error placeholder if extraction failed
                 error_img = self.create_placeholder_image(PREVIEW_WIDTH, PREVIEW_HEIGHT, tr('label_error'))
                 self.start_preview_image = error_img  # Keep reference to avoid GC
-                self.root.after(0, lambda img=error_img: self._set_start_preview(img))
+                self._safe_after(0, lambda img=error_img: self._set_start_preview(img))
 
             # Extract end frame (using adjusted time to avoid EOF issues)
             end_frame_path = self.extract_frame(adjusted_end_time)
@@ -3723,7 +3735,7 @@ class YouTubeDownloader:
                 # Show error placeholder if extraction failed
                 error_img = self.create_placeholder_image(PREVIEW_WIDTH, PREVIEW_HEIGHT, tr('label_error'))
                 self.end_preview_image = error_img  # Keep reference to avoid GC
-                self.root.after(0, lambda img=error_img: self._set_end_preview(img))
+                self._safe_after(0, lambda img=error_img: self._set_end_preview(img))
         finally:
             # Use lock when resetting flag to prevent race condition with spawn check
             with self.preview_lock:
@@ -3742,10 +3754,10 @@ class YouTubeDownloader:
             # The lambda uses default argument to capture the photo object immediately
             if position == 'start':
                 self.start_preview_image = photo  # Keep reference to avoid GC
-                self.root.after(0, lambda p=photo: self._set_start_preview(p))
+                self._safe_after(0, lambda p=photo: self._set_start_preview(p))
             else:
                 self.end_preview_image = photo  # Keep reference to avoid GC
-                self.root.after(0, lambda p=photo: self._set_end_preview(p))
+                self._safe_after(0, lambda p=photo: self._set_end_preview(p))
 
         except Exception as e:
             logger.error(f"Error updating preview image for {position}: {e}")
@@ -4035,10 +4047,7 @@ class YouTubeDownloader:
                 elapsed = current_time - self.download_start_time
                 if elapsed > DOWNLOAD_TIMEOUT:
                     logger.error(f"Download exceeded absolute timeout ({DOWNLOAD_TIMEOUT}s)")
-                    try:
-                        self.root.after(0, lambda: self._timeout_download(tr('timeout_download_absolute')))
-                    except (RuntimeError, tk.TclError):
-                        break
+                    self._safe_after(0, lambda: self._timeout_download(tr('timeout_download_absolute')))
                     break
 
             # Check progress timeout (stalled download)
@@ -4046,10 +4055,7 @@ class YouTubeDownloader:
                 time_since_progress = current_time - self.last_progress_time
                 if time_since_progress > DOWNLOAD_PROGRESS_TIMEOUT:
                     logger.error(f"Download stalled (no progress for {DOWNLOAD_PROGRESS_TIMEOUT}s)")
-                    try:
-                        self.root.after(0, lambda: self._timeout_download(tr('timeout_download_stalled')))
-                    except (RuntimeError, tk.TclError):
-                        break
+                    self._safe_after(0, lambda: self._timeout_download(tr('timeout_download_stalled')))
                     break
 
     def _timeout_download(self, reason):
@@ -4261,7 +4267,7 @@ class YouTubeDownloader:
 
             quality = self.quality_var.get()
             trim_enabled = self.trim_enabled_var.get()
-            audio_only = quality.startswith("none")
+            audio_only = quality.startswith("none") or quality == tr('quality_audio_only')
 
             self.update_status(tr('status_starting_download'), "blue")
 
@@ -4340,7 +4346,7 @@ class YouTubeDownloader:
 
                 cmd.append(url)
             else:
-                if quality.startswith("none"):
+                if quality.startswith("none") or quality == tr('quality_audio_only'):
                     self.update_status(tr('error_select_quality'), "red")
                     self._reset_buttons()
                     with self.download_lock:
@@ -4619,7 +4625,11 @@ class YouTubeDownloader:
         try:
             quality = self.quality_var.get()
             trim_enabled = self.trim_enabled_var.get()
-            audio_only = quality.startswith("none")
+            audio_only = quality.startswith("none") or quality == tr('quality_audio_only')
+
+            # Initialize trim variables so they exist even when trim is disabled
+            start_time = None
+            end_time = None
 
             self.update_status(tr('status_processing_local'), "blue")
 
@@ -4681,7 +4691,7 @@ class YouTubeDownloader:
                 cmd.extend(['-progress', 'pipe:1', '-y', output_file])
             else:
                 # Video processing
-                if quality.startswith("none"):
+                if quality.startswith("none") or quality == tr('quality_audio_only'):
                     self.update_status(tr('error_select_quality'), "red")
                     self._reset_buttons()
                     with self.download_lock:
@@ -4794,12 +4804,20 @@ class YouTubeDownloader:
                     proc.stderr.close()
             self._reset_buttons()
 
+    def _safe_after(self, delay, callback):
+        """Schedule callback on main thread, but only if not shutting down."""
+        if not self._shutting_down:
+            try:
+                self.root.after(delay, callback)
+            except (RuntimeError, tk.TclError):
+                pass
+
     def update_progress(self, value):
         """Update main progress bar with validation (thread-safe)"""
         try:
             value = float(value)
             value = max(0, min(100, value))  # Clamp to 0-100
-            self.root.after(0, lambda v=value: self._do_update_progress(v))
+            self._safe_after(0, lambda v=value: self._do_update_progress(v))
         except (ValueError, TypeError) as e:
             logger.warning(f"Invalid progress value: {value} - {e}")
 
@@ -4810,11 +4828,11 @@ class YouTubeDownloader:
 
     def update_status(self, message, color):
         """Update status label (thread-safe)"""
-        self.root.after(0, lambda m=message, c=color: self.status_label.config(text=m, foreground=c))
+        self._safe_after(0, lambda m=message, c=color: self.status_label.config(text=m, foreground=c))
 
     def _reset_buttons(self):
         """Reset download/stop buttons to idle state (thread-safe)"""
-        self.root.after(0, lambda: (
+        self._safe_after(0, lambda: (
             self.download_btn.config(state='normal'),
             self.stop_btn.config(state='disabled')
         ))

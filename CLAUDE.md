@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **YouTube Downloader** is a Python desktop application for downloading videos from YouTube and other supported sites. It features a tkinter GUI with internationalization, quality selection, thumbnail previews, and integration with Catbox for file uploads.
 
-**Version:** 3.8.0
+**Version:** 3.9.2
 
 ## Files Structure
 
@@ -69,7 +69,7 @@ Recent refactoring extracted:
 
 ## Update System
 
-**Status:** Fully implemented with syntax checking and UI toggle
+**Status:** Fully implemented with integrity verification and UI toggle
 
 **Components:**
 - `_load_auto_check_updates_setting()`: Load preference from config
@@ -77,16 +77,22 @@ Recent refactoring extracted:
 - `_check_for_updates()`: Fetches latest release from GitHub API
 - `_version_newer()`: Semantic version comparison
 - `_show_update_dialog()`: Modal with Update Now / Open Releases / Later
-- `_apply_update()`: Downloads, syntax-checks via compile(), backs up, and applies update
+- `_apply_update()`: Downloads, verifies integrity, backs up, and applies update
+- `_safe_after()`: Thread-safe scheduling that prevents crashes during shutdown
 
 **GitHub Integration:**
 - Repository: `jj-repository/YoutubeDownloader`
 - API: `https://api.github.com/repos/jj-repository/YoutubeDownloader/releases/latest`
 
 **Security:**
-- SHA256 checksum verification was removed in favor of syntax checking via `compile()`
+- App updates verified against GitHub's git tree SHA (git blob hash comparison)
+- yt-dlp binary updates verified against published SHA2-256SUMS
+- Syntax checking via `compile()` as additional safety net
 - Backup file created before replacing each module
-- Updates all three modules: downloader.py, constants.py, translations.py
+- All three modules downloaded and verified before any are replaced (atomic update)
+- All `root.after()` calls from worker threads use `_safe_after()` to prevent crashes during shutdown
+- Config file access protected by `config_lock` (both reads and writes)
+- Upload queue protected by `uploader_lock` (RLock for reentrant access)
 
 ## Dependencies
 
@@ -201,14 +207,26 @@ Uses `translations.py` module for all language management:
 
 ### Security Review
 - [x] URL validation before download
-- [x] Safe subprocess usage (yt-dlp)
+- [x] Safe subprocess usage (no shell=True)
 - [x] Config validation with schema
-- [x] Syntax checking for updates (compile())
+- [x] Git blob SHA verification for app updates
+- [x] SHA256 verification for yt-dlp binary updates
 - [x] No command injection (proper argument passing)
 - [x] Timeout on all network operations
+- [x] Config file access protected by lock
+- [x] Unpredictable temp file names (tempfile module)
+
+### Thread Safety Review
+- [x] download_lock protects is_downloading state
+- [x] clipboard_lock protects clipboard URL list
+- [x] config_lock protects config read/write
+- [x] uploader_lock (RLock) protects upload queue
+- [x] _safe_after() prevents TclError from worker threads on shutdown
+- [x] _shutting_down flag for graceful thread termination
 
 ### Internationalization Review
 - [x] All UI strings use tr()
+- [x] Audio-only detection works in all languages
 - [x] URL validation messages internationalized
 - [x] Error messages internationalized
 - [x] Language switching works
@@ -217,7 +235,9 @@ Uses `translations.py` module for all language management:
 - [x] Modular design (constants.py, translations.py)
 - [x] Config validation
 - [x] Proper error handling
-- [x] Logging implemented
+- [x] Log rotation (5MB max, 2 backups)
+- [x] Upload history capped (1000 lines max)
+- [x] Preview cache files cleaned from disk
 
 ## Quality Standards
 
@@ -248,6 +268,9 @@ Uses `translations.py` module for all language management:
 |-------|--------|
 | Large single file (downloader.py) | Works fine; further splitting adds complexity |
 | Hardcoded site patterns | yt-dlp handles site detection; our patterns are just hints |
+| _find_latest_file heuristic | Picks newest file in Downloads; rare edge case if another app writes simultaneously |
+| Catbox upload no timeout/cancel | Third-party library limitation; would require significant refactoring |
+| Slider change detection heuristic | Minor edge case in rapid slider manipulation |
 
 ## Completed Optimizations
 
