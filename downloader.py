@@ -108,6 +108,16 @@ class YouTubeDownloader:
             self.root.minsize(750, 600)
         self.root.resizable(True, True)
 
+        # Set window icon
+        try:
+            icon_path = self._get_resource_path('icon.png')
+            if os.path.exists(icon_path):
+                icon_img = ImageTk.PhotoImage(Image.open(icon_path))
+                self.root.iconphoto(True, icon_img)
+                self._icon_ref = icon_img  # Keep reference
+        except Exception as e:
+            logger.error(f"Error setting window icon: {e}")
+
         self.download_path = str(Path.home() / "Downloads")
         self.current_process = None
         self.is_downloading = False

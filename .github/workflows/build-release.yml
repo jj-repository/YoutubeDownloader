@@ -67,7 +67,7 @@ jobs:
     - name: Build executable (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
-        pyinstaller --onefile --name YoutubeDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
+        pyinstaller --onefile --name YoutubeDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --add-data "icon.png:." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
 
     - name: Download and bundle ffmpeg (Windows)
       if: matrix.os == 'windows-latest'
@@ -88,12 +88,12 @@ jobs:
     - name: Build portable executable (Windows onefile)
       if: matrix.os == 'windows-latest'
       run: |
-        pyinstaller --onefile --name YoutubeDownloader --windowed --icon=NONE --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
+        pyinstaller --onefile --name YoutubeDownloader --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
 
     - name: Build installer executable (Windows onedir)
       if: matrix.os == 'windows-latest'
       run: |
-        pyinstaller --onedir --name YoutubeDownloader --windowed --icon=NONE --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL --distpath dist_onedir downloader.py
+        pyinstaller --onedir --name YoutubeDownloader --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL --distpath dist_onedir downloader.py
 
     - name: Create release package (Linux)
       if: matrix.os == 'ubuntu-latest'
@@ -127,6 +127,7 @@ jobs:
         OutputBaseFilename=YTDownloaderInstaller-Win
         Compression=lzma2
         SolidCompression=yes
+        SetupIconFile=icon.ico
         UninstallDisplayIcon={app}\YoutubeDownloader.exe
         ArchitecturesInstallIn64BitMode=x64compatible
         WizardStyle=modern
