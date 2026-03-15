@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**YouTube Downloader** is a Python desktop application for downloading videos from YouTube and other supported sites. It features a tkinter GUI with internationalization, quality selection, thumbnail previews, and integration with Catbox for file uploads.
+**YouTube Downloader** is a Python desktop application for downloading videos from YouTube and other supported sites. It features a tkinter GUI with quality selection, thumbnail previews, and integration with Catbox for file uploads.
 
 **Version:** 3.9.2
 
@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 YoutubeDownloader/
 ├── downloader.py          # Main application
 ├── constants.py           # Configuration constants and paths
-├── translations.py        # i18n translations (English, German, Polish)
+├── translations.py        # UI strings (English only)
 ├── requirements.txt       # Python dependencies
 └── CLAUDE.md              # This file
 ```
@@ -51,7 +51,7 @@ Recent refactoring extracted:
 - Thumbnail preview with caching
 - Clipboard monitoring for URLs
 - Upload to Catbox with history
-- Multi-language support (English (en), German (de), Polish (pl))
+- English-only UI strings via translations.py
 - Dark theme UI
 
 ## Configuration
@@ -59,7 +59,6 @@ Recent refactoring extracted:
 **Config Path:** `~/.youtubedownloader/config.json`
 
 **Stored Settings:**
-- `language`: UI language ("en", "de", or "pl")
 - `auto_check_updates`: Check for updates on startup (default: true)
 
 **Config Validation:**
@@ -129,21 +128,17 @@ MAX_VIDEO_DURATION = 86400    # 24 hours
 
 ## Translations (translations.py)
 
-**Supported Languages:**
-- English (en) - default
-- German (de)
-- Polish (pl)
+**Language:** English only
 
 **Usage:**
 ```python
-from translations import tr, set_language
+from translations import tr
 
-set_language('de')
-message = tr('download_complete')  # Returns German translation
+message = tr('download_complete')  # Returns English string
 ```
 
 **Adding new strings:**
-1. Add key to TRANSLATIONS dict with 'en', 'de', and 'pl' values
+1. Add key to TRANSLATIONS['en'] dict
 2. Use `tr('key_name')` in code
 
 ## Clipboard Integration
@@ -165,23 +160,16 @@ message = tr('download_complete')  # Returns German translation
 
 ## Recent Fixes (January 2026)
 
-- Fixed hardcoded English strings in validate_youtube_url() to use translation system
-- All URL validation messages now use tr() for proper internationalization
+- Fixed hardcoded strings in validate_youtube_url() to use tr()
+- All URL validation messages now use tr()
 - Fixed Windows venv path detection (uses Scripts/ and .exe extension instead of bin/)
-
-## Language System
-
-Uses `translations.py` module for all language management:
-- `translations.set_language(code)`: Set current language
-- `translations.get_language()`: Get current language code
-- `tr(key)`: Get translated string for current language
 
 ## Common Development Tasks
 
-### Adding new translation string
-1. Add to TRANSLATIONS in translations.py:
+### Adding new UI string
+1. Add to TRANSLATIONS['en'] in translations.py:
    ```python
-   'new_key': {'en': 'English text', 'de': 'German text', 'pl': 'Polish text'}
+   'new_key': 'English text',
    ```
 2. Use `tr('new_key')` in downloader.py
 
@@ -224,12 +212,10 @@ Uses `translations.py` module for all language management:
 - [x] _safe_after() prevents TclError from worker threads on shutdown
 - [x] _shutting_down flag for graceful thread termination
 
-### Internationalization Review
+### UI Strings Review
 - [x] All UI strings use tr()
-- [x] Audio-only detection works in all languages
-- [x] URL validation messages internationalized
-- [x] Error messages internationalized
-- [x] Language switching works
+- [x] URL validation messages use tr()
+- [x] Error messages use tr()
 
 ### Code Quality
 - [x] Modular design (constants.py, translations.py)
@@ -246,7 +232,7 @@ Uses `translations.py` module for all language management:
 | Aspect | Standard | Status |
 |--------|----------|--------|
 | Security | Safe URL/subprocess handling | Met |
-| i18n | All user-facing strings translated | Met |
+| UI Strings | All user-facing strings in tr() | Met |
 | Reliability | Downloads complete successfully | Met |
 | UX | Progress feedback, quality selection | Met |
 | Documentation | CLAUDE.md current | Met |
@@ -257,7 +243,7 @@ Uses `translations.py` module for all language management:
 |----------|-----------|
 | yt-dlp backend | Best maintained YouTube downloader; handles site changes |
 | Separate constants.py | Clean separation; easy to modify limits/timeouts |
-| Separate translations.py | Easy to add new languages |
+| Separate translations.py | UI strings in one place, easy to find/update |
 | Catbox integration | Convenient sharing for downloaded files |
 | Clipboard monitoring | Common workflow - copy URL, app detects it |
 | Backup before update | Creates .py.backup files before replacing modules |
@@ -274,9 +260,9 @@ Uses `translations.py` module for all language management:
 
 ## Completed Optimizations
 
-- URL validation internationalized
+- URL validation uses tr()
 - Constants extracted to module
-- Translations extracted to module
+- UI strings extracted to translations module
 - Config validation
 - Quality selection with preview
 

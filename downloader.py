@@ -47,10 +47,7 @@ from constants import (
     UPLOAD_HISTORY_FILE, CLIPBOARD_URLS_FILE, CONFIG_FILE, LOG_FILE,
     THEMES,
 )
-from translations import (
-    TRANSLATIONS, tr, set_language, get_language,
-)
-import translations
+from translations import TRANSLATIONS, tr
 
 # Try to import dbus for KDE Klipper integration
 try:
@@ -215,9 +212,6 @@ class YouTubeDownloader:
         # Create clipboard download directory
         Path(self.clipboard_download_path).mkdir(parents=True, exist_ok=True)
 
-        # Load language preference before UI setup
-        self._load_language_preference()
-
         self.setup_ui()
 
         # Bind cleanup on window close
@@ -283,55 +277,6 @@ class YouTubeDownloader:
                     if status == 'failed':
                         self._update_url_status(url, 'failed')
             logger.info(f"Restored {len(self.persisted_clipboard_urls)} URLs to clipboard list")
-
-    def _load_language_preference(self):
-        """Load saved language preference"""
-        try:
-            with self.config_lock:
-                if CONFIG_FILE.exists():
-                    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                        config = json.load(f)
-                        # Validate config structure
-                        if not self.validate_config_json(config):
-                            logger.warning("Invalid config structure, using defaults")
-                            translations.set_language('en')
-                            return
-                        lang_code = config.get('language', 'en')
-                        # Validate language code
-                        if lang_code not in ['en', 'de', 'pl']:
-                            logger.warning(f"Unknown language code '{lang_code}', using 'en'")
-                            lang_code = 'en'
-                        translations.set_language(lang_code)
-                        logger.info(f"Loaded language preference: {lang_code}")
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in config file: {e}")
-            translations.set_language('en')
-        except Exception as e:
-            logger.error(f"Error loading language preference: {e}")
-            translations.set_language('en')
-
-    def _save_language_preference(self):
-        """Save language preference to config file"""
-        with self.config_lock:
-            try:
-                CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-                # Load existing config if any
-                config = {}
-                if CONFIG_FILE.exists():
-                    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                        config = json.load(f)
-
-                # Update language
-                config['language'] = translations.get_language()
-
-                # Save config
-                with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                    json.dump(config, f, indent=2)
-
-                logger.info(f"Saved language preference: {translations.get_language()}")
-            except Exception as e:
-                logger.error(f"Error saving language preference: {e}")
 
     def _load_auto_check_updates_setting(self):
         """Load auto-check updates setting from config"""
@@ -407,45 +352,32 @@ class YouTubeDownloader:
 
     def _setup_settings_tab(self, parent):
         """Setup Settings tab UI"""
-        # Language section
-        ttk.Label(parent, text=tr('language'), font=('Arial', 11, 'bold')).grid(row=0, column=0, sticky=tk.W, pady=(0, 5))
-
-        language_options = ["🇬🇧 English", "🇩🇪 Deutsch", "🇵🇱 Polski"]
-        lang_map_reverse = {'en': 0, 'de': 1, 'pl': 2}
-        initial_index = lang_map_reverse.get(translations.get_language(), 0)
-
-        self.language_var = tk.StringVar(value=language_options[initial_index])
-        self.language_combo = ttk.Combobox(parent, textvariable=self.language_var,
-            values=language_options, state='readonly', width=15)
-        self.language_combo.grid(row=1, column=0, sticky=tk.W, pady=(0, 10))
-        self.language_combo.bind('<<ComboboxSelected>>', self.on_language_change)
-
         # Dark mode toggle
         self.dark_mode_var = tk.BooleanVar(value=self.current_theme == 'dark')
         ttk.Checkbutton(parent, text=tr('theme_dark_mode'),
                        variable=self.dark_mode_var,
-                       command=self._toggle_theme).grid(row=2, column=0, sticky=tk.W, pady=(0, 10))
+                       command=self._toggle_theme).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
-        ttk.Separator(parent).grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        ttk.Separator(parent).grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
         # Update section
-        ttk.Label(parent, text=tr('settings_updates'), font=('Arial', 11, 'bold')).grid(row=4, column=0, sticky=tk.W, pady=(5, 5))
+        ttk.Label(parent, text=tr('settings_updates'), font=('Arial', 11, 'bold')).grid(row=2, column=0, sticky=tk.W, pady=(5, 5))
 
         self.auto_check_updates_var = tk.BooleanVar(value=self._load_auto_check_updates_setting())
         ttk.Checkbutton(parent, text=tr('update_auto_check'),
                        variable=self.auto_check_updates_var,
-                       command=self._save_auto_check_updates_setting).grid(row=5, column=0, sticky=tk.W, pady=(0, 5))
+                       command=self._save_auto_check_updates_setting).grid(row=3, column=0, sticky=tk.W, pady=(0, 5))
 
         ttk.Button(parent, text=tr('update_check_btn'),
-                  command=self._check_for_updates_clicked).grid(row=6, column=0, sticky=tk.W, pady=(0, 10))
+                  command=self._check_for_updates_clicked).grid(row=4, column=0, sticky=tk.W, pady=(0, 10))
 
-        ttk.Separator(parent).grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        ttk.Separator(parent).grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
         # Readme link
         ttk.Button(parent, text="Readme",
-                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme')).grid(row=8, column=0, sticky=tk.W, pady=(5, 10))
+                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme')).grid(row=6, column=0, sticky=tk.W, pady=(5, 10))
 
-        ttk.Separator(parent).grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        ttk.Separator(parent).grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
         # Takodachi image
         try:
@@ -456,13 +388,13 @@ class YouTubeDownloader:
                     photo = ImageTk.PhotoImage(img)
                 img_label = ttk.Label(parent, image=photo)
                 img_label.image = photo  # Keep reference
-                img_label.grid(row=10, column=0, pady=(10, 5))
+                img_label.grid(row=8, column=0, pady=(10, 5))
         except Exception as e:
             logger.error(f"Error loading settings image: {e}")
 
         # Credits
-        ttk.Label(parent, text="by JJ", font=('Arial', 10, 'bold')).grid(row=11, column=0, pady=(5, 2))
-        ttk.Label(parent, text=f"v{APP_VERSION}", font=('Arial', 9)).grid(row=12, column=0)
+        ttk.Label(parent, text="by JJ", font=('Arial', 10, 'bold')).grid(row=9, column=0, pady=(5, 2))
+        ttk.Label(parent, text=f"v{APP_VERSION}", font=('Arial', 9)).grid(row=10, column=0)
 
     def _setup_help_tab(self, parent):
         """Setup Help tab with usage guide"""
@@ -1051,27 +983,6 @@ class YouTubeDownloader:
                 tr('ytdlp_update_failed_msg', error=str(e))
             ))
 
-    def on_language_change(self, event=None):
-        """Handle language selection change"""
-        selected = self.language_var.get()
-        lang_map = {
-            "🇬🇧 English": 'en',
-            "🇩🇪 Deutsch": 'de',
-            "🇵🇱 Polski": 'pl'
-        }
-
-        new_lang = lang_map.get(selected, 'en')
-
-        if new_lang != translations.get_language():
-            translations.set_language(new_lang)
-            self._save_language_preference()
-
-            # Show restart message
-            messagebox.showinfo(
-                tr('info_language_changed_title'),
-                tr('info_language_changed_msg')
-            )
-
     def save_upload_link(self, link, filename=""):
         """Save uploaded video link to history file"""
         try:
@@ -1277,7 +1188,6 @@ class YouTubeDownloader:
 
         # Define allowed keys and their expected types
         allowed_keys = {
-            'language': str,
             'auto_check_updates': bool,
             'theme': str,
         }
@@ -1584,7 +1494,6 @@ class YouTubeDownloader:
         - Uploader: File upload to Catbox.moe
 
         Features:
-        - Language selector dropdown at the top
         - Scrollable canvas for all content
         - Mouse wheel scrolling support
         - Responsive layout with proper grid configuration
