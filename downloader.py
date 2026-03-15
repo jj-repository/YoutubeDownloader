@@ -732,8 +732,35 @@ class YouTubeDownloader:
         y = (dialog.winfo_screenheight() - dialog.winfo_height()) // 2
         dialog.geometry(f"+{x}+{y}")
 
+    def _compute_git_blob_sha(self, content):
+        """Compute the git blob SHA1 hash for content (same as git hash-object)."""
+        import hashlib
+        header = f"blob {len(content)}\0".encode()
+        return hashlib.sha1(header + content).hexdigest()
+
+    def _verify_file_against_github(self, tag_name, filename, content, headers):
+        """Verify downloaded file content matches GitHub's git tree SHA."""
+        import urllib.request
+
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}?ref={tag_name}"
+        request = urllib.request.Request(api_url, headers=headers)
+        with urllib.request.urlopen(request, timeout=30) as response:
+            file_info = json.loads(response.read().decode())
+
+        expected_sha = file_info.get('sha', '')
+        actual_sha = self._compute_git_blob_sha(content)
+
+        if actual_sha != expected_sha:
+            raise RuntimeError(
+                f"Integrity check failed for {filename}!\n"
+                f"Expected SHA: {expected_sha[:16]}...\n"
+                f"Got SHA: {actual_sha[:16]}...\n"
+                f"The file may have been tampered with."
+            )
+        logger.info(f"Integrity verified for {filename}: {actual_sha[:16]}...")
+
     def _apply_update(self, release_data):
-        """Download and apply update with SHA256 checksum verification.
+        """Download and apply update with integrity verification against GitHub.
 
         Args:
             release_data: The GitHub release API response data
@@ -742,79 +769,52 @@ class YouTubeDownloader:
         import urllib.error
         import shutil
         import tempfile
-        import hashlib
 
         try:
             self.root.after(0, lambda: self.update_status(tr('update_downloading'), "blue"))
 
-            # Get the tag name for raw file download
             tag_name = release_data.get('tag_name', 'main')
-
-            # Download URL — fetched over HTTPS from GitHub
-            download_url = f"{GITHUB_RAW_URL}/{tag_name}/downloader.py"
             headers = {'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
+            current_script = Path(__file__).resolve()
+            script_dir = current_script.parent
 
-            logger.info(f"Downloading update from: {download_url}")
+            modules = ['downloader.py', 'constants.py', 'translations.py']
+            downloaded = {}
 
-            # Download the update file
-            request = urllib.request.Request(download_url, headers=headers)
+            # Download and verify all modules before replacing any
+            for module_name in modules:
+                download_url = f"{GITHUB_RAW_URL}/{tag_name}/{module_name}"
+                logger.info(f"Downloading: {download_url}")
+                request = urllib.request.Request(download_url, headers=headers)
 
-            with tempfile.NamedTemporaryFile(mode='wb', suffix='.py', delete=False) as tmp_file:
                 with urllib.request.urlopen(request, timeout=60) as response:
                     content = response.read()
-                    tmp_file.write(content)
-                tmp_path = tmp_file.name
 
-            sha256_hash = hashlib.sha256(content).hexdigest().lower()
-            logger.info(f"Downloaded file checksum: {sha256_hash[:16]}...")
-
-            # Basic sanity check — make sure it's valid Python
-            try:
-                compile(content, 'downloader.py', 'exec')
-            except SyntaxError as e:
-                Path(tmp_path).unlink(missing_ok=True)
-                raise RuntimeError(f"Downloaded file has syntax errors: {e}")
-
-            # Get current script path
-            current_script = Path(__file__).resolve()
-
-            # Create backup
-            backup_path = current_script.with_suffix('.py.backup')
-            shutil.copy2(current_script, backup_path)
-            logger.info(f"Created backup at: {backup_path}")
-
-            # Replace current script with new version
-            shutil.move(tmp_path, current_script)
-            logger.info(f"Updated script at: {current_script}")
-
-            # Also update constants.py and translations.py
-            script_dir = current_script.parent
-            for module_name in ('constants.py', 'translations.py'):
-                module_url = f"{GITHUB_RAW_URL}/{tag_name}/{module_name}"
-                logger.info(f"Downloading module update from: {module_url}")
-                module_request = urllib.request.Request(module_url, headers=headers)
-
-                with tempfile.NamedTemporaryFile(mode='wb', suffix='.py', delete=False) as tmp_module:
-                    with urllib.request.urlopen(module_request, timeout=60) as response:
-                        module_content = response.read()
-                        tmp_module.write(module_content)
-                    tmp_module_path = tmp_module.name
+                # Verify integrity against GitHub's git tree
+                self._verify_file_against_github(tag_name, module_name, content, headers)
 
                 # Syntax check
                 try:
-                    compile(module_content, module_name, 'exec')
+                    compile(content, module_name, 'exec')
                 except SyntaxError as e:
-                    Path(tmp_module_path).unlink(missing_ok=True)
-                    raise RuntimeError(f"Downloaded {module_name} has syntax errors: {e}")
+                    raise RuntimeError(f"{module_name} has syntax errors: {e}")
 
-                # Backup and replace
+                downloaded[module_name] = content
+
+            # All verified — now backup and replace
+            for module_name, content in downloaded.items():
                 module_path = script_dir / module_name
-                module_backup = module_path.with_suffix('.py.backup')
+                backup_path = module_path.with_suffix('.py.backup')
                 if module_path.exists():
-                    shutil.copy2(module_path, module_backup)
-                    logger.info(f"Created backup at: {module_backup}")
-                shutil.move(tmp_module_path, module_path)
-                logger.info(f"Updated module at: {module_path}")
+                    shutil.copy2(module_path, backup_path)
+                    logger.info(f"Created backup: {backup_path}")
+
+                with tempfile.NamedTemporaryFile(mode='wb', suffix='.py', delete=False,
+                                                  dir=str(script_dir)) as tmp_file:
+                    tmp_file.write(content)
+                    tmp_path = tmp_file.name
+                shutil.move(tmp_path, module_path)
+                logger.info(f"Updated: {module_path}")
 
             self.root.after(0, lambda: self.update_status(tr('update_complete_title'), "green"))
             self.root.after(0, lambda: messagebox.showinfo(
@@ -951,33 +951,67 @@ class YouTubeDownloader:
             ))
 
     def _apply_ytdlp_update_binary(self, latest_version):
-        """Download latest yt-dlp binary from GitHub releases (for bundled mode)."""
+        """Download latest yt-dlp binary from GitHub releases with SHA256 verification."""
         import urllib.request
+        import hashlib
 
         try:
             logger.info("Downloading latest yt-dlp binary...")
             self.root.after(0, lambda: self.update_status(tr('ytdlp_updating'), "blue"))
 
-            # Determine download URL and target path
+            headers = {'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
             exe_dir = os.path.dirname(sys.executable)
-            if sys.platform == 'win32':
-                download_url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
-                target_path = os.path.join(exe_dir, 'yt-dlp.exe')
-            else:
-                download_url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp'
-                target_path = os.path.join(exe_dir, 'yt-dlp')
 
-            # Download to temp file first (use unpredictable name)
+            if sys.platform == 'win32':
+                binary_name = 'yt-dlp.exe'
+                download_url = f'https://github.com/yt-dlp/yt-dlp/releases/latest/download/{binary_name}'
+                target_path = os.path.join(exe_dir, binary_name)
+            else:
+                binary_name = 'yt-dlp'
+                download_url = f'https://github.com/yt-dlp/yt-dlp/releases/latest/download/{binary_name}'
+                target_path = os.path.join(exe_dir, binary_name)
+
+            # Download SHA256SUMS from yt-dlp releases
+            sha256sums_url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS'
+            sha_request = urllib.request.Request(sha256sums_url, headers=headers)
+            with urllib.request.urlopen(sha_request, timeout=30) as response:
+                sha256sums = response.read().decode('utf-8')
+
+            # Find expected hash for our binary
+            expected_hash = None
+            for line in sha256sums.strip().splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] == binary_name:
+                    expected_hash = parts[0].lower()
+                    break
+
+            if not expected_hash:
+                raise RuntimeError(f"Could not find SHA256 for {binary_name} in SHA2-256SUMS")
+            logger.info(f"Expected SHA256 for {binary_name}: {expected_hash[:16]}...")
+
+            # Download the binary
             tmp_fd = tempfile.NamedTemporaryFile(dir=exe_dir, delete=False, suffix='.tmp')
             tmp_path = tmp_fd.name
             tmp_fd.close()
-            request = urllib.request.Request(
-                download_url,
-                headers={'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
-            )
+
+            request = urllib.request.Request(download_url, headers=headers)
             with urllib.request.urlopen(request, timeout=120) as response:
                 with open(tmp_path, 'wb') as f:
                     shutil.copyfileobj(response, f)
+
+            # Verify SHA256
+            with open(tmp_path, 'rb') as f:
+                actual_hash = hashlib.sha256(f.read()).hexdigest().lower()
+
+            if actual_hash != expected_hash:
+                os.remove(tmp_path)
+                raise RuntimeError(
+                    f"SHA256 verification failed for {binary_name}!\n"
+                    f"Expected: {expected_hash[:32]}...\n"
+                    f"Got: {actual_hash[:32]}...\n"
+                    f"The file may have been tampered with."
+                )
+            logger.info(f"SHA256 verified for {binary_name}: {actual_hash[:16]}...")
 
             # Replace the old binary
             if os.path.exists(target_path):
@@ -1003,7 +1037,6 @@ class YouTubeDownloader:
             ))
 
         except Exception as e:
-            # Clean up temp file on failure
             if 'tmp_path' in locals() and os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
