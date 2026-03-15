@@ -1527,16 +1527,29 @@ class YouTubeDownloader:
             outer.grid_rowconfigure(0, weight=1)
             outer.grid_columnconfigure(0, weight=1)
 
-            canvas = tk.Canvas(outer, highlightthickness=0)
+            canvas = tk.Canvas(outer, highlightthickness=0, borderwidth=0)
             scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
             inner = ttk.Frame(canvas, padding=tab_pad)
 
-            inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-            canvas.create_window((0, 0), window=inner, anchor="nw")
+            window_id = canvas.create_window((0, 0), window=inner, anchor="nw")
             canvas.configure(yscrollcommand=scrollbar.set)
 
             canvas.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
-            scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+
+            # Expand inner frame to fill canvas width
+            def on_canvas_configure(event):
+                canvas.itemconfig(window_id, width=event.width)
+            canvas.bind('<Configure>', on_canvas_configure)
+
+            # Update scroll region and show/hide scrollbar as needed
+            def on_inner_configure(event):
+                canvas.configure(scrollregion=canvas.bbox("all"))
+                # Show scrollbar only when content overflows
+                if inner.winfo_reqheight() > canvas.winfo_height():
+                    scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+                else:
+                    scrollbar.grid_remove()
+            inner.bind('<Configure>', on_inner_configure)
 
             # Mouse wheel scrolling
             def _on_mousewheel(event):
@@ -1557,7 +1570,6 @@ class YouTubeDownloader:
             canvas.bind("<MouseWheel>", _on_mousewheel)
             canvas.bind("<Button-4>", _on_mousewheel_linux)
             canvas.bind("<Button-5>", _on_mousewheel_linux)
-            # Bind scroll to inner frame children after UI is built
             self.root.after(UI_INITIAL_DELAY_MS, lambda: bind_scroll(inner))
 
             # Store canvas ref for theming
