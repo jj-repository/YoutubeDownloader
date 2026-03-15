@@ -47,7 +47,7 @@ from constants import (
     UPLOAD_HISTORY_FILE, CLIPBOARD_URLS_FILE, CONFIG_FILE, LOG_FILE,
     THEMES,
 )
-from translations import TRANSLATIONS, tr
+from translations import tr
 
 # Try to import dbus for KDE Klipper integration
 try:
@@ -277,6 +277,7 @@ class YouTubeDownloader:
                     if status == 'failed':
                         self._update_url_status(url, 'failed')
             logger.info(f"Restored {len(self.persisted_clipboard_urls)} URLs to clipboard list")
+            self.persisted_clipboard_urls = None
 
     def _load_auto_check_updates_setting(self):
         """Load auto-check updates setting from config"""
@@ -3264,17 +3265,20 @@ class YouTubeDownloader:
 
     def _remove_file_from_queue(self, file_path):
         """Remove a file from the upload queue"""
+        widget_to_destroy = None
         with self.uploader_lock:
             for i, item in enumerate(self.uploader_file_queue):
                 if item['path'] == file_path:
-                    if item['widget']:
-                        item['widget'].destroy()
+                    widget_to_destroy = item.get('widget')
                     self.uploader_file_queue.pop(i)
-                    self._update_uploader_queue_count()
-                    if len(self.uploader_file_queue) == 0:
-                        self.uploader_upload_btn.config(state='disabled')
                     logger.info(f"Removed file from queue: {file_path}")
                     break
+        if widget_to_destroy:
+            widget_to_destroy.destroy()
+        self._update_uploader_queue_count()
+        with self.uploader_lock:
+            if len(self.uploader_file_queue) == 0:
+                self.uploader_upload_btn.config(state='disabled')
 
     def clear_uploader_queue(self):
         """Clear all files from upload queue"""
@@ -3284,12 +3288,14 @@ class YouTubeDownloader:
             messagebox.showwarning(tr('warning_cannot_clear_title'), tr('warning_cannot_clear_uploading'))
             return
 
+        widgets_to_destroy = []
         with self.uploader_lock:
             for item in self.uploader_file_queue:
-                if item['widget']:
-                    item['widget'].destroy()
-
+                if item.get('widget'):
+                    widgets_to_destroy.append(item['widget'])
             self.uploader_file_queue.clear()
+        for widget in widgets_to_destroy:
+            widget.destroy()
         self._update_uploader_queue_count()
         self.uploader_upload_btn.config(state='disabled')
         logger.info("Cleared all files from upload queue")
@@ -3396,16 +3402,19 @@ class YouTubeDownloader:
 
     def _finish_uploader_queue(self):
         """Clean up after queue upload completes"""
+        widgets_to_destroy = []
         with self.uploader_lock:
             self.uploader_is_uploading = False
 
-            # Clear the queue
+            # Collect widgets and clear the queue
             for item in self.uploader_file_queue:
-                if item['widget']:
-                    item['widget'].destroy()
+                if item.get('widget'):
+                    widgets_to_destroy.append(item['widget'])
 
             count = len(self.uploader_file_queue)
             self.uploader_file_queue.clear()
+        for widget in widgets_to_destroy:
+            widget.destroy()
         self._update_uploader_queue_count()
 
         self.uploader_status_label.config(text=tr('status_all_uploads_complete', count=count), foreground="green")
@@ -3464,6 +3473,9 @@ class YouTubeDownloader:
 
     def schedule_preview_update(self):
         """Schedule preview update with debouncing to avoid excessive calls"""
+        if self._shutting_down:
+            return
+
         # Cancel any pending update
         if self.preview_update_timer:
             self.root.after_cancel(self.preview_update_timer)
@@ -3596,6 +3608,9 @@ class YouTubeDownloader:
 
     def update_previews(self):
         """Update both preview images"""
+        if self._shutting_down:
+            return
+
         if not self.current_video_url or self.video_duration == 0:
             return
 
@@ -3613,7 +3628,12 @@ class YouTubeDownloader:
         self.end_preview_label.config(image=self.loading_image)
 
         # Submit to thread pool instead of creating new thread
-        self.thread_pool.submit(self._update_previews_thread, start_time, end_time)
+        try:
+            self.thread_pool.submit(self._update_previews_thread, start_time, end_time)
+        except RuntimeError:
+            # Thread pool already shut down
+            with self.preview_lock:
+                self.preview_thread_running = False
 
     def _update_previews_thread(self, start_time, end_time):
         """Background thread to extract and update preview frames"""
@@ -4025,7 +4045,7 @@ class YouTubeDownloader:
         """
         maxrate = int(target_bitrate * 1.5)
         bufsize = int(target_bitrate * 2)
-        passlogfile = os.path.join(tempfile.gettempdir(), f'ytdl_2pass_{os.getpid()}')
+        passlogfile = os.path.join(tempfile.gettempdir(), f'ytdl_2pass_{os.getpid()}_{int(time.time())}')
 
         # Common args shared by both passes
         input_args = [self.ffmpeg_path, '-y', '-i', input_file]
@@ -4080,6 +4100,7 @@ class YouTubeDownloader:
             if self.current_process.returncode != 0:
                 stderr = self.current_process.stderr.read() if self.current_process.stderr else ''
                 logger.error(f"Two-pass pass 1 failed (rc {self.current_process.returncode}): {stderr}")
+                self.safe_process_cleanup(self.current_process)
                 return False
 
             # Close pass 1 pipes before starting pass 2
@@ -4128,6 +4149,7 @@ class YouTubeDownloader:
             if self.current_process.returncode != 0:
                 stderr = self.current_process.stderr.read() if self.current_process.stderr else ''
                 logger.error(f"Two-pass pass 2 failed (rc {self.current_process.returncode}): {stderr}")
+                self.safe_process_cleanup(self.current_process)
                 return False
 
             return True
@@ -4611,6 +4633,12 @@ class YouTubeDownloader:
 
                 if keep_below_10mb:
                     clip_duration = (end_time - start_time) if trim_enabled else self.video_duration
+                    if clip_duration <= 0:
+                        self._safe_after(0, lambda: self.update_status(tr('error_fetch_duration_first'), "red"))
+                        self._safe_after(0, self._reset_buttons)
+                        with self.download_lock:
+                            self.is_downloading = False
+                        return
                     height, target_bitrate = self._calculate_optimal_quality(clip_duration)
                     height = str(height)
                     logger.info(f"10MB two-pass (local): auto-selected {height}p at {target_bitrate}bps for {clip_duration}s clip")
@@ -4761,6 +4789,12 @@ class YouTubeDownloader:
     def on_closing(self):
         """Handle window close event with proper resource cleanup"""
         logger.info("Application shutdown initiated...")
+
+        # Cancel preview timer before setting shutdown flag
+        if hasattr(self, 'preview_update_timer') and self.preview_update_timer:
+            self.root.after_cancel(self.preview_update_timer)
+            self.preview_update_timer = None
+
         self._shutting_down = True
 
         # Save clipboard URLs before shutdown
