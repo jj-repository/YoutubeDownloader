@@ -12,6 +12,7 @@ if sys.platform == 'win32':
 import threading
 import re
 import logging
+import logging.handlers
 import json
 import webbrowser
 from pathlib import Path
@@ -72,7 +73,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(LOG_FILE),
+        logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=2),
         logging.StreamHandler()
     ]
 )
@@ -117,6 +118,7 @@ class YouTubeDownloader:
         self.last_progress_time = None
         self.download_start_time = None
         self.timeout_monitor_thread = None
+        self._shutting_down = False
 
         # Detect bundled executables (when packaged with PyInstaller)
         self.ffmpeg_path = self._get_bundled_executable('ffmpeg')
@@ -171,6 +173,7 @@ class YouTubeDownloader:
         self.upload_lock = threading.Lock()  # Protect upload state
         self.uploader_lock = threading.Lock()  # Protect uploader queue state
         self.fetch_lock = threading.Lock()  # Protect duration fetch state
+        self.config_lock = threading.Lock()  # Protect config read-modify-write
 
         # Clipboard Mode variables
         self.clipboard_monitoring = False
@@ -230,7 +233,7 @@ class YouTubeDownloader:
         """Load persisted clipboard URLs from previous session"""
         try:
             if CLIPBOARD_URLS_FILE.exists():
-                with open(CLIPBOARD_URLS_FILE, 'r') as f:
+                with open(CLIPBOARD_URLS_FILE, 'r', encoding='utf-8') as f:
                     data = json.load(f)
 
                     # Validate JSON structure
@@ -261,7 +264,7 @@ class YouTubeDownloader:
                     for item in self.clipboard_url_list
                     if item['status'] in ['pending', 'failed']
                 ]
-            with open(CLIPBOARD_URLS_FILE, 'w') as f:
+            with open(CLIPBOARD_URLS_FILE, 'w', encoding='utf-8') as f:
                 json.dump({'urls': urls_to_save}, f, indent=2)
             logger.info(f"Saved {len(urls_to_save)} clipboard URLs")
         except Exception as e:
@@ -285,7 +288,7 @@ class YouTubeDownloader:
         """Load saved language preference"""
         try:
             if CONFIG_FILE.exists():
-                with open(CONFIG_FILE, 'r') as f:
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
                     # Validate config structure
                     if not self.validate_config_json(config):
@@ -308,31 +311,32 @@ class YouTubeDownloader:
 
     def _save_language_preference(self):
         """Save language preference to config file"""
-        try:
-            CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with self.config_lock:
+            try:
+                CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-            # Load existing config if any
-            config = {}
-            if CONFIG_FILE.exists():
-                with open(CONFIG_FILE, 'r') as f:
-                    config = json.load(f)
+                # Load existing config if any
+                config = {}
+                if CONFIG_FILE.exists():
+                    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
 
-            # Update language
-            config['language'] = translations.get_language()
+                # Update language
+                config['language'] = translations.get_language()
 
-            # Save config
-            with open(CONFIG_FILE, 'w') as f:
-                json.dump(config, f, indent=2)
+                # Save config
+                with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, indent=2)
 
-            logger.info(f"Saved language preference: {translations.get_language()}")
-        except Exception as e:
-            logger.error(f"Error saving language preference: {e}")
+                logger.info(f"Saved language preference: {translations.get_language()}")
+            except Exception as e:
+                logger.error(f"Error saving language preference: {e}")
 
     def _load_auto_check_updates_setting(self):
         """Load auto-check updates setting from config"""
         try:
             if CONFIG_FILE.exists():
-                with open(CONFIG_FILE, 'r') as f:
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
                     return config.get('auto_check_updates', True)  # Default to True
         except Exception as e:
@@ -341,28 +345,29 @@ class YouTubeDownloader:
 
     def _save_auto_check_updates_setting(self):
         """Save auto-check updates setting to config"""
-        try:
-            CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with self.config_lock:
+            try:
+                CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-            config = {}
-            if CONFIG_FILE.exists():
-                with open(CONFIG_FILE, 'r') as f:
-                    config = json.load(f)
+                config = {}
+                if CONFIG_FILE.exists():
+                    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
 
-            config['auto_check_updates'] = self.auto_check_updates_var.get()
+                config['auto_check_updates'] = self.auto_check_updates_var.get()
 
-            with open(CONFIG_FILE, 'w') as f:
-                json.dump(config, f, indent=2)
+                with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, indent=2)
 
-            logger.info(f"Saved auto_check_updates: {config['auto_check_updates']}")
-        except Exception as e:
-            logger.error(f"Error saving auto_check_updates setting: {e}")
+                logger.info(f"Saved auto_check_updates: {config['auto_check_updates']}")
+            except Exception as e:
+                logger.error(f"Error saving auto_check_updates setting: {e}")
 
     def _load_theme_preference(self):
         """Load saved theme preference from config"""
         try:
             if CONFIG_FILE.exists():
-                with open(CONFIG_FILE, 'r') as f:
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     config = json.load(f)
                     theme = config.get('theme', 'dark')
                     if theme in THEMES:
@@ -373,22 +378,23 @@ class YouTubeDownloader:
 
     def _save_theme_preference(self):
         """Save theme preference to config"""
-        try:
-            CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with self.config_lock:
+            try:
+                CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-            config = {}
-            if CONFIG_FILE.exists():
-                with open(CONFIG_FILE, 'r') as f:
-                    config = json.load(f)
+                config = {}
+                if CONFIG_FILE.exists():
+                    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                        config = json.load(f)
 
-            config['theme'] = self.current_theme
+                config['theme'] = self.current_theme
 
-            with open(CONFIG_FILE, 'w') as f:
-                json.dump(config, f, indent=2)
+                with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, indent=2)
 
-            logger.info(f"Saved theme preference: {self.current_theme}")
-        except Exception as e:
-            logger.error(f"Error saving theme preference: {e}")
+                logger.info(f"Saved theme preference: {self.current_theme}")
+            except Exception as e:
+                logger.error(f"Error saving theme preference: {e}")
 
     def _toggle_theme(self):
         """Toggle between light and dark theme"""
@@ -961,8 +967,10 @@ class YouTubeDownloader:
                 download_url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp'
                 target_path = os.path.join(exe_dir, 'yt-dlp')
 
-            # Download to temp file first
-            tmp_path = target_path + '.tmp'
+            # Download to temp file first (use unpredictable name)
+            tmp_fd = tempfile.NamedTemporaryFile(dir=exe_dir, delete=False, suffix='.tmp')
+            tmp_path = tmp_fd.name
+            tmp_fd.close()
             request = urllib.request.Request(
                 download_url,
                 headers={'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
@@ -1032,9 +1040,19 @@ class YouTubeDownloader:
         """Save uploaded video link to history file"""
         try:
             UPLOAD_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(UPLOAD_HISTORY_FILE, 'a') as f:
+            with open(UPLOAD_HISTORY_FILE, 'a', encoding='utf-8') as f:
                 timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
                 f.write(f"{timestamp} | {filename} | {link}\n")
+            # Trim history file if it exceeds 1000 lines (keep last 500)
+            try:
+                with open(UPLOAD_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                if len(lines) > 1000:
+                    with open(UPLOAD_HISTORY_FILE, 'w', encoding='utf-8') as f:
+                        f.writelines(lines[-500:])
+                    logger.info("Trimmed upload history to last 500 entries")
+            except Exception as trim_err:
+                logger.error(f"Error trimming upload history: {trim_err}")
             logger.info(f"Saved upload link to history: {link}")
         except Exception as e:
             logger.error(f"Error saving upload link: {e}")
@@ -1063,7 +1081,7 @@ class YouTubeDownloader:
         # Load and display history
         try:
             if UPLOAD_HISTORY_FILE.exists():
-                with open(UPLOAD_HISTORY_FILE, 'r') as f:
+                with open(UPLOAD_HISTORY_FILE, 'r', encoding='utf-8') as f:
                     content = f.read()
                     if content:
                         text_widget.insert('1.0', content)
@@ -2150,8 +2168,7 @@ class YouTubeDownloader:
                 is_valid, message = self.validate_youtube_url(clipboard_content)
 
                 if is_valid:
-                    with self.clipboard_lock:
-                        url_exists = any(item['url'] == clipboard_content for item in self.clipboard_url_list)
+                    url_exists = clipboard_content in self.clipboard_url_widgets
 
                     if not url_exists:
                         self._add_url_to_clipboard_list(clipboard_content)
@@ -2337,7 +2354,7 @@ class YouTubeDownloader:
             self.root.after(0, lambda i=index, t=total_count:
                 self.clipboard_total_label.config(text=tr('label_completed_total', done=i, total=t)))
             self.root.after(0, lambda u=url:
-                self.update_clipboard_status(f"Downloading: {u[:50]}...", "blue"))
+                self.update_clipboard_status(tr('status_clipboard_downloading', url=u[:50]), "blue"))
 
             success = self._download_clipboard_url(url, check_stop=True)
 
@@ -2448,15 +2465,15 @@ class YouTubeDownloader:
                         phase = current_phase
                         pinfo = playlist_item_info
                         self.root.after(0, lambda p=progress, ph=phase, pi=pinfo: self.update_clipboard_status(
-                            f"Downloading {ph}{pi}... {p:.1f}%", "blue"))
+                            tr('status_clipboard_downloading_phase', phase=ph, info=pi, progress=f"{p:.1f}"), "blue"))
 
                 # Show merging/processing status
                 elif '[Merger]' in line or 'Merging' in line:
-                    self.root.after(0, lambda: self.update_clipboard_status("Merging video and audio...", "blue"))
+                    self.root.after(0, lambda: self.update_clipboard_status(tr('status_merging'), "blue"))
                 elif '[ffmpeg]' in line:
-                    self.root.after(0, lambda: self.update_clipboard_status("Processing with ffmpeg...", "blue"))
+                    self.root.after(0, lambda: self.update_clipboard_status(tr('status_processing_ffmpeg'), "blue"))
                 elif '[ExtractAudio]' in line:
-                    self.root.after(0, lambda: self.update_clipboard_status("Extracting audio...", "blue"))
+                    self.root.after(0, lambda: self.update_clipboard_status(tr('status_extracting_audio'), "blue"))
 
             process.wait()
 
@@ -2666,9 +2683,9 @@ class YouTubeDownloader:
             if sys.platform == 'win32':
                 os.startfile(self.clipboard_download_path)
             elif sys.platform == 'darwin':
-                subprocess.Popen(['open', self.clipboard_download_path], close_fds=True, start_new_session=True)
+                subprocess.Popen(['open', self.clipboard_download_path], close_fds=True, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
-                subprocess.Popen(['xdg-open', self.clipboard_download_path], close_fds=True, start_new_session=True)
+                subprocess.Popen(['xdg-open', self.clipboard_download_path], close_fds=True, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             messagebox.showerror(tr('error_title'), tr('error_failed_open_folder', error=str(e)))
 
@@ -3092,6 +3109,8 @@ class YouTubeDownloader:
             if len(parts) != 3:
                 return None
             hours, minutes, seconds = map(int, parts)
+            if hours < 0 or not (0 <= minutes <= 59) or not (0 <= seconds <= 59):
+                return 0
             return hours * 3600 + minutes * 60 + seconds
         except (ValueError, AttributeError):
             return None
@@ -3499,8 +3518,14 @@ class YouTubeDownloader:
         self.preview_update_timer = self.root.after(PREVIEW_DEBOUNCE_MS, self.update_previews)
 
     def _clear_preview_cache(self):
-        """Clear the preview frame cache"""
+        """Clear the preview frame cache, deleting cached files from disk"""
         logger.info("Clearing preview cache")
+        for timestamp, file_path in self.preview_cache.items():
+            try:
+                if os.path.exists(file_path):
+                    os.unlink(file_path)
+            except OSError as e:
+                logger.debug(f"Failed to delete cached preview file {file_path}: {e}")
         self.preview_cache.clear()
 
     def _cache_preview_frame(self, timestamp, file_path):
@@ -3653,7 +3678,8 @@ class YouTubeDownloader:
                 self._update_preview_image(start_frame_path, 'start')
             else:
                 # Show error placeholder if extraction failed
-                error_img = self.create_placeholder_image(PREVIEW_WIDTH, PREVIEW_HEIGHT, "Error")
+                error_img = self.create_placeholder_image(PREVIEW_WIDTH, PREVIEW_HEIGHT, tr('label_error'))
+                self.start_preview_image = error_img  # Keep reference to avoid GC
                 self.root.after(0, lambda img=error_img: self._set_start_preview(img))
 
             # Extract end frame (using adjusted time to avoid EOF issues)
@@ -3662,7 +3688,8 @@ class YouTubeDownloader:
                 self._update_preview_image(end_frame_path, 'end')
             else:
                 # Show error placeholder if extraction failed
-                error_img = self.create_placeholder_image(PREVIEW_WIDTH, PREVIEW_HEIGHT, "Error")
+                error_img = self.create_placeholder_image(PREVIEW_WIDTH, PREVIEW_HEIGHT, tr('label_error'))
+                self.end_preview_image = error_img  # Keep reference to avoid GC
                 self.root.after(0, lambda img=error_img: self._set_end_preview(img))
         finally:
             # Use lock when resetting flag to prevent race condition with spawn check
@@ -3740,9 +3767,9 @@ class YouTubeDownloader:
             if sys.platform == 'win32':
                 os.startfile(self.download_path)
             elif sys.platform == 'darwin':
-                subprocess.Popen(['open', self.download_path], close_fds=True, start_new_session=True)
+                subprocess.Popen(['open', self.download_path], close_fds=True, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
-                subprocess.Popen(['xdg-open', self.download_path], close_fds=True, start_new_session=True)
+                subprocess.Popen(['xdg-open', self.download_path], close_fds=True, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             messagebox.showerror(tr('error_title'), tr('error_failed_open_folder', error=str(e)))
 
@@ -3959,6 +3986,9 @@ class YouTubeDownloader:
         while True:
             time.sleep(TIMEOUT_CHECK_INTERVAL)  # Check at configured interval
 
+            if self._shutting_down:
+                break
+
             with self.download_lock:
                 is_still_downloading = self.is_downloading
 
@@ -3972,7 +4002,10 @@ class YouTubeDownloader:
                 elapsed = current_time - self.download_start_time
                 if elapsed > DOWNLOAD_TIMEOUT:
                     logger.error(f"Download exceeded absolute timeout ({DOWNLOAD_TIMEOUT}s)")
-                    self.root.after(0, lambda: self._timeout_download(tr('timeout_download_absolute')))
+                    try:
+                        self.root.after(0, lambda: self._timeout_download(tr('timeout_download_absolute')))
+                    except (RuntimeError, tk.TclError):
+                        break
                     break
 
             # Check progress timeout (stalled download)
@@ -3980,7 +4013,10 @@ class YouTubeDownloader:
                 time_since_progress = current_time - self.last_progress_time
                 if time_since_progress > DOWNLOAD_PROGRESS_TIMEOUT:
                     logger.error(f"Download stalled (no progress for {DOWNLOAD_PROGRESS_TIMEOUT}s)")
-                    self.root.after(0, lambda: self._timeout_download(tr('timeout_download_stalled')))
+                    try:
+                        self.root.after(0, lambda: self._timeout_download(tr('timeout_download_stalled')))
+                    except (RuntimeError, tk.TclError):
+                        break
                     break
 
     def _timeout_download(self, reason):
@@ -4405,19 +4441,21 @@ class YouTubeDownloader:
                             self.update_progress(progress)
 
                             # Try to extract speed and ETA from the line
-                            status_msg = f"Downloading... {progress:.1f}%"
-
-                            # Look for speed (e.g., "1.23MiB/s" or "500.00KiB/s")
                             speed_match = SPEED_REGEX.search(line)
-                            if speed_match:
-                                speed = speed_match.group(1)
-                                status_msg += f" at {speed}"
-
-                            # Look for ETA (e.g., "00:05" or "01:23:45")
                             eta_match = ETA_REGEX.search(line)
-                            if eta_match:
-                                eta = eta_match.group(1)
-                                status_msg += f" | ETA: {eta}"
+
+                            if speed_match and eta_match:
+                                status_msg = tr('status_downloading_full',
+                                    progress=f"{progress:.1f}",
+                                    speed=speed_match.group(1),
+                                    eta=eta_match.group(1))
+                            elif speed_match:
+                                status_msg = tr('status_downloading_with_speed',
+                                    progress=f"{progress:.1f}",
+                                    speed=speed_match.group(1))
+                            else:
+                                status_msg = tr('status_downloading',
+                                    progress=f"{progress:.1f}")
 
                             self.update_status(status_msg, "blue")
                             self.last_progress_time = time.time()  # Update progress timestamp
@@ -4763,6 +4801,7 @@ class YouTubeDownloader:
     def on_closing(self):
         """Handle window close event with proper resource cleanup"""
         logger.info("Application shutdown initiated...")
+        self._shutting_down = True
 
         # Save clipboard URLs before shutdown
         try:

@@ -235,6 +235,7 @@ TRANSLATIONS = {
         'status_downloading_detailed': 'Downloading... {progress}%',
         'status_downloading_with_speed': 'Downloading... {progress}% at {speed}',
         'status_downloading_full': 'Downloading... {progress}% at {speed} | ETA: {eta}',
+        'status_clipboard_downloading_phase': 'Downloading {phase}{info}... {progress}%',
 
         # Additional error messages
         'error_permission_denied': 'Permission denied. Check write permissions for download folder.',
@@ -499,6 +500,7 @@ TRANSLATIONS = {
         'status_downloading_detailed': 'Herunterladen... {progress}%',
         'status_downloading_with_speed': 'Herunterladen... {progress}% bei {speed}',
         'status_downloading_full': 'Herunterladen... {progress}% bei {speed} | ETA: {eta}',
+        'status_clipboard_downloading_phase': 'Herunterladen {phase}{info}... {progress}%',
 
         # Additional error messages
         'error_permission_denied': 'Zugriff verweigert. Überprüfen Sie die Schreibrechte für den Download-Ordner.',
@@ -762,6 +764,7 @@ TRANSLATIONS = {
         'status_downloading_detailed': 'Pobieranie... {progress}%',
         'status_downloading_with_speed': 'Pobieranie... {progress}% przy {speed}',
         'status_downloading_full': 'Pobieranie... {progress}% przy {speed} | ETA: {eta}',
+        'status_clipboard_downloading_phase': 'Pobieranie {phase}{info}... {progress}%',
 
         # Additional error messages
         'error_permission_denied': 'Dostęp zabroniony. Sprawdź uprawnienia zapisu dla folderu pobierania.',
@@ -837,6 +840,3 @@ def get_language():
     return CURRENT_LANGUAGE
 
 
-def get_available_languages():
-    """Get list of available language codes."""
-    return list(TRANSLATIONS.keys())
