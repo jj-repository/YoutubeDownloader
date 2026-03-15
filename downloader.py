@@ -101,8 +101,8 @@ class YouTubeDownloader:
         self.root = root
         self.root.title(tr('window_title'))
         if sys.platform == 'win32':
-            self.root.geometry("900x620")
-            self.root.minsize(750, 400)
+            self.root.geometry("680x700")
+            self.root.minsize(580, 400)
         else:
             self.root.geometry("900x1140")
             self.root.minsize(750, 600)
@@ -455,6 +455,33 @@ class YouTubeDownloader:
         ttk.Label(parent, text="by JJ", font=('Arial', 10, 'bold')).grid(row=11, column=0, pady=(5, 2))
         ttk.Label(parent, text=f"v{APP_VERSION}", font=('Arial', 9)).grid(row=12, column=0)
 
+    def _setup_help_tab(self, parent):
+        """Setup Help tab with usage guide"""
+        ttk.Label(parent, text=tr('help_header'), font=('Arial', 14, 'bold')).grid(
+            row=0, column=0, sticky=tk.W, pady=(0, 10))
+
+        ttk.Button(parent, text=tr('help_github_btn'),
+                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}')).grid(
+            row=1, column=0, sticky=tk.W, pady=(0, 15))
+
+        ttk.Separator(parent).grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
+
+        sections = [
+            ('help_clipboard_title', 'help_clipboard_text'),
+            ('help_trimmer_title', 'help_trimmer_text'),
+            ('help_uploader_title', 'help_uploader_text'),
+            ('help_settings_title', 'help_settings_text'),
+        ]
+
+        row = 3
+        for title_key, text_key in sections:
+            ttk.Label(parent, text=tr(title_key), font=('Arial', 11, 'bold')).grid(
+                row=row, column=0, sticky=tk.W, pady=(10, 3))
+            ttk.Label(parent, text=tr(text_key), wraplength=550, justify=tk.LEFT,
+                     font=('Arial', 9)).grid(
+                row=row+1, column=0, sticky=tk.W, padx=(10, 0))
+            row += 2
+
     def _get_resource_path(self, filename):
         """Get path to a resource file (works for both source and bundled mode)"""
         if getattr(sys, 'frozen', False):
@@ -520,6 +547,11 @@ class YouTubeDownloader:
 
     def _apply_theme_to_tk_widgets(self, colors):
         """Apply theme colors to pure tk widgets that don't use ttk styling"""
+        # Tab scrollable canvases
+        if hasattr(self, '_tab_canvases'):
+            for c in self._tab_canvases:
+                c.configure(bg=colors['bg'])
+
         # Preview labels
         if hasattr(self, 'start_preview_label'):
             self.start_preview_label.configure(bg=colors['preview_bg'], fg=colors['preview_fg'])
@@ -1481,44 +1513,74 @@ class YouTubeDownloader:
         # Apply theme before creating widgets
         self._apply_theme()
 
-        # Create notebook directly in root — no canvas wrapper
+        # Create notebook directly in root
         self.notebook = ttk.Notebook(self.root)
         self.notebook.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
 
         # Tab padding - smaller on Windows to reduce wasted space
         tab_pad = "10" if sys.platform == 'win32' else "20"
 
+        # Helper: create a scrollable tab frame
+        def make_scrollable_tab(notebook, tab_text):
+            outer = ttk.Frame(notebook)
+            notebook.add(outer, text=tab_text)
+            outer.grid_rowconfigure(0, weight=1)
+            outer.grid_columnconfigure(0, weight=1)
+
+            canvas = tk.Canvas(outer, highlightthickness=0)
+            scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+            inner = ttk.Frame(canvas, padding=tab_pad)
+
+            inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+            canvas.create_window((0, 0), window=inner, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+
+            canvas.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
+            scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+
+            # Mouse wheel scrolling
+            def _on_mousewheel(event):
+                canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            def _on_mousewheel_linux(event):
+                if event.num == 4:
+                    canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    canvas.yview_scroll(1, "units")
+
+            def bind_scroll(widget):
+                widget.bind("<MouseWheel>", _on_mousewheel)
+                widget.bind("<Button-4>", _on_mousewheel_linux)
+                widget.bind("<Button-5>", _on_mousewheel_linux)
+                for child in widget.winfo_children():
+                    bind_scroll(child)
+
+            canvas.bind("<MouseWheel>", _on_mousewheel)
+            canvas.bind("<Button-4>", _on_mousewheel_linux)
+            canvas.bind("<Button-5>", _on_mousewheel_linux)
+            # Bind scroll to inner frame children after UI is built
+            self.root.after(UI_INITIAL_DELAY_MS, lambda: bind_scroll(inner))
+
+            # Store canvas ref for theming
+            if not hasattr(self, '_tab_canvases'):
+                self._tab_canvases = []
+            self._tab_canvases.append(canvas)
+
+            return inner
+
         # Clipboard Mode tab
-        clipboard_tab_frame = ttk.Frame(self.notebook, padding=tab_pad)
-        self.notebook.add(clipboard_tab_frame, text=f"  {tr('tab_clipboard')}  ")
+        clipboard_tab_frame = make_scrollable_tab(self.notebook, f"  {tr('tab_clipboard')}  ")
 
         # Trimmer tab
-        main_tab_frame = ttk.Frame(self.notebook, padding=tab_pad)
-        self.notebook.add(main_tab_frame, text=f"  {tr('tab_trimmer')}  ")
+        main_tab_frame = make_scrollable_tab(self.notebook, f"  {tr('tab_trimmer')}  ")
 
         # Uploader tab
-        uploader_tab_frame = ttk.Frame(self.notebook, padding=tab_pad)
-        self.notebook.add(uploader_tab_frame, text=f"  {tr('tab_uploader')}  ")
+        uploader_tab_frame = make_scrollable_tab(self.notebook, f"  {tr('tab_uploader')}  ")
 
         # Settings tab
-        settings_tab_frame = ttk.Frame(self.notebook, padding=tab_pad)
-        self.notebook.add(settings_tab_frame, text=f"  {tr('btn_settings')}  ")
+        settings_tab_frame = make_scrollable_tab(self.notebook, f"  {tr('btn_settings')}  ")
 
-        # Help tab — opens README in browser when clicked
-        help_tab_frame = ttk.Frame(self.notebook)
-        self.notebook.add(help_tab_frame, text=f"  {tr('btn_help')}  ")
-        self._last_real_tab = 0
-
-        def on_tab_changed(event):
-            current = self.notebook.index('current')
-            help_index = self.notebook.index(help_tab_frame)
-            if current == help_index:
-                webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme')
-                self.notebook.select(self._last_real_tab)
-            else:
-                self._last_real_tab = current
-
-        self.notebook.bind('<<NotebookTabChanged>>', on_tab_changed)
+        # Help tab
+        help_tab_frame = make_scrollable_tab(self.notebook, f"  {tr('btn_help')}  ")
 
         ttk.Label(main_tab_frame, text=tr('label_youtube_url'), font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
@@ -1758,6 +1820,9 @@ class YouTubeDownloader:
 
         # Setup Settings tab
         self._setup_settings_tab(settings_tab_frame)
+
+        # Setup Help tab
+        self._setup_help_tab(help_tab_frame)
 
         # Restore persisted clipboard URLs
         self._restore_clipboard_urls()

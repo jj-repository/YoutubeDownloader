@@ -30,6 +30,18 @@ TRANSLATIONS = {
         'tooltip_trimmer': 'Download YouTube videos with quality selection. Enable trimming to cut specific parts of the video with frame-accurate preview.',
         'tooltip_uploader': 'Upload local video/audio files to Catbox.moe for easy sharing. Files up to 200MB are supported.',
 
+        # Help tab
+        'help_header': 'How to Use YoutubeDownloader',
+        'help_github_btn': 'GitHub',
+        'help_clipboard_title': 'Clipboard Mode',
+        'help_clipboard_text': 'Copy any YouTube URL (Ctrl+C) and it will automatically appear in the detected URLs list. You can download them individually or click "Download All" to batch download. Enable "Auto-download" to start downloading as soon as a URL is detected.',
+        'help_trimmer_title': 'Trimmer',
+        'help_trimmer_text': 'Paste a YouTube URL and select your desired quality. To trim a video, enable "Enable video trimming", click "Fetch Video Duration", then use the sliders or time fields to set start and end points. Frame previews show exactly what you\'re selecting.',
+        'help_uploader_title': 'Uploader',
+        'help_uploader_text': 'Upload local video or audio files to Catbox.moe for easy sharing. Click "Add Files" to select files, then "Upload to Catbox.moe" to upload. URLs are automatically copied to your clipboard. You can also enable auto-upload in the Trimmer tab to upload after each download.',
+        'help_settings_title': 'Settings',
+        'help_settings_text': 'Change the UI language, toggle dark mode, check for updates, and view app info.',
+
         # Common buttons
         'btn_download': 'Download',
         'btn_stop': 'Stop',
@@ -290,6 +302,18 @@ TRANSLATIONS = {
         'tooltip_trimmer': 'YouTube Videos mit Qualitätsauswahl herunterladen. Trimmen aktivieren, um bestimmte Teile des Videos mit Frame-genauer Vorschau zu schneiden.',
         'tooltip_uploader': 'Lokale Video-/Audiodateien auf Catbox.moe hochladen. Dateien bis zu 200MB werden unterstützt.',
 
+        # Help tab
+        'help_header': 'Anleitung YoutubeDownloader',
+        'help_github_btn': 'GitHub',
+        'help_clipboard_title': 'Zwischenablage-Modus',
+        'help_clipboard_text': 'YouTube URLs kopieren (Strg+C) und sie erscheinen automatisch in der erkannten URL-Liste. Einzeln oder mit "Alle herunterladen" im Stapel herunterladen. "Auto-Download" aktivieren für sofortigen Download bei Erkennung.',
+        'help_trimmer_title': 'Trimmer',
+        'help_trimmer_text': 'YouTube URL einfügen und Qualität wählen. Zum Schneiden "Video-Trimming aktivieren" einschalten, "Videodauer abrufen" klicken, dann Start-/Endzeit mit Schiebereglern oder Zeitfeldern einstellen. Vorschaubilder zeigen die exakten Schnittpunkte.',
+        'help_uploader_title': 'Uploader',
+        'help_uploader_text': 'Lokale Video-/Audiodateien auf Catbox.moe hochladen. "Dateien hinzufügen" zum Auswählen, dann "Auf Catbox.moe hochladen". URLs werden automatisch in die Zwischenablage kopiert. Auto-Upload kann im Trimmer-Tab aktiviert werden.',
+        'help_settings_title': 'Einstellungen',
+        'help_settings_text': 'UI-Sprache ändern, Dunkelmodus umschalten, nach Updates suchen und App-Info anzeigen.',
+
         # Common buttons
         'btn_download': 'Herunterladen',
         'btn_stop': 'Stopp',
@@ -549,6 +573,18 @@ TRANSLATIONS = {
         'tooltip_clipboard': 'Skopiuj URL YouTube do schowka, a zostaną automatycznie wykryte tutaj. Możesz je pobrać pojedynczo lub wszystkie naraz.',
         'tooltip_trimmer': 'Pobieraj filmy z YouTube z wyborem jakości. Włącz przycinanie, aby wyciąć określone części wideo z podglądem klatek.',
         'tooltip_uploader': 'Przesyłaj lokalne pliki wideo/audio na Catbox.moe. Obsługiwane są pliki do 200MB.',
+
+        # Help tab
+        'help_header': 'Jak używać YoutubeDownloader',
+        'help_github_btn': 'GitHub',
+        'help_clipboard_title': 'Tryb schowka',
+        'help_clipboard_text': 'Skopiuj URL YouTube (Ctrl+C), a automatycznie pojawi się na liście. Pobieraj pojedynczo lub kliknij "Pobierz wszystko". Włącz "Auto-pobieranie" aby rozpocząć pobieranie natychmiast po wykryciu URL.',
+        'help_trimmer_title': 'Przycinanie',
+        'help_trimmer_text': 'Wklej URL YouTube i wybierz jakość. Aby przyciąć wideo, włącz "Przycinanie wideo", kliknij "Pobierz czas trwania", a następnie ustaw start i koniec suwakami lub polami czasu. Podgląd klatek pokazuje dokładne punkty cięcia.',
+        'help_uploader_title': 'Przesyłanie',
+        'help_uploader_text': 'Przesyłaj lokalne pliki na Catbox.moe. Kliknij "Dodaj pliki", a następnie "Prześlij na Catbox.moe". URL-e są automatycznie kopiowane do schowka. Auto-przesyłanie można włączyć w zakładce Przycinanie.',
+        'help_settings_title': 'Ustawienia',
+        'help_settings_text': 'Zmień język interfejsu, przełącz tryb ciemny, sprawdź aktualizacje i wyświetl informacje o aplikacji.',
 
         # Common buttons
         'btn_download': 'Pobierz',
