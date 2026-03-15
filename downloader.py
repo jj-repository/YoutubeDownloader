@@ -37,8 +37,8 @@ from constants import (
     METADATA_FETCH_TIMEOUT, STREAM_FETCH_TIMEOUT, FFPROBE_TIMEOUT,
     DEPENDENCY_CHECK_TIMEOUT, TIMEOUT_CHECK_INTERVAL, MAX_VOLUME, MIN_VOLUME,
     MAX_VIDEO_DURATION, BYTES_PER_MB, CATBOX_MAX_SIZE_MB, MAX_FILENAME_LENGTH,
-    DEFAULT_VIDEO_QUALITY, CLIPBOARD_URL_LIST_HEIGHT, UI_INITIAL_DELAY_MS,
-    AUTO_UPLOAD_DELAY_MS, SHUTDOWN_GRACE_PERIOD_SEC,
+    CLIPBOARD_URL_LIST_HEIGHT, UI_INITIAL_DELAY_MS,
+    AUTO_UPLOAD_DELAY_MS,
     TARGET_MAX_SIZE_BYTES, TARGET_AUDIO_BITRATE_BPS,
     SIZE_CONSTRAINED_RESOLUTIONS, SIZE_CONSTRAINED_MIN_BITRATES,
     APP_VERSION, GITHUB_REPO,
@@ -77,16 +77,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-# Constants and translations are now imported from constants.py and translations.py
-
-# TRANSLATIONS and tr() are now imported from translations.py
-# Access current language via: translations.CURRENT_LANGUAGE
-# Set language via: set_language('de') or translations.set_language('de')
-
-# REMOVED: TRANSLATIONS dictionary moved to translations.py (see that file for all strings)
-# REMOVED: CURRENT_LANGUAGE moved to translations.py
-# REMOVED: tr() function moved to translations.py
 
 # Compiled regex patterns for performance
 PROGRESS_REGEX = re.compile(r'(\d+\.?\d*)%')
@@ -430,7 +420,7 @@ class YouTubeDownloader:
         ttk.Separator(parent).grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
         # Update section
-        ttk.Label(parent, text="Updates", font=('Arial', 11, 'bold')).grid(row=4, column=0, sticky=tk.W, pady=(5, 5))
+        ttk.Label(parent, text=tr('settings_updates'), font=('Arial', 11, 'bold')).grid(row=4, column=0, sticky=tk.W, pady=(5, 5))
 
         self.auto_check_updates_var = tk.BooleanVar(value=self._load_auto_check_updates_setting())
         ttk.Checkbutton(parent, text=tr('update_auto_check'),
@@ -790,6 +780,35 @@ class YouTubeDownloader:
             # Replace current script with new version
             shutil.move(tmp_path, current_script)
             logger.info(f"Updated script at: {current_script}")
+
+            # Also update constants.py and translations.py
+            script_dir = current_script.parent
+            for module_name in ('constants.py', 'translations.py'):
+                module_url = f"{GITHUB_RAW_URL}/{tag_name}/{module_name}"
+                logger.info(f"Downloading module update from: {module_url}")
+                module_request = urllib.request.Request(module_url, headers=headers)
+
+                with tempfile.NamedTemporaryFile(mode='wb', suffix='.py', delete=False) as tmp_module:
+                    with urllib.request.urlopen(module_request, timeout=60) as response:
+                        module_content = response.read()
+                        tmp_module.write(module_content)
+                    tmp_module_path = tmp_module.name
+
+                # Syntax check
+                try:
+                    compile(module_content, module_name, 'exec')
+                except SyntaxError as e:
+                    Path(tmp_module_path).unlink(missing_ok=True)
+                    raise RuntimeError(f"Downloaded {module_name} has syntax errors: {e}")
+
+                # Backup and replace
+                module_path = script_dir / module_name
+                module_backup = module_path.with_suffix('.py.backup')
+                if module_path.exists():
+                    shutil.copy2(module_path, module_backup)
+                    logger.info(f"Created backup at: {module_backup}")
+                shutil.move(tmp_module_path, module_path)
+                logger.info(f"Updated module at: {module_path}")
 
             self.root.after(0, lambda: self.update_status(tr('update_complete_title'), "green"))
             self.root.after(0, lambda: messagebox.showinfo(
@@ -1888,7 +1907,7 @@ class YouTubeDownloader:
         self.clipboard_quality_combo.grid(row=0, column=1, sticky=tk.W)
 
         # Speed limit
-        ttk.Label(settings_frame, text="Speed limit:", font=('Arial', 9)).grid(row=0, column=2, sticky=tk.W, padx=(20, 5))
+        ttk.Label(settings_frame, text=tr('label_speed_limit'), font=('Arial', 9)).grid(row=0, column=2, sticky=tk.W, padx=(20, 5))
         self.clipboard_speed_limit_var = tk.StringVar(value="")
         self.clipboard_speed_limit_entry = ttk.Entry(settings_frame, textvariable=self.clipboard_speed_limit_var, width=6)
         self.clipboard_speed_limit_entry.grid(row=0, column=3, sticky=tk.W)
@@ -2338,7 +2357,7 @@ class YouTubeDownloader:
         process = None
         try:
             quality = self.clipboard_quality_var.get()
-            if "none" in quality.lower():
+            if "none" in quality.lower() or quality == tr('quality_audio_only'):
                 quality = "none"
 
             audio_only = quality.startswith("none")
@@ -3966,7 +3985,9 @@ class YouTubeDownloader:
 
     def _timeout_download(self, reason):
         """Handle download timeout"""
-        if self.is_downloading:
+        with self.download_lock:
+            downloading = self.is_downloading
+        if downloading:
             logger.warning(f"Timing out download: {reason}")
             self.update_status(reason, "red")
             self.stop_download()
@@ -4054,9 +4075,10 @@ class YouTubeDownloader:
                     encoding='utf-8', errors='replace', bufsize=1, **_subprocess_kwargs)
 
             for line in self.current_process.stdout:
-                if not self.is_downloading:
-                    self.safe_process_cleanup(self.current_process)
-                    return False
+                with self.download_lock:
+                    if not self.is_downloading:
+                        self.safe_process_cleanup(self.current_process)
+                        return False
                 if 'out_time_ms=' in line:
                     try:
                         time_ms = int(line.split('=')[1].strip())
@@ -4101,9 +4123,10 @@ class YouTubeDownloader:
                     encoding='utf-8', errors='replace', bufsize=1, **_subprocess_kwargs)
 
             for line in self.current_process.stdout:
-                if not self.is_downloading:
-                    self.safe_process_cleanup(self.current_process)
-                    return False
+                with self.download_lock:
+                    if not self.is_downloading:
+                        self.safe_process_cleanup(self.current_process)
+                        return False
                 if 'out_time_ms=' in line:
                     try:
                         time_ms = int(line.split('=')[1].strip())
@@ -4212,13 +4235,13 @@ class YouTubeDownloader:
 
                 cmd = [
                     self.ytdlp_path,
-                    '--concurrent-fragments', '5',  # Download fragments in parallel
+                    '--concurrent-fragments', CONCURRENT_FRAGMENTS,  # Download fragments in parallel
                     '--buffer-size', BUFFER_SIZE,  # Better buffering
                     '--http-chunk-size', CHUNK_SIZE,  # Larger chunks = fewer requests
                     '-f', 'bestaudio',
                     '--extract-audio',
                     '--audio-format', 'mp3',
-                    '--audio-quality', '128K',
+                    '--audio-quality', AUDIO_BITRATE,
                     '--newline',
                     '--progress',
                     '-o', os.path.join(self.download_path, output_template),
@@ -4290,7 +4313,7 @@ class YouTubeDownloader:
 
                     cmd = [
                         self.ytdlp_path,
-                        '--concurrent-fragments', '5',
+                        '--concurrent-fragments', CONCURRENT_FRAGMENTS,
                         '--buffer-size', BUFFER_SIZE,
                         '--http-chunk-size', CHUNK_SIZE,
                         '-f', f'bestvideo[height<={height}]+bestaudio/best[height<={height}]',
@@ -4315,7 +4338,7 @@ class YouTubeDownloader:
 
                     cmd = [
                         self.ytdlp_path,
-                        '--concurrent-fragments', '5',
+                        '--concurrent-fragments', CONCURRENT_FRAGMENTS,
                         '--buffer-size', BUFFER_SIZE,
                         '--http-chunk-size', CHUNK_SIZE,
                         '-f', f'bestvideo[height<={height}]+bestaudio/best[height<={height}]',
@@ -4579,7 +4602,7 @@ class YouTubeDownloader:
                 if trim_enabled:
                     cmd.extend(['-ss', str(start_time), '-to', str(end_time)])
 
-                cmd.extend(['-vn', '-c:a', 'libmp3lame', '-b:a', '128k'])
+                cmd.extend(['-vn', '-c:a', 'libmp3lame', '-b:a', AUDIO_BITRATE])
 
                 if volume_multiplier != 1.0:
                     cmd.extend(['-af', f'volume={volume_multiplier}'])
@@ -4688,154 +4711,6 @@ class YouTubeDownloader:
             if self.is_downloading:
                 self.update_status(tr('error_generic', error=str(e)), "red")
                 logger.exception(f"Error processing local file: {e}")
-        finally:
-            with self.download_lock:
-                self.is_downloading = False
-                proc = self.current_process
-                self.current_process = None
-            if proc:
-                if proc.stdout:
-                    proc.stdout.close()
-                if proc.stderr:
-                    proc.stderr.close()
-            self._reset_buttons()
-
-    def download_playlist(self, url):
-        """Download entire YouTube playlist with quality and volume settings"""
-        try:
-            quality = self.quality_var.get()
-            audio_only = quality.startswith("none")
-            volume_multiplier = self.validate_volume(self.volume_var.get())
-
-            custom_name = self.sanitize_filename(self.filename_entry.get().strip())
-
-            self.update_status(tr('status_playlist_downloading'), "blue")
-            logger.info(f"Starting playlist download: {url}")
-
-            if audio_only:
-                # Audio-only playlist — no resolution in filename
-                if custom_name:
-                    output_template = f'{custom_name}-%(playlist_index)s.%(ext)s'
-                else:
-                    output_template = '%(playlist_index)s-%(title)s.%(ext)s'
-
-                cmd = [
-                    self.ytdlp_path,
-                    '--concurrent-fragments', '5',  # Download fragments in parallel
-                    '--buffer-size', BUFFER_SIZE,  # Better buffering
-                    '--http-chunk-size', CHUNK_SIZE,  # Larger chunks = fewer requests
-                    '-f', 'bestaudio',
-                    '--extract-audio',
-                    '--audio-format', 'mp3',
-                    '--audio-quality', '128K',
-                    '--newline',
-                    '--progress',
-                    '-o', os.path.join(self.download_path, output_template),
-                ]
-
-                # Add volume filter
-                if volume_multiplier != 1.0:
-                    cmd.extend(['--postprocessor-args', f'ffmpeg:-af volume={volume_multiplier}'])
-
-                # Add speed limit if set
-                cmd.extend(self._get_speed_limit_args())
-
-                cmd.append(url)
-
-            else:
-                # Video playlist
-                if quality.startswith("none"):
-                    self.update_status(tr('error_select_quality'), "red")
-                    self._reset_buttons()
-                    with self.download_lock:
-                        self.is_downloading = False
-                    return
-
-                height = quality
-
-                # Video playlist — include resolution in filename
-                if custom_name:
-                    output_template = f'{custom_name}_{height}p-%(playlist_index)s.%(ext)s'
-                else:
-                    output_template = f'%(playlist_index)s-%(title)s_{height}p.%(ext)s'
-
-                cmd = [
-                    self.ytdlp_path,
-                    '--concurrent-fragments', '5',  # Download fragments in parallel
-                    '--buffer-size', BUFFER_SIZE,  # Better buffering
-                    '--http-chunk-size', CHUNK_SIZE,  # Larger chunks = fewer requests
-                    '-f', f'bestvideo[height<={height}]+bestaudio/best[height<={height}]',
-                    '--merge-output-format', 'mp4',
-                ]
-
-                # Build ffmpeg postprocessor args for video (only if volume changed)
-                if volume_multiplier != 1.0:
-                    # Need to re-encode for volume adjustment
-                    ffmpeg_video_args = ['-c:v', 'libx264', '-crf', str(VIDEO_CRF), '-preset', 'faster', '-c:a', 'aac', '-b:a', AUDIO_BITRATE]
-                    ffmpeg_video_args.extend(['-af', f'volume={volume_multiplier}'])
-                    cmd.extend(['--postprocessor-args', 'ffmpeg:' + ' '.join(ffmpeg_video_args)])
-
-                # Add speed limit if set
-                cmd.extend(self._get_speed_limit_args())
-
-                cmd.extend([
-                    '--newline',
-                    '--progress',
-                    '-o', os.path.join(self.download_path, output_template),
-                    url
-                ])
-
-            logger.info(f"Playlist download command: {' '.join(cmd)}")
-
-            # Execute yt-dlp
-            with self.download_lock:
-                self.current_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                                         encoding='utf-8', errors='replace', bufsize=1, **_subprocess_kwargs)
-
-            # Parse yt-dlp output
-            for line in self.current_process.stdout:
-                if not self.is_downloading:
-                    break
-
-                logger.debug(f"yt-dlp output: {line.strip()}")
-
-                # Parse progress
-                if '[download]' in line and '%' in line:
-                    try:
-                        # Extract percentage
-                        match = PROGRESS_REGEX.search(line)
-                        if match:
-                            progress = float(match.group(1))
-                            self.update_progress(progress)
-                            self.last_progress_time = time.time()
-
-                            # Extract current file info
-                            if 'Downloading item' in line:
-                                self.update_status(line.strip(), "blue")
-                            else:
-                                self.update_status(tr('status_downloading_playlist', progress=f"{progress:.1f}"), "blue")
-                    except (ValueError, AttributeError):
-                        pass
-
-            self.current_process.wait()
-
-            if self.current_process.returncode == 0 and self.is_downloading:
-                self.update_progress(100)
-                self.update_status(tr('status_playlist_complete'), "green")
-                logger.info(f"Playlist downloaded successfully: {url}")
-                # Note: Upload is disabled for playlists
-            elif self.is_downloading:
-                self.update_status(tr('status_playlist_failed'), "red")
-                logger.error(f"Playlist download failed with return code {self.current_process.returncode}")
-
-        except FileNotFoundError as e:
-            if self.is_downloading:
-                self.update_status(tr('error_ytdlp_not_found'), "red")
-                logger.error(f"yt-dlp not found: {e}")
-        except Exception as e:
-            if self.is_downloading:
-                self.update_status(tr('error_generic', error=str(e)), "red")
-                logger.exception(f"Error downloading playlist: {e}")
         finally:
             with self.download_lock:
                 self.is_downloading = False

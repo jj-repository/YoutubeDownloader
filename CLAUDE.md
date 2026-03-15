@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **YouTube Downloader** is a Python desktop application for downloading videos from YouTube and other supported sites. It features a tkinter GUI with internationalization, quality selection, thumbnail previews, and integration with Catbox for file uploads.
 
-**Version:** 3.4.0
+**Version:** 3.8.0
 
 ## Files Structure
 
@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 YoutubeDownloader/
 ├── downloader.py          # Main application
 ├── constants.py           # Configuration constants and paths
-├── translations.py        # i18n translations (English, German)
+├── translations.py        # i18n translations (English, German, Polish)
 ├── requirements.txt       # Python dependencies
 └── CLAUDE.md              # This file
 ```
@@ -39,7 +39,7 @@ Recent refactoring extracted:
 
 ### Core Components
 
-1. **YouTubeDownloaderGUI class**: Main application with all UI and logic
+1. **YouTubeDownloader class**: Main application with all UI and logic
 2. **yt-dlp integration**: Backend for video downloading
 3. **ffmpeg integration**: Media processing (optional)
 4. **Catbox integration**: File upload via catboxpy
@@ -51,7 +51,7 @@ Recent refactoring extracted:
 - Thumbnail preview with caching
 - Clipboard monitoring for URLs
 - Upload to Catbox with history
-- Multi-language support (EN/DE)
+- Multi-language support (English (en), German (de), Polish (pl))
 - Dark theme UI
 
 ## Configuration
@@ -59,7 +59,7 @@ Recent refactoring extracted:
 **Config Path:** `~/.youtubedownloader/config.json`
 
 **Stored Settings:**
-- `language`: UI language ("en" or "de")
+- `language`: UI language ("en", "de", or "pl")
 - `auto_check_updates`: Check for updates on startup (default: true)
 
 **Config Validation:**
@@ -69,7 +69,7 @@ Recent refactoring extracted:
 
 ## Update System
 
-**Status:** Fully implemented with SHA256 verification and UI toggle
+**Status:** Fully implemented with syntax checking and UI toggle
 
 **Components:**
 - `_load_auto_check_updates_setting()`: Load preference from config
@@ -77,20 +77,16 @@ Recent refactoring extracted:
 - `_check_for_updates()`: Fetches latest release from GitHub API
 - `_version_newer()`: Semantic version comparison
 - `_show_update_dialog()`: Modal with Update Now / Open Releases / Later
-- `_apply_update()`: Downloads, verifies SHA256, applies update
+- `_apply_update()`: Downloads, syntax-checks via compile(), backs up, and applies update
 
 **GitHub Integration:**
 - Repository: `jj-repository/YoutubeDownloader`
 - API: `https://api.github.com/repos/jj-repository/YoutubeDownloader/releases/latest`
-- Checksum file: `downloader.py.sha256`
 
 **Security:**
-- SHA256 checksum verification required
-- Aborts if checksum file missing (404)
-- Deletes downloaded file if verification fails
-
-**Missing (compared to autoclicker):**
-- No backup file creation before update
+- SHA256 checksum verification was removed in favor of syntax checking via `compile()`
+- Backup file created before replacing each module
+- Updates all three modules: downloader.py, constants.py, translations.py
 
 ## Dependencies
 
@@ -106,23 +102,23 @@ Core dependencies from constants.py patterns:
 
 **UI Constants:**
 ```python
-PREVIEW_WIDTH = 320
-PREVIEW_HEIGHT = 180
-SLIDER_LENGTH = 200
+PREVIEW_WIDTH = 240
+PREVIEW_HEIGHT = 135
+SLIDER_LENGTH = 400
 ```
 
 **Timeouts:**
 ```python
-DOWNLOAD_TIMEOUT = 300        # 5 minutes
-METADATA_FETCH_TIMEOUT = 30   # 30 seconds
-FFPROBE_TIMEOUT = 10          # 10 seconds
+DOWNLOAD_TIMEOUT = 3600      # 60 minutes
+METADATA_FETCH_TIMEOUT = 30  # 30 seconds
+FFPROBE_TIMEOUT = 10         # 10 seconds
 ```
 
 **File Limits:**
 ```python
 CATBOX_MAX_SIZE_MB = 200
 MAX_FILENAME_LENGTH = 200
-MAX_VIDEO_DURATION = 7200     # 2 hours
+MAX_VIDEO_DURATION = 86400    # 24 hours
 ```
 
 ## Translations (translations.py)
@@ -141,7 +137,7 @@ message = tr('download_complete')  # Returns German translation
 ```
 
 **Adding new strings:**
-1. Add key to TRANSLATIONS dict with both 'en' and 'de' values
+1. Add key to TRANSLATIONS dict with 'en', 'de', and 'pl' values
 2. Use `tr('key_name')` in code
 
 ## Clipboard Integration
@@ -158,9 +154,8 @@ message = tr('download_complete')  # Returns German translation
 
 ## Known Issues / Technical Debt
 
-1. **No backup before update**: Unlike autoclicker, doesn't create `.backup` file
-2. **Hardcoded supported sites**: URL patterns could be more extensible
-3. **Large single file**: Main downloader.py is large, could benefit from further modularization
+1. **Hardcoded supported sites**: URL patterns could be more extensible
+2. **Large single file**: Main downloader.py is large, could benefit from further modularization
 
 ## Recent Fixes (January 2026)
 
@@ -180,18 +175,9 @@ Uses `translations.py` module for all language management:
 ### Adding new translation string
 1. Add to TRANSLATIONS in translations.py:
    ```python
-   'new_key': {'en': 'English text', 'de': 'German text'}
+   'new_key': {'en': 'English text', 'de': 'German text', 'pl': 'Polish text'}
    ```
 2. Use `tr('new_key')` in downloader.py
-
-### Adding backup before update
-Reference autoclicker.py:
-```python
-import shutil
-current_script = Path(__file__).resolve()
-backup_path = current_script.with_suffix('.py.backup')
-shutil.copy2(current_script, backup_path)
-```
 
 ### Modifying download behavior
 - Quality selection: `_on_quality_change()`
@@ -202,7 +188,7 @@ shutil.copy2(current_script, backup_path)
 
 **Application Data:** `~/.youtubedownloader/`
 - `config.json` - User preferences
-- `upload_history.json` - Catbox upload history
+- `upload_history.txt` - Catbox upload history
 - `clipboard_urls.json` - Saved clipboard URLs
 - `youtubedownloader.log` - Application log
 
@@ -210,24 +196,24 @@ shutil.copy2(current_script, backup_path)
 
 ## Review Status
 
-> **Last Full Review:** 2026-01-10
-> **Status:** ✅ Production Ready
+> **Last Full Review:** 2026-03-15
+> **Status:** Production Ready
 
-### Security Review ✅
+### Security Review
 - [x] URL validation before download
 - [x] Safe subprocess usage (yt-dlp)
 - [x] Config validation with schema
-- [x] SHA256 verification for updates
+- [x] Syntax checking for updates (compile())
 - [x] No command injection (proper argument passing)
 - [x] Timeout on all network operations
 
-### Internationalization Review ✅
+### Internationalization Review
 - [x] All UI strings use tr()
 - [x] URL validation messages internationalized
 - [x] Error messages internationalized
 - [x] Language switching works
 
-### Code Quality ✅
+### Code Quality
 - [x] Modular design (constants.py, translations.py)
 - [x] Config validation
 - [x] Proper error handling
@@ -239,11 +225,11 @@ shutil.copy2(current_script, backup_path)
 
 | Aspect | Standard | Status |
 |--------|----------|--------|
-| Security | Safe URL/subprocess handling | ✅ Met |
-| i18n | All user-facing strings translated | ✅ Met |
-| Reliability | Downloads complete successfully | ✅ Met |
-| UX | Progress feedback, quality selection | ✅ Met |
-| Documentation | CLAUDE.md current | ✅ Met |
+| Security | Safe URL/subprocess handling | Met |
+| i18n | All user-facing strings translated | Met |
+| Reliability | Downloads complete successfully | Met |
+| UX | Progress feedback, quality selection | Met |
+| Documentation | CLAUDE.md current | Met |
 
 ## Intentional Design Decisions
 
@@ -254,23 +240,21 @@ shutil.copy2(current_script, backup_path)
 | Separate translations.py | Easy to add new languages |
 | Catbox integration | Convenient sharing for downloaded files |
 | Clipboard monitoring | Common workflow - copy URL, app detects it |
-| No backup before update | Acceptable risk; can re-download from releases |
+| Backup before update | Creates .py.backup files before replacing modules |
 
 ## Won't Fix (Accepted Limitations)
 
 | Issue | Reason |
 |-------|--------|
-| No backup before update | Lower priority; releases always available |
 | Large single file (downloader.py) | Works fine; further splitting adds complexity |
 | Hardcoded site patterns | yt-dlp handles site detection; our patterns are just hints |
-| Polish translation incomplete | Community can contribute; EN/DE are primary |
 
 ## Completed Optimizations
 
-- ✅ URL validation internationalized
-- ✅ Constants extracted to module
-- ✅ Translations extracted to module
-- ✅ Config validation
-- ✅ Quality selection with preview
+- URL validation internationalized
+- Constants extracted to module
+- Translations extracted to module
+- Config validation
+- Quality selection with preview
 
 **DO NOT further optimize:** Download speed is determined by yt-dlp and network. UI is responsive. Thumbnail caching is implemented.

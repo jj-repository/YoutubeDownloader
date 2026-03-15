@@ -25,11 +25,6 @@ TRANSLATIONS = {
         'tab_clipboard': 'Clipboard Mode',
         'tab_uploader': 'Uploader',
 
-        # Tab tooltips
-        'tooltip_clipboard': 'Copy YouTube URLs to your clipboard and they will be automatically detected here. You can download them individually or all at once.',
-        'tooltip_trimmer': 'Download YouTube videos with quality selection. Enable trimming to cut specific parts of the video with frame-accurate preview.',
-        'tooltip_uploader': 'Upload local video/audio files to Catbox.moe for easy sharing. Files up to 200MB are supported.',
-
         # Help tab
         'help_header': 'How to Use YoutubeDownloader',
         'help_github_btn': 'GitHub',
@@ -88,7 +83,9 @@ TRANSLATIONS = {
         'label_download_mode': 'Download Mode:',
         'checkbox_auto_download': 'Auto-download (starts immediately)',
         'header_settings': 'Settings',
+        'settings_updates': 'Updates',
         'label_quality': 'Quality:',
+        'label_speed_limit': 'Speed limit:',
         'label_detected_urls': 'Detected URLs',
         'label_url_count': '({count} URL{s})',
         'btn_download_all': 'Download All',
@@ -264,13 +261,9 @@ TRANSLATIONS = {
         'update_failed_msg': 'Failed to download update:\n{error}',
 
         # yt-dlp updates
-        'ytdlp_update_btn': 'Update yt-dlp',
-        'ytdlp_checking': 'Checking yt-dlp version...',
         'ytdlp_current_version': 'Current yt-dlp: {version}',
         'ytdlp_update_available_title': 'yt-dlp Update Available',
         'ytdlp_update_available_msg': 'A new version of yt-dlp is available!\n\nCurrent: {current}\nLatest: {latest}\n\nThis may fix download issues.\nUpdate now?',
-        'ytdlp_up_to_date_title': 'yt-dlp Up to Date',
-        'ytdlp_up_to_date_msg': 'yt-dlp is already at the latest version ({version}).',
         'ytdlp_updating': 'Updating yt-dlp...',
         'ytdlp_update_success_title': 'yt-dlp Updated',
         'ytdlp_update_success_msg': 'yt-dlp has been updated to version {version}.',
@@ -278,8 +271,6 @@ TRANSLATIONS = {
         'ytdlp_update_failed_msg': 'Failed to update yt-dlp:\n{error}',
         'ytdlp_update_not_supported_title': 'Update Not Supported',
         'ytdlp_update_not_supported_msg': 'Cannot auto-update yt-dlp in this mode.\n\nPlease update yt-dlp manually or download the latest app release.',
-        'ytdlp_check_failed_title': 'Check Failed',
-        'ytdlp_check_failed_msg': 'Failed to check yt-dlp version:\n{error}',
     },
 
     'de': {
@@ -297,10 +288,6 @@ TRANSLATIONS = {
         'tab_clipboard': 'Zwischenablage-Modus',
         'tab_uploader': 'Uploader',
 
-        # Tab tooltips
-        'tooltip_clipboard': 'YouTube URLs in die Zwischenablage kopieren und sie werden hier automatisch erkannt. Einzeln oder alle auf einmal herunterladen.',
-        'tooltip_trimmer': 'YouTube Videos mit Qualitätsauswahl herunterladen. Trimmen aktivieren, um bestimmte Teile des Videos mit Frame-genauer Vorschau zu schneiden.',
-        'tooltip_uploader': 'Lokale Video-/Audiodateien auf Catbox.moe hochladen. Dateien bis zu 200MB werden unterstützt.',
 
         # Help tab
         'help_header': 'Anleitung YoutubeDownloader',
@@ -360,7 +347,9 @@ TRANSLATIONS = {
         'label_download_mode': 'Download-Modus:',
         'checkbox_auto_download': 'Automatischer Download (startet sofort)',
         'header_settings': 'Einstellungen',
+        'settings_updates': 'Aktualisierungen',
         'label_quality': 'Qualität:',
+        'label_speed_limit': 'Geschwindigkeitslimit:',
         'label_detected_urls': 'Erkannte URLs',
         'label_url_count': '({count} URL{s})',
         'btn_download_all': 'Alle herunterladen',
@@ -536,13 +525,9 @@ TRANSLATIONS = {
         'update_failed_msg': 'Update konnte nicht heruntergeladen werden:\n{error}',
 
         # yt-dlp updates
-        'ytdlp_update_btn': 'yt-dlp aktualisieren',
-        'ytdlp_checking': 'Überprüfe yt-dlp Version...',
         'ytdlp_current_version': 'Aktuelles yt-dlp: {version}',
         'ytdlp_update_available_title': 'yt-dlp Update verfügbar',
         'ytdlp_update_available_msg': 'Eine neue Version von yt-dlp ist verfügbar!\n\nAktuell: {current}\nNeueste: {latest}\n\nDies könnte Download-Probleme beheben.\nJetzt aktualisieren?',
-        'ytdlp_up_to_date_title': 'yt-dlp aktuell',
-        'ytdlp_up_to_date_msg': 'yt-dlp ist bereits auf der neuesten Version ({version}).',
         'ytdlp_updating': 'Aktualisiere yt-dlp...',
         'ytdlp_update_success_title': 'yt-dlp aktualisiert',
         'ytdlp_update_success_msg': 'yt-dlp wurde auf Version {version} aktualisiert.',
@@ -550,8 +535,6 @@ TRANSLATIONS = {
         'ytdlp_update_failed_msg': 'yt-dlp konnte nicht aktualisiert werden:\n{error}',
         'ytdlp_update_not_supported_title': 'Update nicht unterstützt',
         'ytdlp_update_not_supported_msg': 'yt-dlp kann in diesem Modus nicht automatisch aktualisiert werden.\n\nBitte aktualisieren Sie yt-dlp manuell oder laden Sie die neueste App-Version herunter.',
-        'ytdlp_check_failed_title': 'Überprüfung fehlgeschlagen',
-        'ytdlp_check_failed_msg': 'yt-dlp Version konnte nicht überprüft werden:\n{error}',
     },
 
     'pl': {
@@ -568,11 +551,6 @@ TRANSLATIONS = {
         'tab_trimmer': 'Przycinanie',
         'tab_clipboard': 'Tryb schowka',
         'tab_uploader': 'Przesyłanie',
-
-        # Tab tooltips
-        'tooltip_clipboard': 'Skopiuj URL YouTube do schowka, a zostaną automatycznie wykryte tutaj. Możesz je pobrać pojedynczo lub wszystkie naraz.',
-        'tooltip_trimmer': 'Pobieraj filmy z YouTube z wyborem jakości. Włącz przycinanie, aby wyciąć określone części wideo z podglądem klatek.',
-        'tooltip_uploader': 'Przesyłaj lokalne pliki wideo/audio na Catbox.moe. Obsługiwane są pliki do 200MB.',
 
         # Help tab
         'help_header': 'Jak używać YoutubeDownloader',
@@ -632,7 +610,9 @@ TRANSLATIONS = {
         'label_download_mode': 'Tryb pobierania:',
         'checkbox_auto_download': 'Automatyczne pobieranie (rozpoczyna natychmiast)',
         'header_settings': 'Ustawienia',
+        'settings_updates': 'Aktualizacje',
         'label_quality': 'Jakość:',
+        'label_speed_limit': 'Limit prędkości:',
         'label_detected_urls': 'Wykryte URL',
         'label_url_count': '({count} URL{s})',
         'btn_download_all': 'Pobierz wszystkie',
@@ -808,13 +788,9 @@ TRANSLATIONS = {
         'update_failed_msg': 'Nie udało się pobrać aktualizacji:\n{error}',
 
         # yt-dlp updates
-        'ytdlp_update_btn': 'Aktualizuj yt-dlp',
-        'ytdlp_checking': 'Sprawdzanie wersji yt-dlp...',
         'ytdlp_current_version': 'Obecny yt-dlp: {version}',
         'ytdlp_update_available_title': 'Dostępna aktualizacja yt-dlp',
         'ytdlp_update_available_msg': 'Dostępna jest nowa wersja yt-dlp!\n\nObecna: {current}\nNajnowsza: {latest}\n\nTo może naprawić problemy z pobieraniem.\nZaktualizować teraz?',
-        'ytdlp_up_to_date_title': 'yt-dlp aktualny',
-        'ytdlp_up_to_date_msg': 'yt-dlp jest już w najnowszej wersji ({version}).',
         'ytdlp_updating': 'Aktualizowanie yt-dlp...',
         'ytdlp_update_success_title': 'yt-dlp zaktualizowany',
         'ytdlp_update_success_msg': 'yt-dlp został zaktualizowany do wersji {version}.',
@@ -822,8 +798,6 @@ TRANSLATIONS = {
         'ytdlp_update_failed_msg': 'Nie udało się zaktualizować yt-dlp:\n{error}',
         'ytdlp_update_not_supported_title': 'Aktualizacja nieobsługiwana',
         'ytdlp_update_not_supported_msg': 'Nie można automatycznie zaktualizować yt-dlp w tym trybie.\n\nZaktualizuj yt-dlp ręcznie lub pobierz najnowszą wersję aplikacji.',
-        'ytdlp_check_failed_title': 'Sprawdzenie nie powiodło się',
-        'ytdlp_check_failed_msg': 'Nie udało się sprawdzić wersji yt-dlp:\n{error}',
     }
 }
 

@@ -71,7 +71,7 @@ DEFAULT_VIDEO_QUALITY = "480"
 CLIPBOARD_URL_LIST_HEIGHT = 150
 
 # Version and Update
-APP_VERSION = "3.8.0"
+APP_VERSION = "3.8.1"
 GITHUB_REPO = "jj-repository/YoutubeDownloader"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -83,9 +83,6 @@ UPLOAD_HISTORY_FILE = APP_DATA_DIR / "upload_history.txt"
 CLIPBOARD_URLS_FILE = APP_DATA_DIR / "clipboard_urls.json"
 CONFIG_FILE = APP_DATA_DIR / "config.json"
 LOG_FILE = APP_DATA_DIR / "youtubedownloader.log"
-
-# Default language
-DEFAULT_LANGUAGE = 'en'
 
 # Theme colors
 THEMES = {
