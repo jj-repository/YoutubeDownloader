@@ -69,11 +69,18 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=2),
+        logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=0),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger(__name__)
+
+def _excepthook(exc_type, exc_value, exc_tb):
+    """Log unhandled exceptions to the log file before crashing."""
+    logger.critical("Unhandled exception", exc_info=(exc_type, exc_value, exc_tb))
+    sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+sys.excepthook = _excepthook
 
 # Compiled regex patterns for performance
 PROGRESS_REGEX = re.compile(r'(\d+\.?\d*)%')
@@ -409,7 +416,9 @@ class YouTubeDownloader:
         ttk.Button(btn_frame, text='GitHub',
                   command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}')).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(btn_frame, text='Report a Bug',
-                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}/issues/new?template=bug_report.yml')).pack(side=tk.LEFT)
+                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}/issues/new?template=bug_report.yml')).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text='Open Log Folder',
+                  command=lambda: webbrowser.open(str(APP_DATA_DIR))).pack(side=tk.LEFT)
 
         ttk.Separator(parent).grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
 

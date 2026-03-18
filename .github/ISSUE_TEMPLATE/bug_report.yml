@@ -69,7 +69,7 @@ body:
     id: logs
     attributes:
       label: Log output (if available)
-      description: Paste relevant lines from `~/.youtubedownloader/youtubedownloader.log`
+      description: "Click **Open Log Folder** in the Help tab, or find the log at: Windows: `%USERPROFILE%\\.youtubedownloader\\youtubedownloader.log` — Linux: `~/.youtubedownloader/youtubedownloader.log`"
       render: text
     validations:
       required: false
