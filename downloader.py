@@ -788,7 +788,7 @@ class YouTubeDownloader:
             current_script = Path(__file__).resolve()
             script_dir = current_script.parent
 
-            modules = ['downloader.py', 'constants.py', 'translations.py']
+            modules = ['downloader.py', 'constants.py']
             downloaded = {}
 
             # Download and verify all modules before replacing any
@@ -817,12 +817,18 @@ class YouTubeDownloader:
                     shutil.copy2(module_path, backup_path)
                     logger.info(f"Created backup: {backup_path}")
 
-                with tempfile.NamedTemporaryFile(mode='wb', suffix='.py', delete=False,
-                                                  dir=str(script_dir)) as tmp_file:
-                    tmp_file.write(content)
-                    tmp_path = tmp_file.name
-                shutil.move(tmp_path, module_path)
-                logger.info(f"Updated: {module_path}")
+                tmp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(mode='wb', suffix='.py', delete=False,
+                                                      dir=str(script_dir)) as tmp_file:
+                        tmp_file.write(content)
+                        tmp_path = tmp_file.name
+                    shutil.move(tmp_path, module_path)
+                    logger.info(f"Updated: {module_path}")
+                except Exception:
+                    if tmp_path and os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+                    raise
 
             # Auto-restart: spawn new process, then shut down
             self._safe_after(0, lambda: self.update_status('Update complete — restarting...', "green"))
@@ -1614,6 +1620,8 @@ class YouTubeDownloader:
         """Validate if URL is a valid YouTube URL"""
         if not url:
             return False, 'URL is empty'
+        if len(url) > 2048:
+            return False, 'URL is too long'
 
         try:
             parsed = urlparse(url)
@@ -2400,6 +2408,12 @@ class YouTubeDownloader:
         }
 
         with self.clipboard_lock:
+            # Cap the list to prevent unbounded memory growth
+            if len(self.clipboard_url_list) >= 500:
+                oldest = self.clipboard_url_list.pop(0)
+                self.clipboard_url_widgets.pop(oldest['url'], None)
+                if oldest.get('widget'):
+                    oldest['widget'].destroy()
             self.clipboard_url_list.append(url_data)
             self.clipboard_url_widgets[url] = url_data
             has_urls = len(self.clipboard_url_list) > 0
@@ -4389,6 +4403,14 @@ class YouTubeDownloader:
             return True
 
         finally:
+            # Close any open pipes on the current process
+            if self.current_process:
+                for pipe in (self.current_process.stdout, self.current_process.stderr):
+                    if pipe:
+                        try:
+                            pipe.close()
+                        except OSError:
+                            pass
             # Clean up passlog files
             for suffix in ['', '-0.log', '-0.log.mbtree']:
                 p = passlogfile + suffix
@@ -4631,9 +4653,10 @@ class YouTubeDownloader:
                     if not self.is_downloading:
                         break
 
-                    # Capture ERROR lines for debugging
+                    # Capture ERROR lines for debugging (capped to prevent memory growth)
                     if 'ERROR' in line or 'error' in line.lower():
-                        error_lines.append(line.strip())
+                        if len(error_lines) < 100:
+                            error_lines.append(line.strip())
                         logger.warning(f"yt-dlp: {line.strip()}")
 
                     # Look for download progress - multiple patterns for reliability
