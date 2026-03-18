@@ -404,9 +404,12 @@ class YouTubeDownloader:
         ttk.Label(parent, text='How to Use YoutubeDownloader', font=('Arial', 14, 'bold')).grid(
             row=0, column=0, sticky=tk.W, pady=(0, 10))
 
-        ttk.Button(parent, text='GitHub',
-                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}')).grid(
-            row=1, column=0, sticky=tk.W, pady=(0, 15))
+        btn_frame = ttk.Frame(parent)
+        btn_frame.grid(row=1, column=0, sticky=tk.W, pady=(0, 15))
+        ttk.Button(btn_frame, text='GitHub',
+                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}')).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text='Report a Bug',
+                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}/issues/new?template=bug_report.yml')).pack(side=tk.LEFT)
 
         ttk.Separator(parent).grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
 
