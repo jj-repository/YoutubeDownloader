@@ -651,6 +651,8 @@ class YouTubeDownloader:
         dialog.title('Update Available')
         dialog.transient(self.root)
         dialog.grab_set()
+        colors = THEMES[self.current_theme]
+        dialog.configure(bg=colors['bg'])
 
         # Center dialog on parent
         dialog.geometry("400x200")
