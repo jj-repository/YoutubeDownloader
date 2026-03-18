@@ -1,26 +1,36 @@
 name: Bug Report
-description: Report a bug or unexpected behavior
+description: Report a bug
 labels: ["bug"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the details below.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Which version are you using?
+      placeholder: v1.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Windows
+        - Linux
+    validations:
+      required: true
+
   - type: textarea
     id: description
     attributes:
       label: What happened?
       description: A clear description of the bug.
-      placeholder: Describe the issue...
-    validations:
-      required: true
-
-  - type: textarea
-    id: steps
-    attributes:
-      label: Steps to reproduce
-      description: How can we reproduce this?
-      placeholder: |
-        1. Open the app
-        2. Paste URL '...'
-        3. Click Download
-        4. See error
     validations:
       required: true
 
@@ -28,48 +38,30 @@ body:
     id: expected
     attributes:
       label: Expected behavior
-      description: What did you expect to happen?
+      description: What did you expect to happen instead?
     validations:
       required: true
 
-  - type: dropdown
-    id: version
+  - type: textarea
+    id: steps
     attributes:
-      label: How are you running the app?
-      options:
-        - Windows portable (.exe)
-        - Windows installer
-        - Linux binary
-        - From source (python downloader.py)
-    validations:
-      required: true
-
-  - type: input
-    id: app-version
-    attributes:
-      label: App version
-      description: Shown in Settings or the title bar.
-      placeholder: e.g. 4.1.0
-    validations:
-      required: true
-
-  - type: dropdown
-    id: os
-    attributes:
-      label: Operating system
-      options:
-        - Windows 11
-        - Windows 10
-        - Linux
-        - Other
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the app
+        2. Do X
+        3. See error
     validations:
       required: true
 
   - type: textarea
     id: logs
     attributes:
-      label: Log output (if available)
-      description: "Click **Open Log Folder** in the Help tab, or find the log at: Windows: `%USERPROFILE%\\.youtubedownloader\\youtubedownloader.log` — Linux: `~/.youtubedownloader/youtubedownloader.log`"
-      render: text
-    validations:
-      required: false
+      label: Log output
+      description: Paste any relevant log output or errors. Auto-formatted as code.
+      render: shell
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Screenshots, config files, or anything else that might help.
