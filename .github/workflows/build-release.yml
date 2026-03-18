@@ -85,15 +85,10 @@ jobs:
       run: |
         Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile "yt-dlp.exe"
 
-    - name: Build portable executable (Windows onefile)
+    - name: Build executable (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        pyinstaller --onefile --name YoutubeDownloader --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
-
-    - name: Build installer executable (Windows onedir)
-      if: matrix.os == 'windows-latest'
-      run: |
-        pyinstaller --onedir --name YoutubeDownloader --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL --distpath dist_onedir downloader.py
+        pyinstaller --onefile --name YoutubeDownloader-Windows --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
 
     - name: Create release package (Linux)
       if: matrix.os == 'ubuntu-latest'
@@ -103,54 +98,6 @@ jobs:
         chmod +x release/YoutubeDownloader
         tar -czf YoutubeDownloader-Linux.tar.gz -C release .
 
-    - name: Rename portable executable (Windows)
-      if: matrix.os == 'windows-latest'
-      shell: pwsh
-      run: |
-        Copy-Item dist\YoutubeDownloader.exe YTDownloaderPortable-Win.exe
-
-    - name: Create installer (Windows)
-      if: matrix.os == 'windows-latest'
-      shell: pwsh
-      run: |
-        # Create Inno Setup script
-        @"
-        [Setup]
-        AppName=YoutubeDownloader
-        AppVersion=${{ github.ref_name }}
-        AppPublisher=JJ
-        DefaultDirName={autopf}\YoutubeDownloader
-        DefaultGroupName=YoutubeDownloader
-        OutputDir=.
-        OutputBaseFilename=YTDownloaderInstaller-Win
-        Compression=lzma2
-        SolidCompression=yes
-        SetupIconFile=icon.ico
-        UninstallDisplayIcon={app}\YoutubeDownloader.exe
-        ArchitecturesInstallIn64BitMode=x64compatible
-        WizardStyle=modern
-        DisableProgramGroupPage=yes
-
-        [Files]
-        Source: "dist_onedir\YoutubeDownloader\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-
-        [Icons]
-        Name: "{group}\YoutubeDownloader"; Filename: "{app}\YoutubeDownloader.exe"
-        Name: "{autodesktop}\YoutubeDownloader"; Filename: "{app}\YoutubeDownloader.exe"; Tasks: desktopicon
-
-        [Tasks]
-        Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
-
-        [Run]
-        Filename: "{app}\YoutubeDownloader.exe"; Description: "Launch YoutubeDownloader"; Flags: nowait postinstall skipifsilent
-        "@ | Out-File -FilePath installer.iss -Encoding ASCII
-
-        # Install Inno Setup
-        choco install innosetup -y --no-progress
-
-        # Build installer
-        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
-
     - name: Upload Linux artifact
       if: matrix.os == 'ubuntu-latest'
       uses: actions/upload-artifact@v4
@@ -158,14 +105,12 @@ jobs:
         name: linux-build
         path: YoutubeDownloader-Linux.tar.gz
 
-    - name: Upload Windows artifacts
+    - name: Upload Windows artifact
       if: matrix.os == 'windows-latest'
       uses: actions/upload-artifact@v4
       with:
         name: windows-build
-        path: |
-          YTDownloaderPortable-Win.exe
-          YTDownloaderInstaller-Win.exe
+        path: dist/YoutubeDownloader-Windows.exe
 
   create-release:
     needs: build
@@ -177,33 +122,22 @@ jobs:
       uses: actions/download-artifact@v4
 
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         files: |
           linux-build/YoutubeDownloader-Linux.tar.gz
-          windows-build/YTDownloaderPortable-Win.exe
-          windows-build/YTDownloaderInstaller-Win.exe
+          windows-build/YoutubeDownloader-Windows.exe
         body: |
           ## YoutubeDownloader ${{ github.ref_name }}
 
           ### Downloads
-          | Platform | Type | File |
-          |----------|------|------|
-          | Windows | Installer (recommended) | `YTDownloaderInstaller-Win.exe` |
-          | Windows | Portable (no install) | `YTDownloaderPortable-Win.exe` |
-          | Linux | Portable | `YoutubeDownloader-Linux.tar.gz` |
-
-          ### What's New
-          - Dark mode (enabled by default)
-          - Settings window with update controls and about info
-          - Help button linking to README
-          - Tab tooltips explaining each section
-          - yt-dlp auto-update support on all platforms
-          - Windows installer with desktop shortcut
+          | Platform | File |
+          |----------|------|
+          | Windows | `YoutubeDownloader-Windows.exe` |
+          | Linux | `YoutubeDownloader-Linux.tar.gz` |
 
           ### Setup
-          - **Windows Installer**: Run `YTDownloaderInstaller-Win.exe` and follow the wizard
-          - **Windows Portable**: Download `YTDownloaderPortable-Win.exe` and run it directly
+          - **Windows**: Download `YoutubeDownloader-Windows.exe` and run it directly
           - **Linux**: Extract and run `./YoutubeDownloader`
 
           See [README](https://github.com/jj-repository/YoutubeDownloader#readme) for full documentation.
