@@ -247,8 +247,10 @@ TRANSLATIONS = {
         'update_error_title': 'Update Error',
         'update_error_msg': 'Failed to check for updates:\n{error}',
         'update_downloading': 'Downloading update...',
+        'update_restarting': 'Update complete — restarting...',
         'update_complete_title': 'Update Complete',
-        'update_complete_msg': 'Update downloaded successfully!\n\nPlease restart the application to apply the update.',
+        'update_complete_msg': 'Update downloaded successfully!\n\nThe application will now restart.',
+        'update_installer_msg': 'Your installed version cannot self-update.\n\nThe releases page will open so you can download the latest installer.',
         'update_failed_title': 'Update Failed',
         'update_failed_msg': 'Failed to download update:\n{error}',
 

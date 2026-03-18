@@ -154,6 +154,9 @@ class YouTubeDownloader:
         # Initialize temp directory with cleanup on exit
         self._init_temp_directory()
 
+        # Clean up leftover files from previous self-updates
+        self._cleanup_old_updates()
+
         # Check dependencies once at startup
         self.dependencies_ok = self.check_dependencies()
         if not self.dependencies_ok:
@@ -695,14 +698,72 @@ class YouTubeDownloader:
             )
         logger.info(f"Integrity verified for {filename}: {actual_sha[:16]}...")
 
-    def _apply_update(self, release_data):
-        """Download and apply update with integrity verification against GitHub.
+    def _cleanup_old_updates(self):
+        """Remove leftover files from previous self-updates (.old exes, .bat trampolines)."""
+        try:
+            if getattr(sys, 'frozen', False):
+                exe_dir = Path(sys.executable).parent
+                for pattern in ('*.old', '_update_*.bat', '_update_*.sh'):
+                    for stale in exe_dir.glob(pattern):
+                        try:
+                            stale.unlink()
+                            logger.info(f"Cleaned up old update file: {stale}")
+                        except OSError:
+                            pass
+        except Exception as e:
+            logger.error(f"Error cleaning old update files: {e}")
 
-        Args:
-            release_data: The GitHub release API response data
+    def _is_onedir_frozen(self):
+        """Check if running as PyInstaller --onedir (installed) vs --onefile (portable).
+
+        In onedir mode, sys._MEIPASS points to the app directory (same as exe parent).
+        In onefile mode, sys._MEIPASS is a temp extraction directory.
         """
+        if not getattr(sys, 'frozen', False):
+            return False
+        meipass = Path(getattr(sys, '_MEIPASS', ''))
+        return meipass == Path(sys.executable).parent
+
+    def _get_update_asset_url(self, release_data):
+        """Find the download URL for the right release asset for this platform.
+
+        Returns:
+            str or None: The browser_download_url for the matching asset
+        """
+        if sys.platform == 'win32':
+            target = 'YTDownloaderPortable-Win.exe'
+        else:
+            target = 'YoutubeDownloader-Linux.tar.gz'
+
+        for asset in release_data.get('assets', []):
+            if asset.get('name') == target:
+                return asset['browser_download_url']
+        return None
+
+    def _apply_update(self, release_data):
+        """Download and apply update, then restart the application.
+
+        Routes to the appropriate strategy based on how the app is running:
+        - Source (.py): replace modules, then restart via Python interpreter
+        - Frozen portable (onefile): download new exe, rename-dance, restart
+        - Frozen installed (onedir): direct user to GitHub releases page
+        """
+        if getattr(sys, 'frozen', False):
+            if self._is_onedir_frozen():
+                # Installed version — can't self-update, point to installer
+                self._safe_after(0, lambda: messagebox.showinfo(
+                    tr('update_complete_title'),
+                    tr('update_installer_msg')
+                ))
+                self._safe_after(0, lambda: webbrowser.open(GITHUB_RELEASES_URL))
+            else:
+                self._apply_update_frozen(release_data)
+        else:
+            self._apply_update_source(release_data)
+
+    def _apply_update_source(self, release_data):
+        """Download, verify, and replace .py source files, then auto-restart."""
         import urllib.request
-        import urllib.error
         import shutil
         import tempfile
 
@@ -726,10 +787,8 @@ class YouTubeDownloader:
                 with urllib.request.urlopen(request, timeout=60) as response:
                     content = response.read()
 
-                # Verify integrity against GitHub's git tree
                 self._verify_file_against_github(tag_name, module_name, content, headers)
 
-                # Syntax check
                 try:
                     compile(content, module_name, 'exec')
                 except SyntaxError as e:
@@ -737,7 +796,7 @@ class YouTubeDownloader:
 
                 downloaded[module_name] = content
 
-            # All verified — now backup and replace
+            # All verified — backup and replace
             for module_name, content in downloaded.items():
                 module_path = script_dir / module_name
                 backup_path = module_path.with_suffix('.py.backup')
@@ -752,11 +811,15 @@ class YouTubeDownloader:
                 shutil.move(tmp_path, module_path)
                 logger.info(f"Updated: {module_path}")
 
-            self._safe_after(0, lambda: self.update_status(tr('update_complete_title'), "green"))
-            self._safe_after(0, lambda: messagebox.showinfo(
-                tr('update_complete_title'),
-                tr('update_complete_msg')
-            ))
+            # Auto-restart: spawn new process, then shut down
+            self._safe_after(0, lambda: self.update_status(tr('update_restarting'), "green"))
+            logger.info("Restarting after source update...")
+
+            def _do_restart():
+                subprocess.Popen([sys.executable] + sys.argv)
+                self.on_closing()
+
+            self._safe_after(500, _do_restart)
 
         except Exception as e:
             logger.error(f"Error applying update: {e}")
@@ -764,6 +827,164 @@ class YouTubeDownloader:
                 tr('update_failed_title'),
                 tr('update_failed_msg', error=str(e))
             ))
+
+    def _apply_update_frozen(self, release_data):
+        """Self-update a frozen portable exe via download + rename-and-replace."""
+        import urllib.request
+
+        try:
+            self._safe_after(0, lambda: self.update_status(tr('update_downloading'), "blue"))
+
+            download_url = self._get_update_asset_url(release_data)
+            if not download_url:
+                raise RuntimeError("Could not find a download for this platform in the release.")
+
+            headers = {'User-Agent': f'YoutubeDownloader/{APP_VERSION}'}
+            exe_path = Path(sys.executable).resolve()
+
+            if sys.platform == 'win32':
+                self._apply_update_frozen_windows(download_url, headers, exe_path)
+            else:
+                self._apply_update_frozen_linux(download_url, headers, exe_path)
+
+        except Exception as e:
+            logger.error(f"Error applying frozen update: {e}")
+            self._safe_after(0, lambda: messagebox.showerror(
+                tr('update_failed_title'),
+                tr('update_failed_msg', error=str(e))
+            ))
+
+    def _apply_update_frozen_windows(self, download_url, headers, exe_path):
+        """Windows portable exe update: rename-dance with .bat trampoline fallback."""
+        import urllib.request
+
+        new_exe = exe_path.with_suffix('.exe.new')
+        old_exe = exe_path.with_name(exe_path.stem + '.old')
+
+        # Download the new exe
+        logger.info(f"Downloading update: {download_url}")
+        request = urllib.request.Request(download_url, headers=headers)
+        with urllib.request.urlopen(request, timeout=300) as response:
+            content = response.read()
+
+        if len(content) < 1024:
+            raise RuntimeError("Downloaded file is too small — likely corrupted.")
+
+        new_exe.write_bytes(content)
+        logger.info(f"Downloaded new exe: {new_exe} ({len(content):,} bytes)")
+
+        # Rename dance: running.exe → .old, .new → running.exe
+        try:
+            if old_exe.exists():
+                old_exe.unlink()
+            exe_path.rename(old_exe)
+            logger.info(f"Renamed running exe aside: {exe_path} → {old_exe}")
+
+            try:
+                new_exe.rename(exe_path)
+                logger.info(f"Moved new exe into place: {new_exe} → {exe_path}")
+            except Exception:
+                # Restore if moving new exe into place fails
+                if old_exe.exists() and not exe_path.exists():
+                    old_exe.rename(exe_path)
+                raise
+
+            # Success — spawn new exe and shut down
+            self._safe_after(0, lambda: self.update_status(tr('update_restarting'), "green"))
+
+            def _do_restart():
+                logger.info(f"Launching updated exe: {exe_path}")
+                subprocess.Popen([str(exe_path)])
+                self.on_closing()
+
+            self._safe_after(500, _do_restart)
+
+        except OSError as rename_err:
+            # Rename failed (rare) — fall back to .bat trampoline
+            logger.warning(f"Rename failed ({rename_err}), falling back to bat trampoline")
+            self._launch_bat_trampoline(exe_path, new_exe)
+
+    def _launch_bat_trampoline(self, exe_path, new_exe):
+        """Write a .bat that waits for us to exit, swaps the exe, and relaunches."""
+        import time as _time
+
+        bat_path = exe_path.parent / f'_update_{int(_time.time())}.bat'
+        bat_content = (
+            '@echo off\r\n'
+            'timeout /t 2 /noblock >nul\r\n'
+            f'move /y "{new_exe}" "{exe_path}"\r\n'
+            f'start "" "{exe_path}"\r\n'
+            'del "%~f0"\r\n'
+        )
+        bat_path.write_text(bat_content)
+        logger.info(f"Wrote update trampoline: {bat_path}")
+
+        self._safe_after(0, lambda: self.update_status(tr('update_restarting'), "green"))
+
+        def _do_restart():
+            subprocess.Popen(
+                ['cmd', '/c', str(bat_path)],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                close_fds=True,
+            )
+            self.on_closing()
+
+        self._safe_after(500, _do_restart)
+
+    def _apply_update_frozen_linux(self, download_url, headers, exe_path):
+        """Linux portable binary update: download tar.gz, extract, replace in place."""
+        import urllib.request
+        import tarfile
+        import io
+        import shutil
+        import tempfile
+
+        logger.info(f"Downloading update: {download_url}")
+        request = urllib.request.Request(download_url, headers=headers)
+        with urllib.request.urlopen(request, timeout=300) as response:
+            content = response.read()
+
+        if len(content) < 1024:
+            raise RuntimeError("Downloaded file is too small — likely corrupted.")
+
+        logger.info(f"Downloaded tar.gz ({len(content):,} bytes), extracting...")
+
+        with tarfile.open(fileobj=io.BytesIO(content), mode='r:gz') as tar:
+            # Find the binary inside the archive
+            binary_member = None
+            for member in tar.getmembers():
+                if member.isfile() and 'YoutubeDownloader' in member.name:
+                    binary_member = member
+                    break
+
+            if not binary_member:
+                raise RuntimeError("Could not find YoutubeDownloader binary in archive.")
+
+            # Extract just the binary content (safe — no path traversal)
+            f = tar.extractfile(binary_member)
+            if not f:
+                raise RuntimeError("Could not read binary from archive.")
+            binary_content = f.read()
+
+        # Write to temp file next to exe, then atomically move into place
+        # (Linux allows replacing a running binary — the OS keeps the old inode open)
+        with tempfile.NamedTemporaryFile(delete=False, dir=str(exe_path.parent)) as tmp:
+            tmp.write(binary_content)
+            tmp_path = Path(tmp.name)
+
+        shutil.move(str(tmp_path), str(exe_path))
+        os.chmod(str(exe_path), 0o755)
+        logger.info(f"Replaced binary: {exe_path}")
+
+        # Spawn new binary and shut down
+        self._safe_after(0, lambda: self.update_status(tr('update_restarting'), "green"))
+
+        def _do_restart():
+            logger.info(f"Launching updated binary: {exe_path}")
+            subprocess.Popen([str(exe_path)])
+            self.on_closing()
+
+        self._safe_after(500, _do_restart)
 
     def _get_ytdlp_version(self):
         """Get the current yt-dlp version.
