@@ -14,7 +14,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 YoutubeDownloader/
 ├── downloader.py          # Main application
 ├── constants.py           # Configuration constants and paths
-├── translations.py        # UI strings (English only)
 ├── requirements.txt       # Python dependencies
 └── CLAUDE.md              # This file
 ```
@@ -35,7 +34,6 @@ python downloader.py
 
 Recent refactoring extracted:
 - **constants.py**: All configuration values, paths, timeouts, API constants
-- **translations.py**: Translation dictionary and `tr()` function
 
 ### Core Components
 
@@ -51,7 +49,6 @@ Recent refactoring extracted:
 - Thumbnail preview with caching
 - Clipboard monitoring for URLs
 - Upload to Catbox with history
-- English-only UI strings via translations.py
 - Dark theme UI
 
 ## Configuration
@@ -88,7 +85,7 @@ Recent refactoring extracted:
 - yt-dlp binary updates verified against published SHA2-256SUMS
 - Syntax checking via `compile()` as additional safety net
 - Backup file created before replacing each module
-- All three modules downloaded and verified before any are replaced (atomic update)
+- All modules downloaded and verified before any are replaced (atomic update)
 - All `root.after()` calls from worker threads use `_safe_after()` to prevent crashes during shutdown
 - Config file access protected by `config_lock` (both reads and writes)
 - Upload queue protected by `uploader_lock` (RLock for reentrant access)
@@ -126,21 +123,6 @@ MAX_FILENAME_LENGTH = 200
 MAX_VIDEO_DURATION = 86400    # 24 hours
 ```
 
-## Translations (translations.py)
-
-**Language:** English only
-
-**Usage:**
-```python
-from translations import tr
-
-message = tr('download_complete')  # Returns English string
-```
-
-**Adding new strings:**
-1. Add key to TRANSLATIONS['en'] dict
-2. Use `tr('key_name')` in code
-
 ## Clipboard Integration
 
 **Supported Methods:**
@@ -158,20 +140,7 @@ message = tr('download_complete')  # Returns English string
 1. **Hardcoded supported sites**: URL patterns could be more extensible
 2. **Large single file**: Main downloader.py is large, could benefit from further modularization
 
-## Recent Fixes (January 2026)
-
-- Fixed hardcoded strings in validate_youtube_url() to use tr()
-- All URL validation messages now use tr()
-- Fixed Windows venv path detection (uses Scripts/ and .exe extension instead of bin/)
-
 ## Common Development Tasks
-
-### Adding new UI string
-1. Add to TRANSLATIONS['en'] in translations.py:
-   ```python
-   'new_key': 'English text',
-   ```
-2. Use `tr('new_key')` in downloader.py
 
 ### Modifying download behavior
 - Quality selection: `_on_quality_change()`
@@ -212,13 +181,8 @@ message = tr('download_complete')  # Returns English string
 - [x] _safe_after() prevents TclError from worker threads on shutdown
 - [x] _shutting_down flag for graceful thread termination
 
-### UI Strings Review
-- [x] All UI strings use tr()
-- [x] URL validation messages use tr()
-- [x] Error messages use tr()
-
 ### Code Quality
-- [x] Modular design (constants.py, translations.py)
+- [x] Modular design (constants.py)
 - [x] Config validation
 - [x] Proper error handling
 - [x] Log rotation (5MB max, 2 backups)
@@ -232,7 +196,7 @@ message = tr('download_complete')  # Returns English string
 | Aspect | Standard | Status |
 |--------|----------|--------|
 | Security | Safe URL/subprocess handling | Met |
-| UI Strings | All user-facing strings in tr() | Met |
+| UI Strings | Inline English strings | Met |
 | Reliability | Downloads complete successfully | Met |
 | UX | Progress feedback, quality selection | Met |
 | Documentation | CLAUDE.md current | Met |
@@ -243,7 +207,6 @@ message = tr('download_complete')  # Returns English string
 |----------|-----------|
 | yt-dlp backend | Best maintained YouTube downloader; handles site changes |
 | Separate constants.py | Clean separation; easy to modify limits/timeouts |
-| Separate translations.py | UI strings in one place, easy to find/update |
 | Catbox integration | Convenient sharing for downloaded files |
 | Clipboard monitoring | Common workflow - copy URL, app detects it |
 | Backup before update | Creates .py.backup files before replacing modules |
@@ -260,9 +223,7 @@ message = tr('download_complete')  # Returns English string
 
 ## Completed Optimizations
 
-- URL validation uses tr()
 - Constants extracted to module
-- UI strings extracted to translations module
 - Config validation
 - Quality selection with preview
 

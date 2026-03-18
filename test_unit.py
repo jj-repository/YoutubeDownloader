@@ -3,7 +3,7 @@
 Unit tests for YoutubeDownloader
 
 Run with: pytest test_unit.py -v
-Run with coverage: pytest test_unit.py -v --cov=translations --cov=constants
+Run with coverage: pytest test_unit.py -v --cov=constants
 """
 
 import pytest
@@ -12,108 +12,7 @@ import sys
 from pathlib import Path
 
 # Import modules to test
-import translations
 import constants
-
-
-class TestTranslationsModule:
-    """Test suite for translations.py"""
-
-    def setup_method(self):
-        """Reset language before each test"""
-        translations.CURRENT_LANGUAGE = 'en'
-
-    def test_default_language_is_english(self):
-        """Default language should be English"""
-        # Reset to default
-        translations.CURRENT_LANGUAGE = 'en'
-        assert translations.get_language() == 'en'
-
-    def test_set_language_valid(self):
-        """Setting valid language should work"""
-        translations.set_language('de')
-        assert translations.get_language() == 'de'
-
-        translations.set_language('pl')
-        assert translations.get_language() == 'pl'
-
-        translations.set_language('en')
-        assert translations.get_language() == 'en'
-
-    def test_set_language_invalid(self):
-        """Setting invalid language should be ignored"""
-        translations.set_language('en')  # Start with English
-        translations.set_language('invalid')
-        assert translations.get_language() == 'en'  # Should remain English
-
-    def test_get_available_languages(self):
-        """Should return list of available languages"""
-        languages = translations.get_available_languages()
-        assert 'en' in languages
-        assert 'de' in languages
-        assert 'pl' in languages
-        assert len(languages) == 3
-
-    def test_tr_returns_english_string(self):
-        """tr() should return English translation"""
-        translations.set_language('en')
-        assert translations.tr('btn_download') == 'Download'
-
-    def test_tr_returns_german_string(self):
-        """tr() should return German translation"""
-        translations.set_language('de')
-        assert translations.tr('btn_download') == 'Herunterladen'
-
-    def test_tr_returns_polish_string(self):
-        """tr() should return Polish translation"""
-        translations.set_language('pl')
-        assert translations.tr('btn_download') == 'Pobierz'
-
-    def test_tr_with_formatting(self):
-        """tr() should handle format arguments"""
-        translations.set_language('en')
-        result = translations.tr('status_downloading', progress=50)
-        assert '50' in result
-        assert '%' in result
-
-    def test_tr_missing_key_returns_key(self):
-        """tr() should return key if translation is missing"""
-        translations.set_language('en')
-        result = translations.tr('nonexistent_key')
-        assert result == 'nonexistent_key'
-
-    def test_tr_with_invalid_format_args(self):
-        """tr() should handle invalid format args gracefully"""
-        translations.set_language('en')
-        # Pass wrong format args - should return the unformatted string
-        result = translations.tr('status_downloading', wrong_arg='value')
-        assert 'Downloading' in result
-
-    def test_all_languages_have_same_keys(self):
-        """All languages should have the same translation keys"""
-        en_keys = set(translations.TRANSLATIONS['en'].keys())
-        de_keys = set(translations.TRANSLATIONS['de'].keys())
-        pl_keys = set(translations.TRANSLATIONS['pl'].keys())
-
-        assert en_keys == de_keys, "German translations missing keys"
-        assert en_keys == pl_keys, "Polish translations missing keys"
-
-    def test_no_empty_translations(self):
-        """No translation should be empty string"""
-        for lang, trans in translations.TRANSLATIONS.items():
-            for key, value in trans.items():
-                assert value, f"Empty translation for {lang}/{key}"
-
-    def test_critical_translations_exist(self):
-        """Critical UI translations should exist in all languages"""
-        critical_keys = [
-            'btn_download', 'btn_stop', 'status_ready',
-            'error_title', 'window_title'
-        ]
-        for lang in translations.TRANSLATIONS:
-            for key in critical_keys:
-                assert key in translations.TRANSLATIONS[lang], \
-                    f"Missing critical key '{key}' in {lang}"
 
 
 class TestConstantsModule:
@@ -188,9 +87,6 @@ class TestConstantsModule:
         assert isinstance(constants.CONFIG_FILE, Path)
         assert isinstance(constants.LOG_FILE, Path)
 
-    def test_default_language_valid(self):
-        """Default language should be a valid language code"""
-        assert constants.DEFAULT_LANGUAGE in ['en', 'de', 'pl']
 
 
 class TestSanitizeFilename:
