@@ -4661,16 +4661,23 @@ class YouTubeDownloader:
                     output_template = f'{base_name}_{height}p.%(ext)s'
 
                 if keep_below_10mb:
-                    # --- Two-pass path: download raw to temp, then two-pass encode ---
+                    # --- Size-constrained path: download, then encode to target bitrate ---
                     temp_dir = tempfile.mkdtemp(prefix='ytdl_10mb_')
                     temp_output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
+
+                    # Download a stream close to our target bitrate — no point fetching
+                    # a high-bitrate stream we're going to re-encode to a lower bitrate
+                    dl_bitrate_cap = max(target_bitrate * 2, 1000000)
+                    dl_bitrate_cap_k = int(dl_bitrate_cap / 1000)
+                    format_sel = (f'bestvideo[height<={height}][vbr<={dl_bitrate_cap_k}]'
+                                  f'+bestaudio/bestvideo[height<={height}]+bestaudio/best[height<={height}]')
 
                     cmd = [
                         self.ytdlp_path,
                         '--concurrent-fragments', CONCURRENT_FRAGMENTS,
                         '--buffer-size', BUFFER_SIZE,
                         '--http-chunk-size', CHUNK_SIZE,
-                        '-f', f'bestvideo[height<={height}]+bestaudio/best[height<={height}]',
+                        '-f', format_sel,
                         '--merge-output-format', 'mp4',
                     ]
 
