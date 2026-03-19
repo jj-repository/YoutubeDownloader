@@ -744,7 +744,7 @@ class YouTubeDownloader:
             str or None: The browser_download_url for the matching asset
         """
         if sys.platform == 'win32':
-            target = 'YTDownloaderPortable-Win.exe'
+            target = 'YoutubeDownloader-Windows.exe'
         else:
             target = 'YoutubeDownloader-Linux.tar.gz'
 
