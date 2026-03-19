@@ -69,7 +69,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=0),
+        logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=1*1024*1024, backupCount=0),
         logging.StreamHandler()
     ]
 )
@@ -531,10 +531,6 @@ class YouTubeDownloader:
             self.uploader_file_canvas.configure(bg=colors['canvas_bg'],
                                                 highlightbackground=colors['border'])
 
-        # Top bar Settings button — follows theme
-        if hasattr(self, '_settings_btn'):
-            self._settings_btn.configure(bg=colors['canvas_bg'], fg=colors['fg'],
-                                         activebackground=colors['select_bg'], activeforeground=colors['select_fg'])
 
         # Status indicator canvases in clipboard URL list
         if hasattr(self, 'clipboard_url_widgets'):
@@ -1782,19 +1778,6 @@ class YouTubeDownloader:
         self.notebook = ttk.Notebook(self.root)
         self.notebook.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
 
-        # Settings/Help buttons overlaid on the notebook tab bar, right-aligned
-        btn_bar = ttk.Frame(self.root)
-        btn_bar.place(relx=1.0, x=-5, y=2, anchor='ne')
-
-        self._settings_btn = tk.Button(btn_bar, text='Settings', relief='flat', padx=8, pady=1,
-                                       command=lambda: self.notebook.select(self._settings_tab_index))
-        self._settings_btn.pack(side=tk.LEFT, padx=(0, 3))
-
-        self._help_btn = tk.Button(btn_bar, text='Help', relief='flat', padx=8, pady=1, fg='white', bg='#cc3333',
-                                   activebackground='#aa2222', activeforeground='white',
-                                   command=lambda: self.notebook.select(self._help_tab_index))
-        self._help_btn.pack(side=tk.LEFT)
-
         # Tab padding - smaller on Windows to reduce wasted space
         tab_pad = "10" if sys.platform == 'win32' else "20"
 
@@ -1866,17 +1849,15 @@ class YouTubeDownloader:
         # Uploader tab
         uploader_tab_frame = make_scrollable_tab(self.notebook, "  Uploader  ")
 
-        # Settings tab (hidden from tab bar, accessed via button)
+        # Spacer tab (disabled, just for visual gap)
+        spacer = ttk.Frame(self.notebook)
+        self.notebook.add(spacer, text="      ", state='disabled')
+
+        # Settings tab
         settings_tab_frame = make_scrollable_tab(self.notebook, "  Settings  ")
-        self._settings_tab_index = self.notebook.index('end') - 1
 
-        # Help tab (hidden from tab bar, accessed via button)
+        # Help tab
         help_tab_frame = make_scrollable_tab(self.notebook, "  Help  ")
-        self._help_tab_index = self.notebook.index('end') - 1
-
-        # Hide Settings and Help tabs from the tab bar
-        self.notebook.hide(self._settings_tab_index)
-        self.notebook.hide(self._help_tab_index)
 
         ttk.Label(main_tab_frame, text='YouTube URL or Local File:', font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
@@ -4210,9 +4191,9 @@ class YouTubeDownloader:
         for encoder in ('h264_amf', 'h264_nvenc'):
             try:
                 probe_out = os.path.join(tempfile.gettempdir(), f'ytdl_hwprobe.mp4')
-                cmd = [self.ffmpeg_path, '-hide_banner', '-y',
-                       '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=25:d=1',
-                       '-pix_fmt', 'yuv420p', '-frames:v', '5',
+                cmd = [self.ffmpeg_path, '-hide_banner', '-y', '-loglevel', 'error',
+                       '-f', 'lavfi', '-i', 'testsrc2=size=64x64:rate=25:duration=1',
+                       '-vf', 'format=nv12', '-frames:v', '10',
                        '-c:v', encoder, probe_out]
                 result = subprocess.run(cmd, capture_output=True, timeout=10, **_subprocess_kwargs)
                 try:
