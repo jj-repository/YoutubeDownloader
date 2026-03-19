@@ -1849,15 +1849,43 @@ class YouTubeDownloader:
         # Uploader tab
         uploader_tab_frame = make_scrollable_tab(self.notebook, "  Uploader  ")
 
-        # Spacer tab (disabled, just for visual gap)
+        # Spacer tab (disabled, dynamically sized to push Settings/Help right)
         spacer = ttk.Frame(self.notebook)
-        self.notebook.add(spacer, text="      ", state='disabled')
+        self.notebook.add(spacer, text="", state='disabled')
+        self._spacer_tab_index = self.notebook.index('end') - 1
 
         # Settings tab
         settings_tab_frame = make_scrollable_tab(self.notebook, "  Settings  ")
 
-        # Help tab
+        # Help tab with red indicator
         help_tab_frame = make_scrollable_tab(self.notebook, "  Help  ")
+        self._help_tab_nb_index = self.notebook.index('end') - 1
+        # Create small red circle image for Help tab
+        help_icon = Image.new('RGB', (8, 8), color='#cc3333')
+        self._help_icon_ref = ImageTk.PhotoImage(help_icon)
+        self.notebook.tab(self._help_tab_nb_index, image=self._help_icon_ref, compound='left')
+
+        # Dynamically resize spacer to right-align Settings/Help
+        def _update_spacer_width(event=None):
+            self.notebook.update_idletasks()
+            total_w = self.notebook.winfo_width()
+            if total_w < 50:
+                return
+            # Measure width of all real tabs (approximate via tab count * avg width)
+            # Use a binary-search-like approach: set spacer text and check if it fits
+            # Simpler: calculate available space and fill with spaces
+            # Each space in the tab header is roughly 4-7px depending on font
+            space_char_w = 6  # approximate width of a space in tab font
+            # Width of left tabs (Clipboard Mode + Trimmer + Uploader) ≈ 300px
+            # Width of right tabs (Settings + Help) ≈ 160px
+            right_tabs_w = 180
+            left_tabs_w = 310 if sys.platform == 'win32' else 400
+            available = total_w - left_tabs_w - right_tabs_w - 20
+            num_spaces = max(1, int(available / space_char_w))
+            self.notebook.tab(self._spacer_tab_index, text=" " * num_spaces)
+
+        self.notebook.bind('<Configure>', _update_spacer_width)
+        self.root.after(200, _update_spacer_width)
 
         ttk.Label(main_tab_frame, text='YouTube URL or Local File:', font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
