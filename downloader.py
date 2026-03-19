@@ -744,9 +744,9 @@ class YouTubeDownloader:
             str or None: The browser_download_url for the matching asset
         """
         if sys.platform == 'win32':
-            target = 'YoutubeDownloader-Windows.exe'
+            target = 'YTDownloader-Windows.exe'
         else:
-            target = 'YoutubeDownloader-Linux.tar.gz'
+            target = 'YTDownloader-Linux.tar.gz'
 
         for asset in release_data.get('assets', []):
             if asset.get('name') == target:
@@ -972,12 +972,12 @@ class YouTubeDownloader:
             # Find the binary inside the archive
             binary_member = None
             for member in tar.getmembers():
-                if member.isfile() and 'YoutubeDownloader' in member.name:
+                if member.isfile() and 'YTDownloader' in member.name:
                     binary_member = member
                     break
 
             if not binary_member:
-                raise RuntimeError("Could not find YoutubeDownloader binary in archive.")
+                raise RuntimeError("Could not find YTDownloader binary in archive.")
 
             # Extract just the binary content (safe — no path traversal)
             f = tar.extractfile(binary_member)

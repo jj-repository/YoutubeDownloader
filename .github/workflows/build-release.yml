@@ -67,7 +67,7 @@ jobs:
     - name: Build executable (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
-        pyinstaller --onefile --name YoutubeDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --add-data "icon.png:." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
+        pyinstaller --onefile --name YTDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --add-data "icon.png:." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
 
     - name: Download and bundle ffmpeg (Windows)
       if: matrix.os == 'windows-latest'
@@ -88,29 +88,29 @@ jobs:
     - name: Build executable (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        pyinstaller --onefile --name YoutubeDownloader-Windows --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
+        pyinstaller --onefile --name YTDownloader-Windows --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
 
     - name: Create release package (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
         mkdir -p release
-        cp dist/YoutubeDownloader release/
-        chmod +x release/YoutubeDownloader
-        tar -czf YoutubeDownloader-Linux.tar.gz -C release .
+        cp dist/YTDownloader release/
+        chmod +x release/YTDownloader
+        tar -czf YTDownloader-Linux.tar.gz -C release .
 
     - name: Upload Linux artifact
       if: matrix.os == 'ubuntu-latest'
       uses: actions/upload-artifact@v7
       with:
         name: linux-build
-        path: YoutubeDownloader-Linux.tar.gz
+        path: YTDownloader-Linux.tar.gz
 
     - name: Upload Windows artifact
       if: matrix.os == 'windows-latest'
       uses: actions/upload-artifact@v7
       with:
         name: windows-build
-        path: dist/YoutubeDownloader-Windows.exe
+        path: dist/YTDownloader-Windows.exe
 
   create-release:
     needs: build
@@ -125,20 +125,20 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          linux-build/YoutubeDownloader-Linux.tar.gz
-          windows-build/YoutubeDownloader-Windows.exe
+          linux-build/YTDownloader-Linux.tar.gz
+          windows-build/YTDownloader-Windows.exe
         body: |
-          ## YoutubeDownloader ${{ github.ref_name }}
+          ## YTDownloader ${{ github.ref_name }}
 
           ### Downloads
           | Platform | File |
           |----------|------|
-          | Windows | `YoutubeDownloader-Windows.exe` |
-          | Linux | `YoutubeDownloader-Linux.tar.gz` |
+          | Windows | `YTDownloader-Windows.exe` |
+          | Linux | `YTDownloader-Linux.tar.gz` |
 
           ### Setup
-          - **Windows**: Download `YoutubeDownloader-Windows.exe` and run it directly
-          - **Linux**: Extract and run `./YoutubeDownloader`
+          - **Windows**: Download `YTDownloader-Windows.exe` and run it directly
+          - **Linux**: Extract and run `./YTDownloader`
 
           See [README](https://github.com/jj-repository/YoutubeDownloader#readme) for full documentation.
       env:
