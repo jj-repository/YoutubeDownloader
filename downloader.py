@@ -1772,33 +1772,28 @@ class YouTubeDownloader:
         - Responsive layout with proper grid configuration
         """
         # Configure root grid to expand
-        self.root.grid_rowconfigure(1, weight=1)
+        self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
 
         # Apply theme before creating widgets
         self._apply_theme()
 
-        # Top bar: notebook tabs on left, Settings/Help buttons on right
-        top_bar = ttk.Frame(self.root)
-        top_bar.grid(row=0, column=0, sticky=(tk.W, tk.E))
-        top_bar.grid_columnconfigure(0, weight=1)
+        # Create notebook directly in root
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
 
-        # Right-aligned buttons in top bar
-        btn_bar = ttk.Frame(top_bar)
-        btn_bar.grid(row=0, column=1, sticky=tk.E, padx=(0, 5))
+        # Settings/Help buttons overlaid on the notebook tab bar, right-aligned
+        btn_bar = ttk.Frame(self.root)
+        btn_bar.place(relx=1.0, x=-5, y=2, anchor='ne')
 
-        self._settings_btn = tk.Button(btn_bar, text='Settings', relief='flat', padx=8, pady=2,
+        self._settings_btn = tk.Button(btn_bar, text='Settings', relief='flat', padx=8, pady=1,
                                        command=lambda: self.notebook.select(self._settings_tab_index))
         self._settings_btn.pack(side=tk.LEFT, padx=(0, 3))
 
-        self._help_btn = tk.Button(btn_bar, text='Help', relief='flat', padx=8, pady=2, fg='white', bg='#cc3333',
+        self._help_btn = tk.Button(btn_bar, text='Help', relief='flat', padx=8, pady=1, fg='white', bg='#cc3333',
                                    activebackground='#aa2222', activeforeground='white',
                                    command=lambda: self.notebook.select(self._help_tab_index))
         self._help_btn.pack(side=tk.LEFT)
-
-        # Create notebook directly in root
-        self.notebook = ttk.Notebook(self.root)
-        self.notebook.grid(row=1, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
 
         # Tab padding - smaller on Windows to reduce wasted space
         tab_pad = "10" if sys.platform == 'win32' else "20"
