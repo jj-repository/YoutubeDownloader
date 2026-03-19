@@ -893,11 +893,27 @@ class YouTubeDownloader:
         new_exe = exe_path.with_suffix('.exe.new')
         old_exe = exe_path.with_name(exe_path.stem + '.old')
 
-        # Download the new exe
+        # Download the new exe with progress
         logger.info(f"Downloading update: {download_url}")
+        self._safe_after(0, lambda: self.update_status('Downloading update... please wait', "blue"))
         request = urllib.request.Request(download_url, headers=headers)
         with urllib.request.urlopen(request, timeout=300) as response:
-            content = response.read()
+            total = int(response.headers.get('Content-Length', 0))
+            chunks = []
+            downloaded = 0
+            while True:
+                chunk = response.read(256 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                downloaded += len(chunk)
+                if total > 0:
+                    pct = int(downloaded / total * 100)
+                    mb = downloaded / (1024 * 1024)
+                    total_mb = total / (1024 * 1024)
+                    self._safe_after(0, lambda p=pct, m=mb, t=total_mb: self.update_status(
+                        f'Downloading update... {m:.1f}/{t:.1f} MB ({p}%)', "blue"))
+            content = b''.join(chunks)
 
         if len(content) < 1024:
             raise RuntimeError("Downloaded file is too small — likely corrupted.")
@@ -921,12 +937,16 @@ class YouTubeDownloader:
                     old_exe.rename(exe_path)
                 raise
 
-            # Success — spawn new exe and shut down
+            # Success — spawn new exe via cmd with delay so old process exits first
             self._safe_after(0, lambda: self.update_status('Update complete — restarting...', "green"))
 
             def _do_restart():
                 logger.info(f"Launching updated exe: {exe_path}")
-                subprocess.Popen([str(exe_path)])
+                subprocess.Popen(
+                    f'cmd /c timeout /t 2 /nobreak >nul & start "" "{exe_path}"',
+                    shell=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
                 self.on_closing()
 
             self._safe_after(500, _do_restart)
