@@ -415,8 +415,10 @@ class YouTubeDownloader:
         btn_frame.grid(row=1, column=0, sticky=tk.W, pady=(0, 15))
         ttk.Button(btn_frame, text='GitHub',
                   command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}')).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(btn_frame, text='Report a Bug',
-                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}/issues/new?template=bug_report.yml')).pack(side=tk.LEFT, padx=(0, 5))
+        self._report_bug_btn = tk.Button(btn_frame, text='Report a Bug', relief='flat', padx=8, pady=2,
+                  fg='black', bg='#ddaa00', activebackground='#bb8800', activeforeground='black',
+                  command=lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}/issues/new?template=bug_report.yml'))
+        self._report_bug_btn.pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(btn_frame, text='Open Log Folder',
                   command=lambda: webbrowser.open(str(APP_DATA_DIR))).pack(side=tk.LEFT)
 
@@ -427,6 +429,9 @@ class YouTubeDownloader:
             ('Trimmer', 'Paste a YouTube URL and select your desired quality. To trim a video, enable "Enable video trimming", click "Fetch Video Duration", then use the sliders or time fields to set start and end points. Frame previews show exactly what you\'re selecting.'),
             ('Uploader', 'Upload local video or audio files to Catbox.moe for easy sharing. Click "Add Files" to select files, then "Upload to Catbox.moe" to upload. URLs are automatically copied to your clipboard. You can also enable auto-upload in the Trimmer tab to upload after each download.'),
             ('Settings', 'Toggle dark mode, check for updates, and view app info.'),
+            ('Reporting a Bug', 'Click "Report a Bug" above to open the bug report form on GitHub. '
+             'To help us find the issue, click "Open Log Folder" and attach the youtubedownloader.log file to your report. '
+             'The log records errors, download activity, and crash details automatically.'),
         ]
 
         row = 3
@@ -522,6 +527,11 @@ class YouTubeDownloader:
         if hasattr(self, 'uploader_file_canvas'):
             self.uploader_file_canvas.configure(bg=colors['canvas_bg'],
                                                 highlightbackground=colors['border'])
+
+        # Top bar Settings button — follows theme
+        if hasattr(self, '_settings_btn'):
+            self._settings_btn.configure(bg=colors['canvas_bg'], fg=colors['fg'],
+                                         activebackground=colors['select_bg'], activeforeground=colors['select_fg'])
 
         # Status indicator canvases in clipboard URL list
         if hasattr(self, 'clipboard_url_widgets'):
@@ -1742,15 +1752,33 @@ class YouTubeDownloader:
         - Responsive layout with proper grid configuration
         """
         # Configure root grid to expand
-        self.root.grid_rowconfigure(0, weight=1)
+        self.root.grid_rowconfigure(1, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
 
         # Apply theme before creating widgets
         self._apply_theme()
 
+        # Top bar: notebook tabs on left, Settings/Help buttons on right
+        top_bar = ttk.Frame(self.root)
+        top_bar.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        top_bar.grid_columnconfigure(0, weight=1)
+
+        # Right-aligned buttons in top bar
+        btn_bar = ttk.Frame(top_bar)
+        btn_bar.grid(row=0, column=1, sticky=tk.E, padx=(0, 5))
+
+        self._settings_btn = tk.Button(btn_bar, text='Settings', relief='flat', padx=8, pady=2,
+                                       command=lambda: self.notebook.select(self._settings_tab_index))
+        self._settings_btn.pack(side=tk.LEFT, padx=(0, 3))
+
+        self._help_btn = tk.Button(btn_bar, text='Help', relief='flat', padx=8, pady=2, fg='white', bg='#cc3333',
+                                   activebackground='#aa2222', activeforeground='white',
+                                   command=lambda: self.notebook.select(self._help_tab_index))
+        self._help_btn.pack(side=tk.LEFT)
+
         # Create notebook directly in root
         self.notebook = ttk.Notebook(self.root)
-        self.notebook.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
+        self.notebook.grid(row=1, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
 
         # Tab padding - smaller on Windows to reduce wasted space
         tab_pad = "10" if sys.platform == 'win32' else "20"
@@ -1823,11 +1851,17 @@ class YouTubeDownloader:
         # Uploader tab
         uploader_tab_frame = make_scrollable_tab(self.notebook, "  Uploader  ")
 
-        # Settings tab
+        # Settings tab (hidden from tab bar, accessed via button)
         settings_tab_frame = make_scrollable_tab(self.notebook, "  Settings  ")
+        self._settings_tab_index = self.notebook.index('end') - 1
 
-        # Help tab
+        # Help tab (hidden from tab bar, accessed via button)
         help_tab_frame = make_scrollable_tab(self.notebook, "  Help  ")
+        self._help_tab_index = self.notebook.index('end') - 1
+
+        # Hide Settings and Help tabs from the tab bar
+        self.notebook.hide(self._settings_tab_index)
+        self.notebook.hide(self._help_tab_index)
 
         ttk.Label(main_tab_frame, text='YouTube URL or Local File:', font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
@@ -4312,6 +4346,7 @@ class YouTubeDownloader:
 
         try:
             # --- Pass 1: analyse ---
+            self.last_progress_time = time.time()
             self.update_status('Encoding pass 1/2 (analysing)...', 'blue')
             self.update_progress(0)
             pass1_cmd = input_args + vf_args + encoding_args + [
@@ -4358,6 +4393,7 @@ class YouTubeDownloader:
                 self.current_process.stderr.close()
 
             # --- Pass 2: encode ---
+            self.last_progress_time = time.time()
             self.update_status('Encoding pass 2/2...', 'blue')
             self.update_progress(0)
             pass2_cmd = input_args + vf_args + encoding_args + [

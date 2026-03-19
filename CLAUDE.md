@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **YouTube Downloader** is a Python desktop application for downloading videos from YouTube and other supported sites. It features a tkinter GUI with quality selection, thumbnail previews, and integration with Catbox for file uploads.
 
-**Version:** 4.1.0
+**Version:** 4.3.0
 
 ## Files Structure
 
