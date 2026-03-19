@@ -1849,9 +1849,9 @@ class YouTubeDownloader:
         # Uploader tab
         uploader_tab_frame = make_scrollable_tab(self.notebook, "  Uploader  ")
 
-        # Spacer tab — same width as Clipboard Mode tab
+        # Spacer tab — gap roughly the width of the Clipboard Mode tab
         spacer = ttk.Frame(self.notebook)
-        self.notebook.add(spacer, text="  Clipboard Mode  ", state='disabled')
+        self.notebook.add(spacer, text="                              ", state='disabled')
 
         # Settings tab
         settings_tab_frame = make_scrollable_tab(self.notebook, "  Settings  ")
