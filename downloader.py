@@ -4214,7 +4214,7 @@ class YouTubeDownloader:
         # Try encoders in order of preference
         for encoder in ('h264_amf', 'h264_nvenc'):
             try:
-                cmd = [self.ffmpeg_path, '-hide_banner', '-f', 'lavfi', '-i', 'nullsrc=s=64x64:r=25:d=1',
+                cmd = [self.ffmpeg_path, '-hide_banner', '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=25:d=1',
                        '-frames:v', '5', '-c:v', encoder, '-f', 'null', os.devnull]
                 result = subprocess.run(cmd, capture_output=True, timeout=10, **_subprocess_kwargs)
                 if result.returncode == 0:
