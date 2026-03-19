@@ -3238,7 +3238,7 @@ class YouTubeDownloader:
             duration_percentage = selected_duration / self.video_duration
             trimmed_size = self.estimated_filesize * duration_percentage
             trimmed_size_mb = trimmed_size / BYTES_PER_MB
-            self.filesize_label.config(text=f'Estimated size (trimmed): {trimmed_size_mb:.1f} MB')
+            self.filesize_label.config(text=f'Estimated size (trimmed): {trimmed_size_mb:.1f} MB — with re-encoding/trimming file will be larger')
 
     def _fetch_local_file_duration(self, filepath):
         """Fetch duration from local file using ffprobe"""
