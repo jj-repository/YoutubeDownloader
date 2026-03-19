@@ -4200,8 +4200,11 @@ class YouTubeDownloader:
                 if result.returncode == 0:
                     logger.info(f"Hardware encoder available: {encoder}")
                     return encoder
-            except (subprocess.TimeoutExpired, OSError):
-                pass
+                else:
+                    stderr = result.stderr.decode('utf-8', errors='replace').strip()
+                    logger.info(f"Hardware encoder {encoder} not available: {stderr[-200:]}")
+            except (subprocess.TimeoutExpired, OSError) as e:
+                logger.info(f"Hardware encoder {encoder} probe failed: {e}")
         logger.info("No hardware encoder found, using libx264")
         return None
 
