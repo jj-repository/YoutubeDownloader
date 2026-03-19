@@ -168,6 +168,9 @@ class YouTubeDownloader:
         if not self.dependencies_ok:
             logger.warning("Dependencies check failed at startup")
 
+        # Detect hardware encoder (must run after check_dependencies sets ffmpeg_path)
+        self.hw_encoder = self._detect_hw_encoder()
+
         # Thread pool for background tasks
         self.thread_pool = ThreadPoolExecutor(max_workers=MAX_WORKER_THREADS, thread_name_prefix="ytdl_worker")
 
@@ -1614,10 +1617,7 @@ class YouTubeDownloader:
         # Build ffmpeg postprocessor args if needed
         needs_processing = trim_enabled or volume != 1.0
         if needs_processing:
-            ffmpeg_args = [
-                '-c:v', 'libx264', '-crf', str(VIDEO_CRF),
-                '-preset', 'faster', '-c:a', 'aac', '-b:a', AUDIO_BITRATE
-            ]
+            ffmpeg_args = self._get_video_encoder_args(mode='crf') + ['-c:a', 'aac', '-b:a', AUDIO_BITRATE]
             if volume != 1.0:
                 ffmpeg_args.extend(['-af', f'volume={volume}'])
 
@@ -4187,6 +4187,59 @@ class YouTubeDownloader:
             logger.error(f"Dependency check failed: {e}")
             return False
 
+    def _detect_hw_encoder(self):
+        """Probe for hardware H.264 encoders (AMD AMF, NVIDIA NVENC). Returns encoder name or None."""
+        if not self.dependencies_ok:
+            return None
+        # Try encoders in order of preference
+        for encoder in ('h264_amf', 'h264_nvenc'):
+            try:
+                cmd = [self.ffmpeg_path, '-hide_banner', '-f', 'lavfi', '-i', 'nullsrc=s=64x64:d=0.1',
+                       '-c:v', encoder, '-f', 'null', os.devnull]
+                result = subprocess.run(cmd, capture_output=True, timeout=10, **_subprocess_kwargs)
+                if result.returncode == 0:
+                    logger.info(f"Hardware encoder available: {encoder}")
+                    return encoder
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+        logger.info("No hardware encoder found, using libx264")
+        return None
+
+    def _get_video_encoder_args(self, mode='crf', target_bitrate=None):
+        """Get video encoder arguments based on available hardware.
+
+        Args:
+            mode: 'crf' for quality-based (trim/volume), 'bitrate' for target bitrate (10MB)
+            target_bitrate: Required when mode='bitrate'
+
+        Returns:
+            list: ffmpeg encoder arguments
+        """
+        if self.hw_encoder:
+            if mode == 'crf':
+                if self.hw_encoder == 'h264_amf':
+                    return ['-c:v', 'h264_amf', '-quality', 'balanced', '-rc', 'cqp', '-qp_i', '23', '-qp_p', '23']
+                else:  # h264_nvenc
+                    return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-rc', 'constqp', '-qp', '23']
+            else:  # bitrate mode
+                maxrate = int(target_bitrate * 1.5)
+                bufsize = int(target_bitrate * 2)
+                if self.hw_encoder == 'h264_amf':
+                    return ['-c:v', 'h264_amf', '-quality', 'balanced',
+                            '-b:v', str(target_bitrate), '-maxrate', str(maxrate), '-bufsize', str(bufsize)]
+                else:  # h264_nvenc
+                    return ['-c:v', 'h264_nvenc', '-preset', 'p4',
+                            '-b:v', str(target_bitrate), '-maxrate', str(maxrate), '-bufsize', str(bufsize)]
+        else:
+            # Software fallback
+            if mode == 'crf':
+                return ['-c:v', 'libx264', '-crf', str(VIDEO_CRF), '-preset', 'ultrafast']
+            else:  # bitrate mode
+                maxrate = int(target_bitrate * 1.5)
+                bufsize = int(target_bitrate * 2)
+                return ['-c:v', 'libx264', '-b:v', str(target_bitrate),
+                        '-maxrate', str(maxrate), '-bufsize', str(bufsize), '-preset', 'ultrafast']
+
     def start_download(self):
         url = self.url_entry.get().strip()
 
@@ -4316,130 +4369,78 @@ class YouTubeDownloader:
             self.progress['value'] = 0
             self.progress_label.config(text="0%")
 
-    def _two_pass_encode(self, input_file, output_file, target_bitrate, duration,
-                         volume_multiplier=1.0, scale_height=None,
-                         start_time=None, end_time=None):
-        """Two-pass encode a video for optimal quality at a target bitrate.
+    def _size_constrained_encode(self, input_file, output_file, target_bitrate, duration,
+                                  volume_multiplier=1.0, scale_height=None,
+                                  start_time=None, end_time=None):
+        """Encode a video to hit a target bitrate (for 10MB size constraint).
 
-        Pass 1 analyses the video (output discarded), pass 2 produces the file.
-        Progress is reported via update_status/update_progress.
+        Uses single-pass with hardware encoding if available, or two-pass with
+        software encoding as fallback. Progress is reported via update_status/update_progress.
         Returns True on success, False on failure or cancellation.
         """
-        maxrate = int(target_bitrate * 1.5)
-        bufsize = int(target_bitrate * 2)
-        passlogfile = os.path.join(tempfile.gettempdir(), f'ytdl_2pass_{os.getpid()}_{int(time.time())}')
+        if self.hw_encoder:
+            return self._encode_single_pass(input_file, output_file, target_bitrate, duration,
+                                            volume_multiplier, scale_height, start_time, end_time)
+        else:
+            return self._encode_two_pass(input_file, output_file, target_bitrate, duration,
+                                         volume_multiplier, scale_height, start_time, end_time)
 
-        # Common args shared by both passes
+    def _run_ffmpeg_with_progress(self, cmd, duration, status_prefix):
+        """Run an ffmpeg command, parsing progress output. Returns True on success."""
+        logger.info(f"{status_prefix}: {' '.join(cmd)}")
+        self.last_progress_time = time.time()
+        self.update_progress(0)
+
+        with self.download_lock:
+            self.current_process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                encoding='utf-8', errors='replace', bufsize=1, **_subprocess_kwargs)
+
+        for line in self.current_process.stdout:
+            with self.download_lock:
+                if not self.is_downloading:
+                    self.safe_process_cleanup(self.current_process)
+                    return False
+            if 'out_time_ms=' in line:
+                try:
+                    time_ms = int(line.split('=')[1].strip())
+                    current = time_ms / 1_000_000
+                    if duration > 0:
+                        pct = min(100, (current / duration) * 100)
+                        self.update_progress(pct)
+                        self.update_status(f'{status_prefix}... {pct:.0f}%', 'blue')
+                except (ValueError, IndexError):
+                    pass
+            self.last_progress_time = time.time()
+
+        self.current_process.wait()
+        if self.current_process.returncode != 0:
+            stderr = self.current_process.stderr.read() if self.current_process.stderr else ''
+            logger.error(f"{status_prefix} failed (rc {self.current_process.returncode}): {stderr}")
+            self.safe_process_cleanup(self.current_process)
+            return False
+        return True
+
+    def _encode_single_pass(self, input_file, output_file, target_bitrate, duration,
+                             volume_multiplier=1.0, scale_height=None,
+                             start_time=None, end_time=None):
+        """Single-pass encode using hardware encoder with bitrate target."""
         input_args = [self.ffmpeg_path, '-y', '-i', input_file]
         if start_time is not None and end_time is not None:
             input_args.extend(['-ss', str(start_time), '-to', str(end_time)])
 
         vf_args = ['-vf', f'scale=-2:{scale_height}'] if scale_height else []
+        enc_args = self._get_video_encoder_args(mode='bitrate', target_bitrate=target_bitrate)
+        audio_args = ['-c:a', 'aac', '-b:a', AUDIO_BITRATE]
+        if volume_multiplier != 1.0:
+            audio_args.extend(['-af', f'volume={volume_multiplier}'])
 
-        encoding_args = [
-            '-c:v', 'libx264',
-            '-b:v', str(target_bitrate),
-            '-maxrate', str(maxrate),
-            '-bufsize', str(bufsize),
-            '-preset', 'faster',
-        ]
+        cmd = input_args + vf_args + enc_args + audio_args + ['-progress', 'pipe:1', output_file]
 
+        self.update_status('Encoding (GPU)...', 'blue')
         try:
-            # --- Pass 1: analyse ---
-            self.last_progress_time = time.time()
-            self.update_status('Encoding pass 1/2 (analysing)...', 'blue')
-            self.update_progress(0)
-            pass1_cmd = input_args + vf_args + encoding_args + [
-                '-pass', '1', '-passlogfile', passlogfile,
-                '-an', '-f', 'null', os.devnull,
-                '-progress', 'pipe:1',
-            ]
-            logger.info(f"Two-pass pass 1: {' '.join(pass1_cmd)}")
-
-            with self.download_lock:
-                self.current_process = subprocess.Popen(
-                    pass1_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    encoding='utf-8', errors='replace', bufsize=1, **_subprocess_kwargs)
-
-            for line in self.current_process.stdout:
-                with self.download_lock:
-                    if not self.is_downloading:
-                        self.safe_process_cleanup(self.current_process)
-                        return False
-                if 'out_time_ms=' in line:
-                    try:
-                        time_ms = int(line.split('=')[1].strip())
-                        current = time_ms / 1_000_000
-                        if duration > 0:
-                            pct = min(100, (current / duration) * 100)
-                            self.update_progress(pct)
-                            self.update_status(
-                                f'Encoding pass 1/2... {pct:.0f}%', 'blue')
-                    except (ValueError, IndexError):
-                        pass
-                self.last_progress_time = time.time()
-
-            self.current_process.wait()
-            if self.current_process.returncode != 0:
-                stderr = self.current_process.stderr.read() if self.current_process.stderr else ''
-                logger.error(f"Two-pass pass 1 failed (rc {self.current_process.returncode}): {stderr}")
-                self.safe_process_cleanup(self.current_process)
-                return False
-
-            # Close pass 1 pipes before starting pass 2
-            if self.current_process.stdout:
-                self.current_process.stdout.close()
-            if self.current_process.stderr:
-                self.current_process.stderr.close()
-
-            # --- Pass 2: encode ---
-            self.last_progress_time = time.time()
-            self.update_status('Encoding pass 2/2...', 'blue')
-            self.update_progress(0)
-            pass2_cmd = input_args + vf_args + encoding_args + [
-                '-pass', '2', '-passlogfile', passlogfile,
-                '-c:a', 'aac', '-b:a', AUDIO_BITRATE,
-            ]
-            if volume_multiplier != 1.0:
-                pass2_cmd.extend(['-af', f'volume={volume_multiplier}'])
-            pass2_cmd.extend(['-progress', 'pipe:1', output_file])
-
-            logger.info(f"Two-pass pass 2: {' '.join(pass2_cmd)}")
-
-            with self.download_lock:
-                self.current_process = subprocess.Popen(
-                    pass2_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                    encoding='utf-8', errors='replace', bufsize=1, **_subprocess_kwargs)
-
-            for line in self.current_process.stdout:
-                with self.download_lock:
-                    if not self.is_downloading:
-                        self.safe_process_cleanup(self.current_process)
-                        return False
-                if 'out_time_ms=' in line:
-                    try:
-                        time_ms = int(line.split('=')[1].strip())
-                        current = time_ms / 1_000_000
-                        if duration > 0:
-                            pct = min(100, (current / duration) * 100)
-                            self.update_progress(pct)
-                            self.update_status(
-                                f'Encoding pass 2/2... {pct:.0f}%', 'blue')
-                    except (ValueError, IndexError):
-                        pass
-                self.last_progress_time = time.time()
-
-            self.current_process.wait()
-            if self.current_process.returncode != 0:
-                stderr = self.current_process.stderr.read() if self.current_process.stderr else ''
-                logger.error(f"Two-pass pass 2 failed (rc {self.current_process.returncode}): {stderr}")
-                self.safe_process_cleanup(self.current_process)
-                return False
-
-            return True
-
+            return self._run_ffmpeg_with_progress(cmd, duration, 'Encoding (GPU)')
         finally:
-            # Close any open pipes on the current process
             if self.current_process:
                 for pipe in (self.current_process.stdout, self.current_process.stderr):
                     if pipe:
@@ -4447,7 +4448,56 @@ class YouTubeDownloader:
                             pipe.close()
                         except OSError:
                             pass
-            # Clean up passlog files
+
+    def _encode_two_pass(self, input_file, output_file, target_bitrate, duration,
+                          volume_multiplier=1.0, scale_height=None,
+                          start_time=None, end_time=None):
+        """Two-pass encode using software (libx264) with bitrate target."""
+        passlogfile = os.path.join(tempfile.gettempdir(), f'ytdl_2pass_{os.getpid()}_{int(time.time())}')
+
+        input_args = [self.ffmpeg_path, '-y', '-i', input_file]
+        if start_time is not None and end_time is not None:
+            input_args.extend(['-ss', str(start_time), '-to', str(end_time)])
+
+        vf_args = ['-vf', f'scale=-2:{scale_height}'] if scale_height else []
+        enc_args = self._get_video_encoder_args(mode='bitrate', target_bitrate=target_bitrate)
+
+        try:
+            # --- Pass 1 ---
+            self.update_status('Encoding pass 1/2 (analysing)...', 'blue')
+            pass1_cmd = input_args + vf_args + enc_args + [
+                '-pass', '1', '-passlogfile', passlogfile,
+                '-an', '-f', 'null', os.devnull, '-progress', 'pipe:1',
+            ]
+            if not self._run_ffmpeg_with_progress(pass1_cmd, duration, 'Two-pass pass 1'):
+                return False
+
+            # Close pass 1 pipes
+            if self.current_process.stdout:
+                self.current_process.stdout.close()
+            if self.current_process.stderr:
+                self.current_process.stderr.close()
+
+            # --- Pass 2 ---
+            self.update_status('Encoding pass 2/2...', 'blue')
+            pass2_cmd = input_args + vf_args + enc_args + [
+                '-pass', '2', '-passlogfile', passlogfile,
+                '-c:a', 'aac', '-b:a', AUDIO_BITRATE,
+            ]
+            if volume_multiplier != 1.0:
+                pass2_cmd.extend(['-af', f'volume={volume_multiplier}'])
+            pass2_cmd.extend(['-progress', 'pipe:1', output_file])
+
+            return self._run_ffmpeg_with_progress(pass2_cmd, duration, 'Two-pass pass 2')
+
+        finally:
+            if self.current_process:
+                for pipe in (self.current_process.stdout, self.current_process.stderr):
+                    if pipe:
+                        try:
+                            pipe.close()
+                        except OSError:
+                            pass
             for suffix in ['', '-0.log', '-0.log.mbtree']:
                 p = passlogfile + suffix
                 if os.path.exists(p):
@@ -4583,7 +4633,7 @@ class YouTubeDownloader:
                     clip_duration = (end_time - start_time) if trim_enabled else self.video_duration
                     height, target_bitrate = self._calculate_optimal_quality(clip_duration)
                     height = str(height)
-                    logger.info(f"10MB two-pass: auto-selected {height}p at {target_bitrate}bps for {clip_duration}s clip")
+                    logger.info(f"10MB encode: auto-selected {height}p at {target_bitrate}bps for {clip_duration}s clip")
                 else:
                     height = quality
 
@@ -4655,7 +4705,7 @@ class YouTubeDownloader:
                     needs_processing = trim_enabled or volume_multiplier != 1.0
 
                     if needs_processing:
-                        ffmpeg_video_args = ['-c:v', 'libx264', '-crf', str(VIDEO_CRF), '-preset', 'faster', '-c:a', 'aac', '-b:a', AUDIO_BITRATE]
+                        ffmpeg_video_args = self._get_video_encoder_args(mode='crf') + ['-c:a', 'aac', '-b:a', AUDIO_BITRATE]
                         if volume_multiplier != 1.0:
                             ffmpeg_video_args.extend(['-af', f'volume={volume_multiplier}'])
                         cmd.extend(['--postprocessor-args', 'ffmpeg:' + ' '.join(ffmpeg_video_args)])
@@ -4772,7 +4822,7 @@ class YouTubeDownloader:
                         final_output = os.path.join(self.download_path, final_name)
                         clip_duration = (end_time - start_time) if trim_enabled else self.video_duration
 
-                        success = self._two_pass_encode(
+                        success = self._size_constrained_encode(
                             temp_file, final_output, target_bitrate, clip_duration,
                             volume_multiplier=volume_multiplier, scale_height=height)
 
@@ -4928,7 +4978,7 @@ class YouTubeDownloader:
                         return
                     height, target_bitrate = self._calculate_optimal_quality(clip_duration)
                     height = str(height)
-                    logger.info(f"10MB two-pass (local): auto-selected {height}p at {target_bitrate}bps for {clip_duration}s clip")
+                    logger.info(f"10MB encode (local): auto-selected {height}p at {target_bitrate}bps for {clip_duration}s clip")
                 else:
                     height = quality
 
@@ -4937,7 +4987,7 @@ class YouTubeDownloader:
                 if keep_below_10mb:
                     # Two-pass encode for optimal 10MB quality
                     clip_duration = (end_time - start_time) if trim_enabled else self.video_duration
-                    success = self._two_pass_encode(
+                    success = self._size_constrained_encode(
                         filepath, output_file, target_bitrate, clip_duration,
                         volume_multiplier=volume_multiplier,
                         scale_height=height,
@@ -4958,8 +5008,7 @@ class YouTubeDownloader:
                     if trim_enabled:
                         cmd.extend(['-ss', str(start_time), '-to', str(end_time)])
 
-                    cmd.extend(['-vf', f'scale=-2:{height}', '-c:v', 'libx264', '-crf', str(VIDEO_CRF),
-                               '-preset', 'faster', '-c:a', 'aac', '-b:a', AUDIO_BITRATE])
+                    cmd.extend(['-vf', f'scale=-2:{height}'] + self._get_video_encoder_args(mode='crf') + ['-c:a', 'aac', '-b:a', AUDIO_BITRATE])
 
                     if volume_multiplier != 1.0:
                         cmd.extend(['-af', f'volume={volume_multiplier}'])
