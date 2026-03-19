@@ -4214,9 +4214,16 @@ class YouTubeDownloader:
         # Try encoders in order of preference
         for encoder in ('h264_amf', 'h264_nvenc'):
             try:
-                cmd = [self.ffmpeg_path, '-hide_banner', '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=25:d=1',
-                       '-frames:v', '5', '-c:v', encoder, '-f', 'null', os.devnull]
+                probe_out = os.path.join(tempfile.gettempdir(), f'ytdl_hwprobe.mp4')
+                cmd = [self.ffmpeg_path, '-hide_banner', '-y',
+                       '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=25:d=1',
+                       '-pix_fmt', 'yuv420p', '-frames:v', '5',
+                       '-c:v', encoder, probe_out]
                 result = subprocess.run(cmd, capture_output=True, timeout=10, **_subprocess_kwargs)
+                try:
+                    os.remove(probe_out)
+                except OSError:
+                    pass
                 if result.returncode == 0:
                     logger.info(f"Hardware encoder available: {encoder}")
                     return encoder
