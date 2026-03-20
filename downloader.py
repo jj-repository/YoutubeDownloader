@@ -1894,7 +1894,7 @@ class YouTubeDownloader:
         uploader_tab_frame = make_scrollable_tab(self.notebook, "  Uploader  ")
 
         # Settings tab
-        settings_tab_frame = make_scrollable_tab(self.notebook, "  Settings  ")
+        settings_tab_frame = make_scrollable_tab(self.notebook, "                    Settings  ")
 
         # Help tab
         help_tab_frame = make_scrollable_tab(self.notebook, "  Help  ")
