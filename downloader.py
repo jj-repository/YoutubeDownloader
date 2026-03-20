@@ -980,7 +980,7 @@ class YouTubeDownloader:
                 subprocess.Popen(
                     f'cmd /c '
                     f':wait & tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul && (timeout /t 1 /nobreak >nul & goto wait) & '
-                    f'timeout /t 1 /nobreak >nul & start "" "{exe_path}"',
+                    f'timeout /t 3 /nobreak >nul & start "" "{exe_path}"',
                     shell=True,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
@@ -1003,7 +1003,7 @@ class YouTubeDownloader:
             '@echo off\r\n'
             f':wait\r\n'
             f'tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n'
-            'timeout /t 1 /nobreak >nul\r\n'
+            'timeout /t 3 /nobreak >nul\r\n'
             f'move /y "{new_exe}" "{exe_path}"\r\n'
             f'start "" "{exe_path}"\r\n'
             'del "%~f0"\r\n'
