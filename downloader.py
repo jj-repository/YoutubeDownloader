@@ -1849,29 +1849,11 @@ class YouTubeDownloader:
         # Uploader tab
         uploader_tab_frame = make_scrollable_tab(self.notebook, "  Uploader  ")
 
-        # Spacer tab — gap roughly the width of the Clipboard Mode tab
-        spacer = ttk.Frame(self.notebook)
-        self.notebook.add(spacer, text="                              ", state='disabled')
+        # Settings tab (extra leading spaces for visual gap from Uploader)
+        settings_tab_frame = make_scrollable_tab(self.notebook, "                    Settings  ")
 
-        # Settings tab
-        settings_tab_frame = make_scrollable_tab(self.notebook, "  Settings  ")
-
-        # Help tab — red background via image trick
-        help_tab_frame = make_scrollable_tab(self.notebook, "")
-        self._help_tab_nb_index = self.notebook.index('end') - 1
-        # Create a red background image with "Help" text baked in
-        help_img = Image.new('RGB', (50, 18), color='#cc3333')
-        draw = ImageDraw.Draw(help_img)
-        try:
-            font = ImageFont.truetype("arial.ttf", 12)
-        except (IOError, OSError):
-            font = ImageFont.load_default()
-        bbox = draw.textbbox((0, 0), "Help", font=font)
-        text_x = (50 - (bbox[2] - bbox[0])) // 2
-        text_y = (18 - (bbox[3] - bbox[1])) // 2
-        draw.text((text_x, text_y), "Help", fill='white', font=font)
-        self._help_tab_img = ImageTk.PhotoImage(help_img)
-        self.notebook.tab(self._help_tab_nb_index, image=self._help_tab_img, compound='center', text='')
+        # Help tab
+        help_tab_frame = make_scrollable_tab(self.notebook, "  Help  ")
 
         ttk.Label(main_tab_frame, text='YouTube URL or Local File:', font=('Arial', 12)).grid(row=0, column=0, sticky=tk.W, pady=(0, 10))
 
