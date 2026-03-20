@@ -889,9 +889,45 @@ class YouTubeDownloader:
         new_exe = exe_path.with_suffix('.exe.new')
         old_exe = exe_path.with_name(exe_path.stem + '.old')
 
-        # Download the new exe with progress
+        # Download the new exe with progress popup
         logger.info(f"Downloading update: {download_url}")
-        self._safe_after(0, lambda: self.update_status('Downloading update... please wait', "blue"))
+
+        # Create progress dialog visible from any tab
+        progress_state = {'dialog': None, 'label': None, 'bar': None}
+
+        def _create_progress_dialog():
+            dlg = tk.Toplevel(self.root)
+            dlg.title('Downloading Update')
+            dlg.transient(self.root)
+            dlg.resizable(False, False)
+            dlg.geometry("350x100")
+            colors = THEMES[self.current_theme]
+            dlg.configure(bg=colors['bg'])
+            lbl = ttk.Label(dlg, text='Downloading update...', font=('Arial', 10))
+            lbl.pack(pady=(15, 5))
+            bar = ttk.Progressbar(dlg, length=300, mode='determinate')
+            bar.pack(pady=(0, 10))
+            dlg.update_idletasks()
+            x = (dlg.winfo_screenwidth() - dlg.winfo_width()) // 2
+            y = (dlg.winfo_screenheight() - dlg.winfo_height()) // 2
+            dlg.geometry(f"+{x}+{y}")
+            dlg.protocol("WM_DELETE_WINDOW", lambda: None)  # Prevent closing
+            progress_state['dialog'] = dlg
+            progress_state['label'] = lbl
+            progress_state['bar'] = bar
+
+        def _update_progress_dialog(pct, mb, total_mb):
+            if progress_state['label']:
+                progress_state['label'].config(text=f'Downloading update... {mb:.1f}/{total_mb:.1f} MB ({pct}%)')
+            if progress_state['bar']:
+                progress_state['bar']['value'] = pct
+
+        def _close_progress_dialog():
+            if progress_state['dialog']:
+                progress_state['dialog'].destroy()
+
+        self._safe_after(0, _create_progress_dialog)
+
         request = urllib.request.Request(download_url, headers=headers)
         with urllib.request.urlopen(request, timeout=300) as response:
             total = int(response.headers.get('Content-Length', 0))
@@ -907,9 +943,10 @@ class YouTubeDownloader:
                     pct = int(downloaded / total * 100)
                     mb = downloaded / (1024 * 1024)
                     total_mb = total / (1024 * 1024)
-                    self._safe_after(0, lambda p=pct, m=mb, t=total_mb: self.update_status(
-                        f'Downloading update... {m:.1f}/{t:.1f} MB ({p}%)', "blue"))
+                    self._safe_after(0, lambda p=pct, m=mb, t=total_mb: _update_progress_dialog(p, m, t))
             content = b''.join(chunks)
+
+        self._safe_after(0, _close_progress_dialog)
 
         if len(content) < 1024:
             raise RuntimeError("Downloaded file is too small — likely corrupted.")
