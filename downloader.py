@@ -970,58 +970,38 @@ class YouTubeDownloader:
                     old_exe.rename(exe_path)
                 raise
 
-            # Success — shut down first, then launch new exe after we're fully dead
-            self._safe_after(0, lambda: self.update_status('Update complete — restarting...', "green"))
-
-            def _do_restart():
-                pid = os.getpid()
-                logger.info(f"Launching updated exe after PID {pid} exits: {exe_path}")
-                # Wait for our own process to die (tasklist polling), then launch
-                subprocess.Popen(
-                    f'cmd /c '
-                    f':wait & tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul && (timeout /t 1 /nobreak >nul & goto wait) & '
-                    f'timeout /t 3 /nobreak >nul & start "" "{exe_path}"',
-                    shell=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-                self.on_closing()
-
-            self._safe_after(500, _do_restart)
+            # Success — tell user to reopen (auto-restart is unreliable with PyInstaller --onefile)
+            logger.info(f"Update applied: {exe_path}")
+            self._safe_after(0, lambda: self.update_status('Update installed!', "green"))
+            self._safe_after(0, lambda: messagebox.showinfo(
+                'Update Installed',
+                f'Updated to the latest version.\n\nPlease close and reopen the app to use it.'
+            ))
+            self._safe_after(0, lambda: self.on_closing())
 
         except OSError as rename_err:
-            # Rename failed (rare) — fall back to .bat trampoline
+            # Rename failed — use bat to move file after we exit
             logger.warning(f"Rename failed ({rename_err}), falling back to bat trampoline")
-            self._launch_bat_trampoline(exe_path, new_exe)
-
-    def _launch_bat_trampoline(self, exe_path, new_exe):
-        """Write a .bat that waits for us to exit, swaps the exe, and relaunches."""
-        import time as _time
-
-        bat_path = exe_path.parent / f'_update_{int(_time.time())}.bat'
-        pid = os.getpid()
-        bat_content = (
-            '@echo off\r\n'
-            f':wait\r\n'
-            f'tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n'
-            'timeout /t 3 /nobreak >nul\r\n'
-            f'move /y "{new_exe}" "{exe_path}"\r\n'
-            f'start "" "{exe_path}"\r\n'
-            'del "%~f0"\r\n'
-        )
-        bat_path.write_text(bat_content)
-        logger.info(f"Wrote update trampoline: {bat_path}")
-
-        self._safe_after(0, lambda: self.update_status('Update complete — restarting...', "green"))
-
-        def _do_restart():
-            subprocess.Popen(
-                ['cmd', '/c', str(bat_path)],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                close_fds=True,
+            import time as _time
+            bat_path = exe_path.parent / f'_update_{int(_time.time())}.bat'
+            pid = os.getpid()
+            bat_content = (
+                '@echo off\r\n'
+                f':wait\r\n'
+                f'tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n'
+                'timeout /t 3 /nobreak >nul\r\n'
+                f'move /y "{new_exe}" "{exe_path}"\r\n'
+                'del "%~f0"\r\n'
             )
-            self.on_closing()
-
-        self._safe_after(500, _do_restart)
+            bat_path.write_text(bat_content)
+            logger.info(f"Wrote update trampoline: {bat_path}")
+            subprocess.Popen(['cmd', '/c', str(bat_path)],
+                             creationflags=subprocess.CREATE_NO_WINDOW, close_fds=True)
+            self._safe_after(0, lambda: messagebox.showinfo(
+                'Update Installed',
+                f'Updated to the latest version.\n\nPlease close and reopen the app to use it.'
+            ))
+            self._safe_after(0, lambda: self.on_closing())
 
     def _apply_update_frozen_linux(self, download_url, headers, exe_path):
         """Linux portable binary update: download tar.gz, extract, replace in place."""
