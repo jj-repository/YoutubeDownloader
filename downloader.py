@@ -1774,7 +1774,7 @@ class YouTubeDownloader:
         # Apply theme before creating widgets
         self._apply_theme()
 
-        # Create notebook directly in root
+        # Main notebook
         self.notebook = ttk.Notebook(self.root)
         self.notebook.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
 
@@ -1849,8 +1849,8 @@ class YouTubeDownloader:
         # Uploader tab
         uploader_tab_frame = make_scrollable_tab(self.notebook, "  Uploader  ")
 
-        # Settings tab (extra leading spaces for visual gap from Uploader)
-        settings_tab_frame = make_scrollable_tab(self.notebook, "                    Settings  ")
+        # Settings tab
+        settings_tab_frame = make_scrollable_tab(self.notebook, "  Settings  ")
 
         # Help tab
         help_tab_frame = make_scrollable_tab(self.notebook, "  Help  ")
