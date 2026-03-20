@@ -3249,12 +3249,13 @@ class YouTubeDownloader:
         else:
             self.keep_below_10mb_check.config(state='normal')
 
-        # Only re-fetch if we have a valid URL and have already fetched duration
-        if self.current_video_url and self.video_duration > 0 and not self.is_playlist:
-            # Show loading indicator
-            self.filesize_label.config(text='Calculating size...')
-            # Re-fetch file size with new quality setting (in background)
-            self._fetch_file_size(self.current_video_url)
+        # Re-fetch file size if we have a valid URL
+        url = self.current_video_url or self.url_entry.get().strip()
+        if url and not self.is_playlist:
+            is_valid, _ = self.validate_youtube_url(url)
+            if is_valid:
+                self.filesize_label.config(text='Calculating size...')
+                self._fetch_file_size(url)
 
     def _update_trimmed_filesize(self):
         """Update file size estimate based on trim selection using linear calculation"""
@@ -4114,6 +4115,12 @@ class YouTubeDownloader:
                 text='Mode: YouTube Download',
                 foreground="green"
             )
+            # Auto-fetch file size estimate for valid YouTube URLs (debounced)
+            is_valid, _ = self.validate_youtube_url(input_text)
+            if is_valid:
+                if hasattr(self, '_size_fetch_timer') and self._size_fetch_timer:
+                    self.root.after_cancel(self._size_fetch_timer)
+                self._size_fetch_timer = self.root.after(1000, lambda: self._fetch_file_size(input_text))
 
     def is_local_file(self, input_text):
         """Check if input is a local file path"""
