@@ -933,13 +933,17 @@ class YouTubeDownloader:
                     old_exe.rename(exe_path)
                 raise
 
-            # Success — spawn new exe via cmd with delay so old process exits first
+            # Success — shut down first, then launch new exe after we're fully dead
             self._safe_after(0, lambda: self.update_status('Update complete — restarting...', "green"))
 
             def _do_restart():
-                logger.info(f"Launching updated exe: {exe_path}")
+                pid = os.getpid()
+                logger.info(f"Launching updated exe after PID {pid} exits: {exe_path}")
+                # Wait for our own process to die (tasklist polling), then launch
                 subprocess.Popen(
-                    f'cmd /c timeout /t 2 /nobreak >nul & start "" "{exe_path}"',
+                    f'cmd /c '
+                    f':wait & tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul && (timeout /t 1 /nobreak >nul & goto wait) & '
+                    f'timeout /t 1 /nobreak >nul & start "" "{exe_path}"',
                     shell=True,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
@@ -957,9 +961,12 @@ class YouTubeDownloader:
         import time as _time
 
         bat_path = exe_path.parent / f'_update_{int(_time.time())}.bat'
+        pid = os.getpid()
         bat_content = (
             '@echo off\r\n'
-            'timeout /t 2 /noblock >nul\r\n'
+            f':wait\r\n'
+            f'tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n'
+            'timeout /t 1 /nobreak >nul\r\n'
             f'move /y "{new_exe}" "{exe_path}"\r\n'
             f'start "" "{exe_path}"\r\n'
             'del "%~f0"\r\n'
