@@ -125,11 +125,13 @@ QWidget { background-color: #1e1e1e; color: #dcdcdc; }
 QGroupBox { border: 1px solid #444; border-radius: 4px; margin-top: 8px; padding-top: 14px; }
 QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #dcdcdc; }
 QTabWidget::pane { border: 1px solid #444; }
+QTabBar { background: transparent; }
 QTabBar::tab { background: #2d2d2d; color: #dcdcdc; padding: 6px 14px; border: 1px solid #444;
                border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }
 QTabBar::tab:selected { background: #1e1e1e; }
 QTabBar::tab:!selected { margin-top: 2px; }
-QTabBar::tab:disabled { background: transparent; border: none; min-width: 40px; max-width: 40px; }
+QTabBar::tab:disabled { background: transparent; border: none; color: transparent;
+                        min-width: 40px; max-width: 40px; padding: 0; margin: 0; }
 QComboBox, QLineEdit { background: #2d2d2d; color: #dcdcdc;
                border: 1px solid #555; border-radius: 3px; padding: 2px; }
 QComboBox QAbstractItemView { background: #2d2d2d; color: #dcdcdc; selection-background-color: #264f78; }
@@ -154,11 +156,13 @@ QWidget { background-color: #f0f0f0; color: #1e1e1e; }
 QGroupBox { border: 1px solid #bbb; border-radius: 4px; margin-top: 8px; padding-top: 14px; }
 QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #1e1e1e; }
 QTabWidget::pane { border: 1px solid #bbb; }
+QTabBar { background: transparent; }
 QTabBar::tab { background: #e0e0e0; color: #1e1e1e; padding: 6px 14px; border: 1px solid #bbb;
                border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }
 QTabBar::tab:selected { background: #f0f0f0; }
 QTabBar::tab:!selected { margin-top: 2px; }
-QTabBar::tab:disabled { background: transparent; border: none; min-width: 40px; max-width: 40px; }
+QTabBar::tab:disabled { background: transparent; border: none; color: transparent;
+                        min-width: 40px; max-width: 40px; padding: 0; margin: 0; }
 QComboBox, QLineEdit { background: #ffffff; color: #1e1e1e;
                border: 1px solid #bbb; border-radius: 3px; padding: 2px; }
 QComboBox QAbstractItemView { background: #ffffff; color: #1e1e1e; selection-background-color: #1565c0; }
@@ -247,14 +251,34 @@ def _set_dark_title_bar(window, dark=True):
         return
     try:
         import ctypes
+        import ctypes.wintypes
+
         hwnd = int(window.winId())
-        # Try attribute 20 first (Windows 11 22H2+), fall back to 19 (older builds)
-        value = ctypes.c_int(1 if dark else 0)
-        hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
-        if hr != 0:
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd, 19, ctypes.byref(value), ctypes.sizeof(value))
+        rendering_policy = ctypes.c_int(1 if dark else 0)
+
+        # DWMWA_USE_IMMERSIVE_DARK_MODE = 20 (Win11 22H2+)
+        # Fallback DWMWA_USE_IMMERSIVE_DARK_MODE = 19 (Win10 20H1+)
+        for attr in (20, 19):
+            hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                ctypes.wintypes.HWND(hwnd),
+                ctypes.wintypes.DWORD(attr),
+                ctypes.byref(rendering_policy),
+                ctypes.wintypes.DWORD(ctypes.sizeof(rendering_policy)))
+            if hr == 0:
+                logger.info(f"Dark title bar set via DWMWA attribute {attr}")
+                # Force Windows to repaint the title bar
+                try:
+                    SWP_FRAMECHANGED = 0x0020
+                    SWP_NOSIZE = 0x0001
+                    SWP_NOMOVE = 0x0002
+                    SWP_NOZORDER = 0x0004
+                    ctypes.windll.user32.SetWindowPos(
+                        ctypes.wintypes.HWND(hwnd), None, 0, 0, 0, 0,
+                        SWP_FRAMECHANGED | SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER)
+                except Exception:
+                    pass
+                return
+        logger.debug("DwmSetWindowAttribute failed for both attr 20 and 19")
     except Exception as e:
         logger.debug(f"Could not set dark title bar: {e}")
 
