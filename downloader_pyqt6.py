@@ -248,11 +248,13 @@ def _set_dark_title_bar(window, dark=True):
     try:
         import ctypes
         hwnd = int(window.winId())
-        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        # Try attribute 20 first (Windows 11 22H2+), fall back to 19 (older builds)
         value = ctypes.c_int(1 if dark else 0)
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
-            ctypes.byref(value), ctypes.sizeof(value))
+        hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, 20, ctypes.byref(value), ctypes.sizeof(value))
+        if hr != 0:
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 19, ctypes.byref(value), ctypes.sizeof(value))
     except Exception as e:
         logger.debug(f"Could not set dark title bar: {e}")
 
@@ -485,6 +487,7 @@ class YouTubeDownloader(QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 0)
 
         self._tabs = QTabWidget()
+        self._tabs.tabBar().setExpanding(False)
         root_layout.addWidget(self._tabs)
 
         # ---- Clipboard Mode tab ----
@@ -492,21 +495,21 @@ class YouTubeDownloader(QMainWindow):
         clip_layout = QVBoxLayout(clipboard_page)
         self.setup_clipboard_mode_ui(clip_layout)
         clip_layout.addStretch()
-        self._tabs.addTab(self._scroll_tab(clipboard_page), "  Clipboard Mode  ")
+        self._tabs.addTab(self._scroll_tab(clipboard_page), "Clipboard Mode")
 
         # ---- Trimmer tab ----
         trimmer_page = QWidget()
         trim_layout = QVBoxLayout(trimmer_page)
         self._setup_trimmer_ui(trim_layout)
         trim_layout.addStretch()
-        self._tabs.addTab(self._scroll_tab(trimmer_page), "  Trimmer  ")
+        self._tabs.addTab(self._scroll_tab(trimmer_page), "Trimmer")
 
         # ---- Uploader tab ----
         uploader_page = QWidget()
         upl_layout = QVBoxLayout(uploader_page)
         self.setup_uploader_ui(upl_layout)
         upl_layout.addStretch()
-        self._tabs.addTab(self._scroll_tab(uploader_page), "  Uploader  ")
+        self._tabs.addTab(self._scroll_tab(uploader_page), "Uploader")
 
         # ---- Invisible spacer tab (between Uploader and Settings) ----
         self._tabs.addTab(QWidget(), "")
@@ -522,19 +525,14 @@ class YouTubeDownloader(QMainWindow):
         set_layout = QVBoxLayout(settings_page)
         self._setup_settings_tab(set_layout)
         set_layout.addStretch()
-        self._tabs.addTab(self._scroll_tab(settings_page), "  Settings  ")
+        self._tabs.addTab(self._scroll_tab(settings_page), "Settings")
 
-        # ---- Help tab (red tab background) ----
+        # ---- Help tab ----
         help_page = QWidget()
         hlp_layout = QVBoxLayout(help_page)
         self._setup_help_tab(hlp_layout)
         hlp_layout.addStretch()
-        self._tabs.addTab(self._scroll_tab(help_page), "  Help  ")
-        _help_idx = self._tabs.count() - 1
-        self._tabs.tabBar().setTabTextColor(_help_idx, QColor("#ffffff"))
-        # Red background on the Help tab via per-tab stylesheet trick:
-        # We set a custom property and style it after _apply_theme
-        self._help_tab_index = _help_idx
+        self._tabs.addTab(self._scroll_tab(help_page), "Help")
 
         # Track tab changes for clipboard monitoring
         self._tabs.currentChanged.connect(self._on_tab_changed)
@@ -5999,6 +5997,10 @@ def main():
 
     window = YouTubeDownloader()
     window.show()
+
+    # Apply dark title bar after show() so the window handle is valid
+    if window.current_theme == 'dark':
+        _set_dark_title_bar(window, dark=True)
 
     # Signal handlers for graceful shutdown
     def signal_handler(signum, frame):
