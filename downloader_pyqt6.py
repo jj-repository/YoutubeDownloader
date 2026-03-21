@@ -487,7 +487,6 @@ class YouTubeDownloader(QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 0)
 
         self._tabs = QTabWidget()
-        self._tabs.tabBar().setExpanding(False)
         root_layout.addWidget(self._tabs)
 
         # ---- Clipboard Mode tab ----
@@ -511,10 +510,11 @@ class YouTubeDownloader(QMainWindow):
         upl_layout.addStretch()
         self._tabs.addTab(self._scroll_tab(uploader_page), "Uploader")
 
-        # ---- Invisible spacer tab (between Uploader and Settings) ----
+        # ---- Invisible spacer tab (visual gap, identical to SwornTweaks) ----
         self._tabs.addTab(QWidget(), "")
         _spacer_idx = self._tabs.count() - 1
         self._tabs.setTabEnabled(_spacer_idx, False)
+        self._tabs.setStyleSheet(self._tabs.styleSheet())  # force refresh
         self._tabs.tabBar().setTabButton(
             _spacer_idx, self._tabs.tabBar().ButtonPosition.LeftSide, None)
         self._tabs.tabBar().setTabButton(
