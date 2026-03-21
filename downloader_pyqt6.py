@@ -30,7 +30,7 @@ from catboxpy.catbox import CatboxClient
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
-    QColor, QDesktopServices, QFont, QIcon, QPainter, QPen, QPixmap,
+    QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap,
 )
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFrame,
@@ -120,69 +120,141 @@ TIME_REGEX = re.compile(r'^(\d{1,2}):(\d{2}):(\d{2})$')
 #  QSS Stylesheets — dark and light, adapted from THEMES colors
 # ---------------------------------------------------------------------------
 
-_DARK_STYLE = """
-QWidget { background-color: #1e1e1e; color: #d4d4d4; }
-QGroupBox { border: 1px solid #555555; border-radius: 4px; margin-top: 8px; padding-top: 14px; }
-QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #d4d4d4; }
-QTabWidget::pane { border: 1px solid #555555; }
-QTabBar::tab { background: #252525; color: #d4d4d4; padding: 6px 14px; border: 1px solid #555555;
+_DARK_STYLE_BASE = """
+QWidget { background-color: #1e1e1e; color: #dcdcdc; }
+QGroupBox { border: 1px solid #444; border-radius: 4px; margin-top: 8px; padding-top: 14px; }
+QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #dcdcdc; }
+QTabWidget::pane { border: 1px solid #444; }
+QTabBar::tab { background: #2d2d2d; color: #dcdcdc; padding: 6px 14px; border: 1px solid #444;
                border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }
 QTabBar::tab:selected { background: #1e1e1e; }
 QTabBar::tab:!selected { margin-top: 2px; }
 QTabBar::tab:disabled { background: transparent; border: none; min-width: 40px; max-width: 40px; }
-QComboBox, QLineEdit { background: #2d2d2d; color: #d4d4d4;
-               border: 1px solid #555555; border-radius: 3px; padding: 2px; }
-QComboBox QAbstractItemView { background: #2d2d2d; color: #d4d4d4; selection-background-color: #264f78; }
+QComboBox, QLineEdit { background: #2d2d2d; color: #dcdcdc;
+               border: 1px solid #555; border-radius: 3px; padding: 2px; }
+QComboBox QAbstractItemView { background: #2d2d2d; color: #dcdcdc; selection-background-color: #264f78; }
 QScrollArea { border: none; }
-QPushButton { background: #333333; color: #d4d4d4; border: 1px solid #555555; border-radius: 3px; padding: 5px 12px; }
-QPushButton:hover { background: #444444; }
-QPushButton:disabled { background: #2a2a2a; color: #666666; border-color: #444444; }
-QCheckBox { color: #d4d4d4; spacing: 6px; }
-QCheckBox::indicator { width: 14px; height: 14px; border: 2px solid #888888; border-radius: 3px; background: #2d2d2d; }
-QCheckBox::indicator:checked { background: #2e7d32; border-color: #2e7d32; }
-QCheckBox::indicator:unchecked:hover { border-color: #555555; }
-QCheckBox::indicator:disabled { background: #2a2a2a; border-color: #444444; }
-QLabel { color: #d4d4d4; }
-QProgressBar { background: #252525; border: 1px solid #555555; border-radius: 3px; text-align: center; color: #d4d4d4; }
-QProgressBar::chunk { background: #264f78; border-radius: 2px; }
+QPushButton { background: #333; color: #dcdcdc; border: 1px solid #555; border-radius: 3px; padding: 5px 12px; }
+QPushButton:hover { background: #444; }
+QPushButton:disabled { background: #2a2a2a; color: #666; border-color: #444; }
+QCheckBox { color: #dcdcdc; spacing: 6px; }
+QLabel { color: #dcdcdc; }
+QProgressBar { background: #252525; border: 1px solid #444; border-radius: 3px; text-align: center; color: #dcdcdc; }
+QProgressBar::chunk { background: #1565c0; border-radius: 2px; }
 QSlider::groove:horizontal { background: #252525; height: 6px; border-radius: 3px; }
-QSlider::handle:horizontal { background: #d4d4d4; width: 14px; height: 14px; margin: -4px 0; border-radius: 7px; }
-QSlider::sub-page:horizontal { background: #264f78; border-radius: 3px; }
+QSlider::handle:horizontal { background: #dcdcdc; width: 14px; height: 14px; margin: -4px 0; border-radius: 7px; }
+QSlider::sub-page:horizontal { background: #1565c0; border-radius: 3px; }
 QMessageBox { background-color: #1e1e1e; }
-QToolTip { background: #2d2d2d; color: #d4d4d4; border: 1px solid #555555; }
+QStatusBar { background: #2d2d2d; color: #aaa; }
+QToolTip { background: #2d2d2d; color: #dcdcdc; border: 1px solid #555; }
 """
 
 _LIGHT_STYLE = """
-QWidget { background-color: #f0f0f0; color: #000000; }
-QGroupBox { border: 1px solid #cccccc; border-radius: 4px; margin-top: 8px; padding-top: 14px; }
-QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #000000; }
-QTabWidget::pane { border: 1px solid #cccccc; }
-QTabBar::tab { background: #e0e0e0; color: #000000; padding: 6px 14px; border: 1px solid #cccccc;
+QWidget { background-color: #f0f0f0; color: #1e1e1e; }
+QGroupBox { border: 1px solid #bbb; border-radius: 4px; margin-top: 8px; padding-top: 14px; }
+QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; color: #1e1e1e; }
+QTabWidget::pane { border: 1px solid #bbb; }
+QTabBar::tab { background: #e0e0e0; color: #1e1e1e; padding: 6px 14px; border: 1px solid #bbb;
                border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; }
 QTabBar::tab:selected { background: #f0f0f0; }
 QTabBar::tab:!selected { margin-top: 2px; }
 QTabBar::tab:disabled { background: transparent; border: none; min-width: 40px; max-width: 40px; }
-QComboBox, QLineEdit { background: #ffffff; color: #000000;
-               border: 1px solid #cccccc; border-radius: 3px; padding: 2px; }
-QComboBox QAbstractItemView { background: #ffffff; color: #000000; selection-background-color: #0078d7; }
+QComboBox, QLineEdit { background: #ffffff; color: #1e1e1e;
+               border: 1px solid #bbb; border-radius: 3px; padding: 2px; }
+QComboBox QAbstractItemView { background: #ffffff; color: #1e1e1e; selection-background-color: #1565c0; }
 QScrollArea { border: none; }
-QPushButton { background: #e0e0e0; color: #000000; border: 1px solid #cccccc; border-radius: 3px; padding: 5px 12px; }
+QPushButton { background: #e0e0e0; color: #1e1e1e; border: 1px solid #bbb; border-radius: 3px; padding: 5px 12px; }
 QPushButton:hover { background: #d0d0d0; }
-QPushButton:disabled { background: #e8e8e8; color: #999999; border-color: #cccccc; }
-QCheckBox { color: #000000; }
-QCheckBox::indicator { width: 14px; height: 14px; border: 2px solid #888888; border-radius: 3px; background: #ffffff; }
+QPushButton:disabled { background: #e8e8e8; color: #999; border-color: #bbb; }
+QCheckBox { color: #1e1e1e; }
+QCheckBox::indicator { width: 14px; height: 14px; border: 2px solid #888; border-radius: 3px; background: #ffffff; }
 QCheckBox::indicator:checked { background: #2e7d32; border-color: #2e7d32; }
-QCheckBox::indicator:unchecked:hover { border-color: #555555; }
-QCheckBox::indicator:disabled { background: #e0e0e0; border-color: #cccccc; }
-QLabel { color: #000000; }
-QProgressBar { background: #ffffff; border: 1px solid #cccccc; border-radius: 3px; text-align: center; color: #000000; }
-QProgressBar::chunk { background: #0078d7; border-radius: 2px; }
+QCheckBox::indicator:unchecked:hover { border-color: #555; }
+QCheckBox::indicator:disabled { background: #e0e0e0; border-color: #bbb; }
+QLabel { color: #1e1e1e; }
+QProgressBar { background: #ffffff; border: 1px solid #bbb; border-radius: 3px; text-align: center; color: #1e1e1e; }
+QProgressBar::chunk { background: #1565c0; border-radius: 2px; }
 QSlider::groove:horizontal { background: #ffffff; height: 6px; border-radius: 3px; }
-QSlider::handle:horizontal { background: #000000; width: 14px; height: 14px; margin: -4px 0; border-radius: 7px; }
-QSlider::sub-page:horizontal { background: #0078d7; border-radius: 3px; }
+QSlider::handle:horizontal { background: #1e1e1e; width: 14px; height: 14px; margin: -4px 0; border-radius: 7px; }
+QSlider::sub-page:horizontal { background: #1565c0; border-radius: 3px; }
 QMessageBox { background-color: #f0f0f0; }
-QToolTip { background: #ffffcc; color: #000000; border: 1px solid #cccccc; }
+QStatusBar { background: #e0e0e0; color: #555; }
+QToolTip { background: #ffffcc; color: #1e1e1e; border: 1px solid #bbb; }
 """
+
+
+# ---------------------------------------------------------------------------
+#  Dark checkbox images (generated at runtime for dark mode, like SwornTweaks)
+# ---------------------------------------------------------------------------
+_checkbox_temp_dir = None
+
+def _make_checkbox_images():
+    """Generate unchecked/checked checkbox PNGs for dark mode QSS."""
+    global _checkbox_temp_dir
+    if _checkbox_temp_dir and os.path.isdir(_checkbox_temp_dir):
+        return _checkbox_temp_dir
+    _checkbox_temp_dir = tempfile.mkdtemp(prefix="ytdl_cb_")
+
+    # Unchecked
+    unc = QPixmap(18, 18)
+    unc.fill(QColor(0, 0, 0, 0))
+    p = QPainter(unc)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(QPen(QColor(136, 136, 136), 2))
+    p.setBrush(QColor(45, 45, 45))
+    p.drawRoundedRect(1, 1, 16, 16, 3, 3)
+    p.end()
+    unc.save(os.path.join(_checkbox_temp_dir, "cb_unc.png"))
+
+    # Checked
+    chk = QPixmap(18, 18)
+    chk.fill(QColor(0, 0, 0, 0))
+    p = QPainter(chk)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(46, 125, 50))
+    p.drawRoundedRect(1, 1, 16, 16, 3, 3)
+    pen = QPen(QColor(255, 255, 255), 2.5)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    path = QPainterPath()
+    path.moveTo(4, 9)
+    path.lineTo(7.5, 13)
+    path.lineTo(14, 5)
+    p.drawPath(path)
+    p.end()
+    chk.save(os.path.join(_checkbox_temp_dir, "cb_chk.png"))
+
+    return _checkbox_temp_dir
+
+
+def _build_dark_style():
+    """Build dark QSS with generated checkbox images."""
+    cb_dir = _make_checkbox_images()
+    unc = os.path.join(cb_dir, "cb_unc.png").replace("\\", "/")
+    chk = os.path.join(cb_dir, "cb_chk.png").replace("\\", "/")
+    return _DARK_STYLE_BASE + f"""
+QCheckBox::indicator {{ width: 18px; height: 18px; }}
+QCheckBox::indicator:unchecked {{ image: url({unc}); }}
+QCheckBox::indicator:checked {{ image: url({chk}); }}
+"""
+
+
+def _set_dark_title_bar(window, dark=True):
+    """Set dark/light window title bar on Windows via DWM API."""
+    if sys.platform != 'win32':
+        return
+    try:
+        import ctypes
+        hwnd = int(window.winId())
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        value = ctypes.c_int(1 if dark else 0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
+            ctypes.byref(value), ctypes.sizeof(value))
+    except Exception as e:
+        logger.debug(f"Could not set dark title bar: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +547,7 @@ class YouTubeDownloader(QMainWindow):
 
         # --- URL / file input ---
         lbl = QLabel("YouTube URL or Local File:")
-        lbl.setFont(QFont("Arial", 12))
+        lbl.setStyleSheet(lbl.styleSheet() + "font-size: 12px;")
         layout.addWidget(lbl)
 
         url_row = QHBoxLayout()
@@ -496,7 +568,7 @@ class YouTubeDownloader(QMainWindow):
         # --- Quality section ---
         quality_row = QHBoxLayout()
         qlbl = QLabel("Video Quality:")
-        qlbl.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        qlbl.setStyleSheet(qlbl.styleSheet() + "font-size: 11px; font-weight: bold;")
         quality_row.addWidget(qlbl)
 
         self.quality_combo = QComboBox()
@@ -518,12 +590,12 @@ class YouTubeDownloader(QMainWindow):
         # --- Trim + Volume header row ---
         tv_row = QHBoxLayout()
         tv_lbl = QLabel("Trim Video:")
-        tv_lbl.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        tv_lbl.setStyleSheet(tv_lbl.styleSheet() + "font-size: 11px; font-weight: bold;")
         tv_row.addWidget(tv_lbl)
         tv_row.addSpacing(30)
 
         vol_lbl = QLabel("Volume:")
-        vol_lbl.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        vol_lbl.setStyleSheet(vol_lbl.styleSheet() + "font-size: 11px; font-weight: bold;")
         tv_row.addWidget(vol_lbl)
 
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
@@ -539,7 +611,7 @@ class YouTubeDownloader(QMainWindow):
         tv_row.addWidget(self.volume_entry)
 
         self.volume_label = QLabel("%")
-        self.volume_label.setFont(QFont("Arial", 9))
+        self.volume_label.setStyleSheet(self.volume_label.styleSheet() + "font-size: 9px;")
         tv_row.addWidget(self.volume_label)
 
         self.reset_volume_btn = QPushButton("Reset to 100%")
@@ -684,6 +756,10 @@ class YouTubeDownloader(QMainWindow):
         # --- Download / Stop / Speed limit ---
         btn_row = QHBoxLayout()
         self.download_btn = QPushButton("Download")
+        self.download_btn.setStyleSheet(
+            "QPushButton { background-color: #1565c0; color: white; font-weight: bold; }"
+            "QPushButton:hover { background-color: #1976d2; }"
+            "QPushButton:disabled { background-color: #2a2a2a; color: #666; }")
         self.download_btn.clicked.connect(self.start_download)
         btn_row.addWidget(self.download_btn)
 
@@ -721,12 +797,16 @@ class YouTubeDownloader(QMainWindow):
         # --- Upload to Catbox.moe section ---
         layout.addWidget(self._hsep())
         upl_header = QLabel("Upload to Streaming Site:")
-        upl_header.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        upl_header.setStyleSheet(upl_header.styleSheet() + "font-size: 11px; font-weight: bold;")
         layout.addWidget(upl_header)
 
         upl_row = QHBoxLayout()
         self.upload_btn = QPushButton("Upload to Catbox.moe")
         self.upload_btn.setEnabled(False)
+        self.upload_btn.setStyleSheet(
+            "QPushButton { background-color: #2e7d32; color: white; font-weight: bold; }"
+            "QPushButton:hover { background-color: #388e3c; }"
+            "QPushButton:disabled { background-color: #2a2a2a; color: #666; }")
         self.upload_btn.clicked.connect(self.start_upload)
         upl_row.addWidget(self.upload_btn)
 
@@ -753,7 +833,7 @@ class YouTubeDownloader(QMainWindow):
         uurl_row = QHBoxLayout(self.upload_url_widget)
         uurl_row.setContentsMargins(0, 0, 0, 0)
         uurl_lbl = QLabel("Upload URL:")
-        uurl_lbl.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+        uurl_lbl.setStyleSheet(uurl_lbl.styleSheet() + "font-size: 9px; font-weight: bold;")
         uurl_row.addWidget(uurl_lbl)
         self.upload_url_entry = QLineEdit()
         self.upload_url_entry.setReadOnly(True)
@@ -774,7 +854,7 @@ class YouTubeDownloader(QMainWindow):
 
         # Header
         hdr = QLabel("Clipboard Mode")
-        hdr.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        hdr.setStyleSheet(hdr.styleSheet() + "font-size: 14px; font-weight: bold;")
         layout.addWidget(hdr)
 
         desc = QLabel("Copy YouTube URLs (Ctrl+C) to automatically detect and download them.")
@@ -784,7 +864,7 @@ class YouTubeDownloader(QMainWindow):
         # Mode toggle
         mode_row = QHBoxLayout()
         mlbl = QLabel("Download Mode:")
-        mlbl.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        mlbl.setStyleSheet(mlbl.styleSheet() + "font-size: 10px; font-weight: bold;")
         mode_row.addWidget(mlbl)
         self.clipboard_auto_download_check = QCheckBox("Auto-download (starts immediately)")
         mode_row.addWidget(self.clipboard_auto_download_check)
@@ -794,7 +874,7 @@ class YouTubeDownloader(QMainWindow):
         # Settings section
         layout.addWidget(self._hsep())
         slbl = QLabel("Settings")
-        slbl.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        slbl.setStyleSheet(slbl.styleSheet() + "font-size: 11px; font-weight: bold;")
         layout.addWidget(slbl)
 
         settings_row = QHBoxLayout()
@@ -871,6 +951,10 @@ class YouTubeDownloader(QMainWindow):
         ctrl_row = QHBoxLayout()
         self.clipboard_download_btn = QPushButton("Download All")
         self.clipboard_download_btn.setEnabled(False)
+        self.clipboard_download_btn.setStyleSheet(
+            "QPushButton { background-color: #1565c0; color: white; font-weight: bold; }"
+            "QPushButton:hover { background-color: #1976d2; }"
+            "QPushButton:disabled { background-color: #2a2a2a; color: #666; }")
         self.clipboard_download_btn.clicked.connect(self.start_clipboard_downloads)
         ctrl_row.addWidget(self.clipboard_download_btn)
 
@@ -914,7 +998,7 @@ class YouTubeDownloader(QMainWindow):
 
         # Header
         hdr = QLabel("Upload Local File")
-        hdr.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        hdr.setStyleSheet(hdr.styleSheet() + "font-size: 14px; font-weight: bold;")
         layout.addWidget(hdr)
 
         desc = QLabel("Upload local video files to Catbox.moe streaming service.")
@@ -961,6 +1045,10 @@ class YouTubeDownloader(QMainWindow):
         uc_row = QHBoxLayout()
         self.uploader_upload_btn = QPushButton("Upload to Catbox.moe")
         self.uploader_upload_btn.setEnabled(False)
+        self.uploader_upload_btn.setStyleSheet(
+            "QPushButton { background-color: #2e7d32; color: white; font-weight: bold; }"
+            "QPushButton:hover { background-color: #388e3c; }"
+            "QPushButton:disabled { background-color: #2a2a2a; color: #666; }")
         self.uploader_upload_btn.clicked.connect(self.start_uploader_upload)
         uc_row.addWidget(self.uploader_upload_btn)
 
@@ -979,7 +1067,7 @@ class YouTubeDownloader(QMainWindow):
         uurl_row = QHBoxLayout(self.uploader_url_widget)
         uurl_row.setContentsMargins(0, 0, 0, 0)
         uurl_lbl = QLabel("Upload URL:")
-        uurl_lbl.setFont(QFont("Arial", 9, QFont.Weight.Bold))
+        uurl_lbl.setStyleSheet(uurl_lbl.styleSheet() + "font-size: 9px; font-weight: bold;")
         uurl_row.addWidget(uurl_lbl)
         self.uploader_url_entry = QLineEdit()
         self.uploader_url_entry.setReadOnly(True)
@@ -996,49 +1084,55 @@ class YouTubeDownloader(QMainWindow):
     #  Settings tab construction
     # ------------------------------------------------------------------
     def _setup_settings_tab(self, layout: QVBoxLayout):
-        """Build all widgets for the Settings tab."""
+        """Build all widgets for the Settings tab (compact, SwornTweaks-style)."""
 
-        # Dark mode toggle
-        self.dark_mode_check = QCheckBox("Dark Mode")
-        self.dark_mode_check.setChecked(self.current_theme == 'dark')
-        self.dark_mode_check.stateChanged.connect(self._toggle_theme)
-        layout.addWidget(self.dark_mode_check)
+        # Version header
+        ver_lbl = QLabel(f"YoutubeDownloader v{APP_VERSION}")
+        ver_lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
+        layout.addWidget(ver_lbl)
 
-        layout.addWidget(self._hsep())
+        gh_lbl = QLabel(f'<a href="https://github.com/{GITHUB_REPO}" '
+                        f'style="color: gray;">github.com/{GITHUB_REPO}</a>')
+        gh_lbl.setStyleSheet("color: gray; font-size: 11px;")
+        gh_lbl.setOpenExternalLinks(True)
+        layout.addWidget(gh_lbl)
+        layout.addSpacing(12)
 
-        # Updates section
-        updates_lbl = QLabel("Updates")
-        updates_lbl.setFont(QFont("Arial", 11, QFont.Weight.Bold))
-        layout.addWidget(updates_lbl)
+        # Action buttons
+        self.check_updates_btn = QPushButton("Check for Updates")
+        self.check_updates_btn.clicked.connect(self._check_for_updates_clicked)
+        layout.addWidget(self.check_updates_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 
+        readme_btn = QPushButton("Readme")
+        readme_btn.setStyleSheet(
+            "QPushButton { background-color: #1565c0; color: white; font-weight: bold; }"
+            "QPushButton:hover { background-color: #1976d2; }")
+        readme_btn.clicked.connect(lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme'))
+        layout.addWidget(readme_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        layout.addSpacing(12)
+
+        # Settings checkboxes
         self.auto_check_updates_check = QCheckBox("Check for updates on startup")
         self.auto_check_updates_check.setChecked(self._load_auto_check_updates_setting())
         self.auto_check_updates_check.stateChanged.connect(self._save_auto_check_updates_setting)
         layout.addWidget(self.auto_check_updates_check)
 
-        self.check_updates_btn = QPushButton("Check for Updates")
-        self.check_updates_btn.clicked.connect(self._check_for_updates_clicked)
-        layout.addWidget(self.check_updates_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        self.dark_mode_check = QCheckBox("Dark Mode")
+        self.dark_mode_check.setChecked(self.current_theme == 'dark')
+        self.dark_mode_check.stateChanged.connect(self._toggle_theme)
+        layout.addWidget(self.dark_mode_check)
 
-        layout.addWidget(self._hsep())
-
-        # Readme link
-        readme_btn = QPushButton("Readme")
-        readme_btn.clicked.connect(lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme'))
-        layout.addWidget(readme_btn, alignment=Qt.AlignmentFlag.AlignLeft)
-
-        layout.addWidget(self._hsep())
+        layout.addSpacing(8)
 
         # Takodachi image
         try:
             img_path = self._get_resource_path('takodachi.webp')
             if os.path.exists(img_path):
                 with Image.open(img_path) as pil_img:
-                    pil_img.thumbnail((120, 120), Image.Resampling.LANCZOS)
-                    # Convert PIL to QPixmap via bytes
+                    pil_img.thumbnail((200, 200), Image.Resampling.LANCZOS)
                     pil_img = pil_img.convert("RGBA")
                     data = pil_img.tobytes("raw", "RGBA")
-                    from PyQt6.QtGui import QImage
                     qimg = QImage(data, pil_img.width, pil_img.height, QImage.Format.Format_RGBA8888)
                     pix = QPixmap.fromImage(qimg)
                 takodachi_label = QLabel()
@@ -1047,52 +1141,48 @@ class YouTubeDownloader(QMainWindow):
         except Exception as e:
             logger.error(f"Error loading settings image: {e}")
 
-        # Credits
         by_lbl = QLabel("by JJ")
-        by_lbl.setFont(QFont("Arial", 10, QFont.Weight.Bold))
+        by_lbl.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(by_lbl)
-
-        ver_lbl = QLabel(f"v{APP_VERSION}")
-        ver_lbl.setFont(QFont("Arial", 9))
-        layout.addWidget(ver_lbl)
 
     # ------------------------------------------------------------------
     #  Help tab construction
     # ------------------------------------------------------------------
     def _setup_help_tab(self, layout: QVBoxLayout):
-        """Build all widgets for the Help tab."""
+        """Build all widgets for the Help tab (SwornTweaks-style)."""
 
-        hdr = QLabel("How to Use YoutubeDownloader")
-        hdr.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        hdr = QLabel("YoutubeDownloader Help")
+        hdr.setStyleSheet("font-size: 16px; font-weight: bold;")
         layout.addWidget(hdr)
 
-        # Button row
+        # Button row — accent-colored like SwornTweaks
         btn_row = QHBoxLayout()
-        gh_btn = QPushButton("GitHub")
-        gh_btn.clicked.connect(lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}'))
-        btn_row.addWidget(gh_btn)
+        readme_btn = QPushButton("Readme")
+        readme_btn.setStyleSheet(
+            "QPushButton { background-color: #1565c0; color: white; font-weight: bold; }"
+            "QPushButton:hover { background-color: #1976d2; }")
+        readme_btn.clicked.connect(lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme'))
+        btn_row.addWidget(readme_btn)
 
-        # Report a Bug — yellow button via inline QSS
-        self._report_bug_btn = QPushButton("Report a Bug")
+        self._report_bug_btn = QPushButton("Report Bug")
         self._report_bug_btn.setStyleSheet(
-            "QPushButton { background: #ddaa00; color: black; border: 1px solid #bb8800; "
-            "border-radius: 3px; padding: 5px 12px; } "
-            "QPushButton:hover { background: #bb8800; }")
+            "QPushButton { background-color: #f9a825; color: #1e1e1e; font-weight: bold; }"
+            "QPushButton:hover { background-color: #fbc02d; }")
         self._report_bug_btn.clicked.connect(
             lambda: webbrowser.open(
                 f'https://github.com/{GITHUB_REPO}/issues/new?template=bug_report.yml'))
         btn_row.addWidget(self._report_bug_btn)
-
-        log_btn = QPushButton("Open Log Folder")
-        log_btn.clicked.connect(lambda: webbrowser.open(str(APP_DATA_DIR)))
-        btn_row.addWidget(log_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        layout.addWidget(self._hsep())
+        layout.addSpacing(6)
 
-        # Help sections
+        # Help sections with thin separators like SwornTweaks
         sections = [
+            ('Reporting Bugs',
+             'Click "Report Bug" above to open the bug report form on GitHub. '
+             'To help us find the issue, click "Open Log Folder" below and attach the '
+             'youtubedownloader.log file to your report.'),
             ('Clipboard Mode',
              'Copy any YouTube URL (Ctrl+C) and it will automatically appear in the detected '
              'URLs list. You can download them individually or click "Download All" to batch '
@@ -1109,22 +1199,29 @@ class YouTubeDownloader(QMainWindow):
              'each download.'),
             ('Settings',
              'Toggle dark mode, check for updates, and view app info.'),
-            ('Reporting a Bug',
-             'Click "Report a Bug" above to open the bug report form on GitHub. '
-             'To help us find the issue, click "Open Log Folder" and attach the '
-             'youtubedownloader.log file to your report. The log records errors, download activity, '
-             'and crash details automatically.'),
         ]
 
         for title_text, desc_text in sections:
+            sep = QLabel()
+            sep.setFixedHeight(1)
+            sep.setStyleSheet("background-color: #444;")
+            layout.addWidget(sep)
+            layout.addSpacing(6)
             t_lbl = QLabel(title_text)
-            t_lbl.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+            t_lbl.setStyleSheet("font-size: 13px; font-weight: bold;")
             layout.addWidget(t_lbl)
             d_lbl = QLabel(desc_text)
             d_lbl.setWordWrap(True)
-            d_lbl.setFont(QFont("Arial", 9))
+            d_lbl.setStyleSheet("color: gray; font-size: 11px;")
             d_lbl.setContentsMargins(10, 0, 0, 0)
             layout.addWidget(d_lbl)
+            layout.addSpacing(6)
+
+        # Open Log Folder button at bottom
+        layout.addSpacing(8)
+        log_btn = QPushButton("Open Log Folder")
+        log_btn.clicked.connect(lambda: webbrowser.open(str(APP_DATA_DIR)))
+        layout.addWidget(log_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 
     # ------------------------------------------------------------------
     #  Theme management
@@ -1132,30 +1229,13 @@ class YouTubeDownloader(QMainWindow):
     def _apply_theme(self):
         """Apply the current QSS theme to the entire application."""
         if self.current_theme == 'dark':
-            qss = _DARK_STYLE
+            qss = _build_dark_style()
         else:
             qss = _LIGHT_STYLE
         QApplication.instance().setStyleSheet(qss)
 
-        # Colour the Help tab background red
-        if hasattr(self, '_help_tab_index'):
-            bar = self._tabs.tabBar()
-            if self.current_theme == 'dark':
-                bar.setTabTextColor(self._help_tab_index, QColor("#ffffff"))
-            else:
-                bar.setTabTextColor(self._help_tab_index, QColor("#ffffff"))
-            # We use a custom stylesheet snippet appended just for the Help tab
-            # QTabBar::tab styling by index is not directly supported in QSS,
-            # so we set the palette on the tab bar for the help index
-            from PyQt6.QtGui import QPalette
-            # Paint the help tab red via tabButton or directly
-            # Simplest portable approach: override the tab's text & background via tabBar
-            # (QSS :nth-child is not supported — we color programmatically)
-            bar.setStyleSheet(
-                bar.styleSheet() +
-                f"\nQTabBar::tab:nth({self._help_tab_index}) "
-                f"{{ background: #cc3333; color: #ffffff; }}"
-            )
+        # Dark title bar on Windows
+        _set_dark_title_bar(self, dark=(self.current_theme == 'dark'))
 
         # Re-apply inline styles on preview labels based on theme
         colors = THEMES[self.current_theme]
@@ -1828,7 +1908,7 @@ class YouTubeDownloader(QMainWindow):
         # URL text
         url_display = url if len(url) <= 60 else url[:57] + "..."
         url_label = QLabel(url_display)
-        url_label.setFont(QFont("Arial", 9))
+        url_label.setStyleSheet(url_label.styleSheet() + "font-size: 9px;")
         url_label.setStyleSheet("border: none;")
         row_layout.addWidget(url_label, stretch=1)
 
@@ -3095,7 +3175,7 @@ class YouTubeDownloader(QMainWindow):
         file_size_mb = os.path.getsize(file_path) / BYTES_PER_MB
 
         file_label = QLabel(f'{filename} ({file_size_mb:.1f} MB)')
-        file_label.setFont(QFont("Arial", 9))
+        file_label.setStyleSheet(file_label.styleSheet() + "font-size: 9px;")
         file_label.setStyleSheet("border: none;")
         row_layout.addWidget(file_label, stretch=1)
 
