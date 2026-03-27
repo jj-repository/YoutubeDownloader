@@ -5743,9 +5743,64 @@ class YouTubeDownloader(QMainWindow):
         import urllib.request
 
         logger.info(f"Downloading update: {download_url}")
+
+        progress_state = {'dialog': None, 'label': None, 'bar': None}
+
+        def _create_progress_dialog():
+            dlg = QDialog(self)
+            dlg.setWindowTitle('Downloading Update')
+            dlg.setFixedSize(350, 100)
+            dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+            layout = QVBoxLayout(dlg)
+            lbl = QLabel('Downloading update...')
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(lbl)
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            layout.addWidget(bar)
+            progress_state['dialog'] = dlg
+            progress_state['label'] = lbl
+            progress_state['bar'] = bar
+            dlg.show()
+
+        def _update_progress_dialog(pct, mb, total_mb):
+            if progress_state['label']:
+                progress_state['label'].setText(
+                    f'Downloading update... {mb:.1f}/{total_mb:.1f} MB ({pct}%)'
+                )
+            if progress_state['bar']:
+                progress_state['bar'].setValue(pct)
+
+        def _close_progress_dialog():
+            if progress_state['dialog']:
+                progress_state['dialog'].close()
+                progress_state['dialog'] = None
+
+        QTimer.singleShot(0, _create_progress_dialog)
+
         request = urllib.request.Request(download_url, headers=headers)
         with urllib.request.urlopen(request, timeout=300) as response:
-            content = response.read()
+            total = int(response.headers.get('Content-Length', 0))
+            chunks = []
+            downloaded = 0
+            while True:
+                chunk = response.read(256 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                downloaded += len(chunk)
+                if total > 0:
+                    pct = int(downloaded / total * 100)
+                    mb = downloaded / (1024 * 1024)
+                    total_mb = total / (1024 * 1024)
+                    QTimer.singleShot(
+                        0,
+                        lambda p=pct, m=mb, t=total_mb: _update_progress_dialog(p, m, t)
+                    )
+            content = b''.join(chunks)
+
+        QTimer.singleShot(0, _close_progress_dialog)
 
         if len(content) < 1024:
             raise RuntimeError("Downloaded file is too small — likely corrupted.")
