@@ -33,10 +33,10 @@ from PyQt6.QtGui import (
     QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap,
 )
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFrame,
+    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
     QMessageBox, QProgressBar, QPushButton, QScrollArea,
-    QSizePolicy, QSlider, QTabWidget, QVBoxLayout, QWidget,
+    QSizePolicy, QSlider, QSpinBox, QTabWidget, QVBoxLayout, QWidget,
 )
 
 # Import from modular components
@@ -115,6 +115,11 @@ ETA_REGEX = re.compile(r'ETA\s+(\d{2}:\d{2}(?::\d{2})?)')
 FILESIZE_REGEX = re.compile(r'(\d+\.?\d*\s*[KMG]iB)')
 TIME_REGEX = re.compile(r'^(\d{1,2}):(\d{2}):(\d{2})$')
 
+# ── Color constants (template convention) ──────────────────────────────
+GREEN  = ("#2e7d32", "#388e3c")   # (normal, hover) — primary action
+BLUE   = ("#1565c0", "#1976d2")   # (normal, hover) — secondary action
+YELLOW = ("#f9a825", "#fbc02d")   # (normal, hover) — warning/attention
+RED    = ("#c62828", "#e53935")   # (normal, hover) — help/danger
 
 # ---------------------------------------------------------------------------
 #  QSS Stylesheets — dark and light, adapted from THEMES colors
@@ -283,6 +288,22 @@ def _set_dark_title_bar(window, dark=True):
         logger.debug(f"Could not set dark title bar: {e}")
 
 
+# ── Colored button helper ──────────────────────────────────────────────
+
+def _colored_btn(text: str, colors: tuple[str, str], bold: bool = True,
+                 text_color: str = "white") -> QPushButton:
+    btn = QPushButton(text)
+    if bold:
+        f = btn.font()
+        f.setBold(True)
+        btn.setFont(f)
+    btn.setStyleSheet(
+        f"QPushButton {{ background:{colors[0]}; color:{text_color}; border-radius:4px; padding:4px 10px; }}"
+        f"QPushButton:hover {{ background:{colors[1]}; }}"
+    )
+    return btn
+
+
 # ---------------------------------------------------------------------------
 #  Main Window
 # ---------------------------------------------------------------------------
@@ -333,6 +354,8 @@ class YouTubeDownloader(QMainWindow):
                 self.setWindowIcon(QIcon(icon_path))
         except Exception as e:
             logger.error(f"Error setting window icon: {e}")
+
+        self.widgets: dict[str, QWidget] = {}  # widget registry (template convention)
 
         # ---------- state variables ----------
         self.download_path = str(Path.home() / "Downloads")
@@ -464,10 +487,28 @@ class YouTubeDownloader(QMainWindow):
         self.sig_show_update_dialog.connect(self._show_update_dialog)
         self.sig_show_ytdlp_update.connect(self._show_ytdlp_update_dialog)
 
-        # ---------- build the GUI ----------
-        self.setup_ui()
+        # ── Template GUI construction flow ───────────────────────
+        self._build_groups()
+        self._tabs = QTabWidget()
+        self._build_tabs()
 
-        # Apply initial theme
+        # Spacer tab (visual gap before Settings / Help)
+        self._tabs.addTab(QWidget(), "")
+        _spacer_idx = self._tabs.count() - 1
+        self._tabs.setTabEnabled(_spacer_idx, False)
+        self._tabs.tabBar().setTabButton(_spacer_idx, self._tabs.tabBar().ButtonPosition.LeftSide, None)
+        self._tabs.tabBar().setTabButton(_spacer_idx, self._tabs.tabBar().ButtonPosition.RightSide, None)
+
+        self._build_settings_tab()
+        self._build_help_tab()
+
+        central = QWidget()
+        root_layout = QVBoxLayout(central)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.addWidget(self._tabs)
+        self.setCentralWidget(central)
+
+        self._load()
         self._apply_theme()
 
         # Restore persisted clipboard URLs
@@ -499,67 +540,129 @@ class YouTubeDownloader(QMainWindow):
         sa.setFrameShape(QScrollArea.Shape.NoFrame)
         return sa
 
+    # ══════════════════════════════════════════════════════════════
+    #  Widget builder helpers (template convention)
+    # ══════════════════════════════════════════════════════════════
+
+    def _group(self, title: str, rows: list, tooltip: str = "") -> QGroupBox:
+        box = QGroupBox(title)
+        vbox = QVBoxLayout()
+        for row in rows:
+            if isinstance(row, QHBoxLayout):
+                vbox.addLayout(row)
+            elif isinstance(row, QWidget):
+                vbox.addWidget(row)
+        box.setLayout(vbox)
+        if tooltip:
+            box.setTitle(f"{title}  \u24d8")
+            box.setToolTip(tooltip)
+        return box
+
+    def _int_row(self, key: str, label: str, lo: int, hi: int) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.addWidget(QLabel(label))
+        row.addStretch()
+        spin = QSpinBox()
+        spin.setRange(lo, hi)
+        spin.setFixedWidth(90)
+        self.widgets[key] = spin
+        row.addWidget(spin)
+        return row
+
+    def _float_row(self, key: str, label: str, lo: float, hi: float,
+                   suffix: str = "") -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.addWidget(QLabel(label))
+        row.addStretch()
+        spin = QDoubleSpinBox()
+        spin.setRange(lo, hi)
+        spin.setDecimals(2)
+        spin.setSingleStep(0.1)
+        spin.setFixedWidth(90)
+        if suffix:
+            spin.setSuffix(f" {suffix}")
+        self.widgets[key] = spin
+        row.addWidget(spin)
+        return row
+
+    def _pct_row(self, key: str, label: str, lo: float, hi: float) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.addWidget(QLabel(label))
+        row.addStretch()
+        spin = QDoubleSpinBox()
+        spin.setRange(lo, hi)
+        spin.setDecimals(1)
+        spin.setSingleStep(1.0)
+        spin.setSuffix(" %")
+        spin.setFixedWidth(100)
+        self.widgets[key] = spin
+        row.addWidget(spin)
+        return row
+
+    def _bool_row(self, key: str, label: str) -> QHBoxLayout:
+        row = QHBoxLayout()
+        cb = QCheckBox(label)
+        self.widgets[key] = cb
+        row.addWidget(cb)
+        row.addStretch()
+        return row
+
+    def _combo_row(self, key: str, label: str, items: list[str]) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.addWidget(QLabel(label))
+        row.addStretch()
+        combo = QComboBox()
+        combo.addItems(items)
+        combo.setFixedWidth(120)
+        self.widgets[key] = combo
+        row.addWidget(combo)
+        return row
+
+    def _label_row(self, text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet("color: gray; font-size: 11px;")
+        lbl.setWordWrap(True)
+        return lbl
+
     # ------------------------------------------------------------------
-    #  setup_ui
+    #  Template GUI construction methods
     # ------------------------------------------------------------------
-    def setup_ui(self):
-        """Build all tabs inside a QTabWidget and set as central widget."""
 
-        central = QWidget()
-        self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(0, 0, 0, 0)
+    def _build_groups(self):
+        """Build content pages for each tab. Store as self._*_page."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.setup_clipboard_mode_ui(layout)
+        layout.addStretch()
+        self._clipboard_page = page
 
-        self._tabs = QTabWidget()
-        root_layout.addWidget(self._tabs)
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self._setup_trimmer_ui(layout)
+        layout.addStretch()
+        self._trimmer_page = page
 
-        # ---- Clipboard Mode tab ----
-        clipboard_page = QWidget()
-        clip_layout = QVBoxLayout(clipboard_page)
-        self.setup_clipboard_mode_ui(clip_layout)
-        clip_layout.addStretch()
-        self._tabs.addTab(self._scroll_tab(clipboard_page), "Clipboard Mode")
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.setup_uploader_ui(layout)
+        layout.addStretch()
+        self._uploader_page = page
 
-        # ---- Trimmer tab ----
-        trimmer_page = QWidget()
-        trim_layout = QVBoxLayout(trimmer_page)
-        self._setup_trimmer_ui(trim_layout)
-        trim_layout.addStretch()
-        self._tabs.addTab(self._scroll_tab(trimmer_page), "Trimmer")
-
-        # ---- Uploader tab ----
-        uploader_page = QWidget()
-        upl_layout = QVBoxLayout(uploader_page)
-        self.setup_uploader_ui(upl_layout)
-        upl_layout.addStretch()
-        self._tabs.addTab(self._scroll_tab(uploader_page), "Uploader")
-
-        # ---- Invisible spacer tab (visual gap, identical to SwornTweaks) ----
-        self._tabs.addTab(QWidget(), "")
-        _spacer_idx = self._tabs.count() - 1
-        self._tabs.setTabEnabled(_spacer_idx, False)
-        self._tabs.setStyleSheet(self._tabs.styleSheet())  # force refresh
-        self._tabs.tabBar().setTabButton(
-            _spacer_idx, self._tabs.tabBar().ButtonPosition.LeftSide, None)
-        self._tabs.tabBar().setTabButton(
-            _spacer_idx, self._tabs.tabBar().ButtonPosition.RightSide, None)
-
-        # ---- Settings tab ----
-        settings_page = QWidget()
-        set_layout = QVBoxLayout(settings_page)
-        self._setup_settings_tab(set_layout)
-        set_layout.addStretch()
-        self._tabs.addTab(self._scroll_tab(settings_page), "Settings")
-
-        # ---- Help tab ----
-        help_page = QWidget()
-        hlp_layout = QVBoxLayout(help_page)
-        self._setup_help_tab(hlp_layout)
-        hlp_layout.addStretch()
-        self._tabs.addTab(self._scroll_tab(help_page), "Help")
-
-        # Track tab changes for clipboard monitoring
+    def _build_tabs(self):
+        """Add content tabs. Settings/Help tabs are added separately."""
+        self._tabs.addTab(self._scroll_tab(self._clipboard_page), "Clipboard Mode")
+        self._tabs.addTab(self._scroll_tab(self._trimmer_page), "Trimmer")
+        self._tabs.addTab(self._scroll_tab(self._uploader_page), "Uploader")
         self._tabs.currentChanged.connect(self._on_tab_changed)
+
+    def _add_tab(self, name: str, groups: list) -> None:
+        """Add a scrollable tab containing QGroupBox widgets (template convention)."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        for g in groups:
+            layout.addWidget(g)
+        layout.addStretch()
+        self._tabs.addTab(self._scroll_tab(page), name)
 
     # ------------------------------------------------------------------
     #  Trimmer tab construction
@@ -777,11 +880,7 @@ class YouTubeDownloader(QMainWindow):
 
         # --- Download / Stop / Speed limit ---
         btn_row = QHBoxLayout()
-        self.download_btn = QPushButton("Download")
-        self.download_btn.setStyleSheet(
-            "QPushButton { background-color: #1565c0; color: white; font-weight: bold; }"
-            "QPushButton:hover { background-color: #1976d2; }"
-            "QPushButton:disabled { background-color: #2a2a2a; color: #666; }")
+        self.download_btn = _colored_btn("Download", BLUE)
         self.download_btn.clicked.connect(self.start_download)
         btn_row.addWidget(self.download_btn)
 
@@ -823,12 +922,8 @@ class YouTubeDownloader(QMainWindow):
         layout.addWidget(upl_header)
 
         upl_row = QHBoxLayout()
-        self.upload_btn = QPushButton("Upload to Catbox.moe")
+        self.upload_btn = _colored_btn("Upload to Catbox.moe", GREEN)
         self.upload_btn.setEnabled(False)
-        self.upload_btn.setStyleSheet(
-            "QPushButton { background-color: #2e7d32; color: white; font-weight: bold; }"
-            "QPushButton:hover { background-color: #388e3c; }"
-            "QPushButton:disabled { background-color: #2a2a2a; color: #666; }")
         self.upload_btn.clicked.connect(self.start_upload)
         upl_row.addWidget(self.upload_btn)
 
@@ -971,12 +1066,8 @@ class YouTubeDownloader(QMainWindow):
         # Progress & controls
         layout.addWidget(self._hsep())
         ctrl_row = QHBoxLayout()
-        self.clipboard_download_btn = QPushButton("Download All")
+        self.clipboard_download_btn = _colored_btn("Download All", BLUE)
         self.clipboard_download_btn.setEnabled(False)
-        self.clipboard_download_btn.setStyleSheet(
-            "QPushButton { background-color: #1565c0; color: white; font-weight: bold; }"
-            "QPushButton:hover { background-color: #1976d2; }"
-            "QPushButton:disabled { background-color: #2a2a2a; color: #666; }")
         self.clipboard_download_btn.clicked.connect(self.start_clipboard_downloads)
         ctrl_row.addWidget(self.clipboard_download_btn)
 
@@ -1065,12 +1156,8 @@ class YouTubeDownloader(QMainWindow):
         # Upload controls
         layout.addWidget(self._hsep())
         uc_row = QHBoxLayout()
-        self.uploader_upload_btn = QPushButton("Upload to Catbox.moe")
+        self.uploader_upload_btn = _colored_btn("Upload to Catbox.moe", GREEN)
         self.uploader_upload_btn.setEnabled(False)
-        self.uploader_upload_btn.setStyleSheet(
-            "QPushButton { background-color: #2e7d32; color: white; font-weight: bold; }"
-            "QPushButton:hover { background-color: #388e3c; }"
-            "QPushButton:disabled { background-color: #2a2a2a; color: #666; }")
         self.uploader_upload_btn.clicked.connect(self.start_uploader_upload)
         uc_row.addWidget(self.uploader_upload_btn)
 
@@ -1105,8 +1192,10 @@ class YouTubeDownloader(QMainWindow):
     # ------------------------------------------------------------------
     #  Settings tab construction
     # ------------------------------------------------------------------
-    def _setup_settings_tab(self, layout: QVBoxLayout):
+    def _build_settings_tab(self):
         """Build all widgets for the Settings tab (compact, SwornTweaks-style)."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
 
         # Version header
         ver_lbl = QLabel(f"YoutubeDownloader v{APP_VERSION}")
@@ -1125,10 +1214,7 @@ class YouTubeDownloader(QMainWindow):
         self.check_updates_btn.clicked.connect(self._check_for_updates_clicked)
         layout.addWidget(self.check_updates_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 
-        readme_btn = QPushButton("Readme")
-        readme_btn.setStyleSheet(
-            "QPushButton { background-color: #1565c0; color: white; font-weight: bold; }"
-            "QPushButton:hover { background-color: #1976d2; }")
+        readme_btn = _colored_btn("Readme", BLUE)
         readme_btn.clicked.connect(lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme'))
         layout.addWidget(readme_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 
@@ -1167,11 +1253,16 @@ class YouTubeDownloader(QMainWindow):
         by_lbl.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(by_lbl)
 
+        layout.addStretch()
+        self._tabs.addTab(self._scroll_tab(page), "Settings")
+
     # ------------------------------------------------------------------
     #  Help tab construction
     # ------------------------------------------------------------------
-    def _setup_help_tab(self, layout: QVBoxLayout):
+    def _build_help_tab(self):
         """Build all widgets for the Help tab (SwornTweaks-style)."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
 
         hdr = QLabel("YoutubeDownloader Help")
         hdr.setStyleSheet("font-size: 16px; font-weight: bold;")
@@ -1179,17 +1270,11 @@ class YouTubeDownloader(QMainWindow):
 
         # Button row — accent-colored like SwornTweaks
         btn_row = QHBoxLayout()
-        readme_btn = QPushButton("Readme")
-        readme_btn.setStyleSheet(
-            "QPushButton { background-color: #1565c0; color: white; font-weight: bold; }"
-            "QPushButton:hover { background-color: #1976d2; }")
+        readme_btn = _colored_btn("Readme", BLUE)
         readme_btn.clicked.connect(lambda: webbrowser.open(f'https://github.com/{GITHUB_REPO}#readme'))
         btn_row.addWidget(readme_btn)
 
-        self._report_bug_btn = QPushButton("Report Bug")
-        self._report_bug_btn.setStyleSheet(
-            "QPushButton { background-color: #f9a825; color: #1e1e1e; font-weight: bold; }"
-            "QPushButton:hover { background-color: #fbc02d; }")
+        self._report_bug_btn = _colored_btn("Report Bug", YELLOW, text_color="#1e1e1e")
         self._report_bug_btn.clicked.connect(
             lambda: webbrowser.open(
                 f'https://github.com/{GITHUB_REPO}/issues/new?template=bug_report.yml'))
@@ -1244,6 +1329,9 @@ class YouTubeDownloader(QMainWindow):
         log_btn = QPushButton("Open Log Folder")
         log_btn.clicked.connect(lambda: webbrowser.open(str(APP_DATA_DIR)))
         layout.addWidget(log_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        layout.addStretch()
+        self._tabs.addTab(self._scroll_tab(page), "Help")
 
     # ------------------------------------------------------------------
     #  Theme management
@@ -1632,6 +1720,15 @@ class YouTubeDownloader(QMainWindow):
                 logger.info(f"Saved auto_check_updates: {config['auto_check_updates']}")
             except Exception as e:
                 logger.error(f"Error saving auto_check_updates setting: {e}")
+
+    def _load(self):
+        """Load all persisted settings (template hook).
+
+        NOTE: _load_theme_preference() and _load_clipboard_urls() are called
+        earlier in __init__ (before UI construction) because they set state
+        needed by the UI builders. _load() is a no-op here to satisfy the
+        template convention; the actual loading is already done.
+        """
 
     def _load_theme_preference(self):
         """Load saved theme preference from config."""

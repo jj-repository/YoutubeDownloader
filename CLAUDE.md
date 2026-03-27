@@ -4,19 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**YouTube Downloader** is a Python desktop application for downloading videos from YouTube and other supported sites. It features a tkinter GUI with quality selection, thumbnail previews, and integration with Catbox for file uploads.
+**YouTube Downloader** is a Python desktop application for downloading videos from YouTube and other supported sites. It features a PyQt6 GUI with quality selection, thumbnail previews, trimming, and integration with Catbox for file uploads.
 
-**Version:** 4.3.0
+**Version:** 5.0.2
 
 ## Files Structure
 
 ```
 YoutubeDownloader/
-├── downloader.py          # Main application
+├── downloader_pyqt6.py    # Main application (PyQt6 GUI)
+├── downloader.py          # Legacy tkinter version (archived, not the active app)
 ├── constants.py           # Configuration constants and paths
 ├── requirements.txt       # Python dependencies
 └── CLAUDE.md              # This file
 ```
+
+**Untracked scratch files** (not committed, can be ignored):
+- `_port_callbacks.py`, `_port_download.py`, `_port_updates.py` — migration scratch files
+- `downloader_pyqt6_part1.py` — draft/scratch file
+
+> **Note:** `run.sh` still launches `downloader.py` (tkinter). To run the active app, use:
+> ```bash
+> ./venv/bin/python downloader_pyqt6.py
+> ```
 
 ## Running the Application
 
@@ -25,31 +35,54 @@ YoutubeDownloader/
 pip install -r requirements.txt
 
 # Run the application
-python downloader.py
+python downloader_pyqt6.py
 ```
 
 ## Architecture Overview
 
 ### Modular Design
 
-Recent refactoring extracted:
 - **constants.py**: All configuration values, paths, timeouts, API constants
+- **downloader_pyqt6.py**: Full application — GUI construction + all business logic
 
 ### Core Components
 
-1. **YouTubeDownloader class**: Main application with all UI and logic
-2. **yt-dlp integration**: Backend for video downloading
+1. **YouTubeDownloader class** (`QMainWindow`): Main window with all UI and logic
+2. **yt-dlp integration**: Backend for video downloading (subprocess)
 3. **ffmpeg integration**: Media processing (optional)
 4. **Catbox integration**: File upload via catboxpy
+
+### PyQt6 Architecture
+
+- **Thread safety**: Worker threads communicate with GUI via `pyqtSignal`/`pyqtSlot` — 20 signals defined on `YouTubeDownloader`
+- **Worker threads**: Receive pre-captured widget state dicts (no direct GUI access from threads)
+- **Clipboard polling**: `QTimer`-based (replaces `root.after()` from tkinter version)
+- **Themes**: QSS dark/light theme system (replaces tkinter style config)
+- **Shutdown**: `closeEvent` handles cleanup; `_shutting_down` flag for graceful thread termination
+
+### Key Signals
+
+```python
+sig_update_progress     # float 0-100 → progress bar
+sig_update_status       # (message, color) → status label
+sig_reset_buttons       # → re-enable Download/Stop buttons
+sig_show_messagebox     # (type, title, message) → modal dialog
+sig_clipboard_progress  # float → clipboard tab progress
+sig_show_update_dialog  # (latest_version, release_data) → update modal
+sig_show_ytdlp_update   # (current, latest) → yt-dlp update dialog
+# ... and 13 more
+```
 
 ### Key Features
 
 - Video/audio download from YouTube and supported sites
-- Quality selection with preview
+- Quality selection with file size preview
 - Thumbnail preview with caching
-- Clipboard monitoring for URLs
-- Upload to Catbox with history
-- Dark theme UI
+- Trimming with start/end sliders and preview frames
+- Clipboard monitoring for URLs (Clipboard Mode tab)
+- Upload to Catbox with history (Uploader tab)
+- Dark/light theme (QSS)
+- Dark title bar on Windows (DWM API via ctypes)
 
 ## Configuration
 
@@ -74,7 +107,6 @@ Recent refactoring extracted:
 - `_version_newer()`: Semantic version comparison
 - `_show_update_dialog()`: Modal with Update Now / Open Releases / Later
 - `_apply_update()`: Downloads, verifies integrity, backs up, and applies update
-- `_safe_after()`: Thread-safe scheduling that prevents crashes during shutdown
 
 **GitHub Integration:**
 - Repository: `jj-repository/YoutubeDownloader`
@@ -86,19 +118,17 @@ Recent refactoring extracted:
 - Syntax checking via `compile()` as additional safety net
 - Backup file created before replacing each module
 - All modules downloaded and verified before any are replaced (atomic update)
-- All `root.after()` calls from worker threads use `_safe_after()` to prevent crashes during shutdown
 - Config file access protected by `config_lock` (both reads and writes)
 - Upload queue protected by `uploader_lock` (RLock for reentrant access)
 
 ## Dependencies
 
-Core dependencies from constants.py patterns:
-- `tkinter` (standard library)
+- `PyQt6` - GUI framework
 - `PIL/Pillow` - Image handling
 - `yt-dlp` - Video downloading
 - `catboxpy` - Catbox.moe upload API
 - `pyperclip` (optional) - Clipboard access
-- `dbus` (optional) - KDE Klipper integration
+- `dbus` (optional, Linux) - KDE Klipper integration
 
 ## Constants (constants.py)
 
@@ -128,24 +158,31 @@ MAX_VIDEO_DURATION = 86400    # 24 hours
 **Supported Methods:**
 1. `dbus` - KDE Klipper integration (Linux)
 2. `pyperclip` - Cross-platform fallback
-3. `tkinter` - Basic clipboard access
+3. Qt clipboard - Basic clipboard access
 
 **URL Detection:**
 - Monitors clipboard for YouTube/supported URLs
-- Configurable polling interval
+- QTimer-based polling
 - Maintains list of detected URLs
 
 ## Known Issues / Technical Debt
 
 1. **Hardcoded supported sites**: URL patterns could be more extensible
-2. **Large single file**: Main downloader.py is large, could benefit from further modularization
+2. **`run.sh` outdated**: Still launches `downloader.py` (tkinter), not the active PyQt6 app
+3. **Large single file**: `downloader_pyqt6.py` is ~6000 lines, could benefit from further modularization
 
 ## Common Development Tasks
 
 ### Modifying download behavior
 - Quality selection: `_on_quality_change()`
 - Download execution: Uses yt-dlp subprocess
-- Progress tracking: Parses yt-dlp output
+- Progress tracking: Parses yt-dlp output, emitted via `sig_update_progress`
+
+### Adding a new signal (worker → GUI)
+1. Define `sig_foo = pyqtSignal(...)` on `YouTubeDownloader`
+2. Connect in `__init__`: `self.sig_foo.connect(self._do_foo)`
+3. Implement `_do_foo(self, ...)` — runs on GUI thread
+4. Emit from worker: `self.sig_foo.emit(...)`
 
 ## File Locations
 
@@ -157,9 +194,15 @@ MAX_VIDEO_DURATION = 86400    # 24 hours
 
 ---
 
+## Versioning
+
+Version bumps default to **+0.0.1** (patch) unless explicitly told otherwise.
+
+---
+
 ## Review Status
 
-> **Last Full Review:** 2026-03-15
+> **Last Full Review:** 2026-03-27
 > **Status:** Production Ready
 
 ### Security Review
@@ -178,14 +221,14 @@ MAX_VIDEO_DURATION = 86400    # 24 hours
 - [x] clipboard_lock protects clipboard URL list
 - [x] config_lock protects config read/write
 - [x] uploader_lock (RLock) protects upload queue
-- [x] _safe_after() prevents TclError from worker threads on shutdown
+- [x] PyQt6 signals/slots for all worker → GUI communication (thread-safe by design)
 - [x] _shutting_down flag for graceful thread termination
 
 ### Code Quality
 - [x] Modular design (constants.py)
 - [x] Config validation
 - [x] Proper error handling
-- [x] Log rotation (5MB max, 2 backups)
+- [x] Log rotation (1MB max)
 - [x] Upload history capped (1000 lines max)
 - [x] Preview cache files cleaned from disk
 
@@ -198,33 +241,38 @@ MAX_VIDEO_DURATION = 86400    # 24 hours
 | Security | Safe URL/subprocess handling | Met |
 | UI Strings | Inline English strings | Met |
 | Reliability | Downloads complete successfully | Met |
-| UX | Progress feedback, quality selection | Met |
+| UX | Progress feedback, quality selection, trimming | Met |
 | Documentation | CLAUDE.md current | Met |
 
 ## Intentional Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
+| PyQt6 GUI | Replaced tkinter; better cross-platform appearance, native widgets, signals/slots |
 | yt-dlp backend | Best maintained YouTube downloader; handles site changes |
 | Separate constants.py | Clean separation; easy to modify limits/timeouts |
 | Catbox integration | Convenient sharing for downloaded files |
 | Clipboard monitoring | Common workflow - copy URL, app detects it |
 | Backup before update | Creates .py.backup files before replacing modules |
+| Signals for thread→GUI | Qt's built-in mechanism; safe by design, no manual locking needed for UI updates |
 
 ## Won't Fix (Accepted Limitations)
 
 | Issue | Reason |
 |-------|--------|
-| Large single file (downloader.py) | Works fine; further splitting adds complexity |
+| Large single file (downloader_pyqt6.py) | Works fine; further splitting adds complexity |
 | Hardcoded site patterns | yt-dlp handles site detection; our patterns are just hints |
 | _find_latest_file heuristic | Picks newest file in Downloads; rare edge case if another app writes simultaneously |
 | Catbox upload no timeout/cancel | Third-party library limitation; would require significant refactoring |
-| Slider change detection heuristic | Minor edge case in rapid slider manipulation |
+| run.sh launches tkinter version | Legacy script; use `python downloader_pyqt6.py` directly |
 
 ## Completed Optimizations
 
 - Constants extracted to module
 - Config validation
 - Quality selection with preview
+- Full PyQt6 GUI rewrite (v5.0.0)
+- Dark title bar on Windows
+- SwornTweaks-style tab bar
 
 **DO NOT further optimize:** Download speed is determined by yt-dlp and network. UI is responsive. Thumbnail caching is implemented.

@@ -37,7 +37,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install pyinstaller
-        pip install yt-dlp Pillow catboxpy pyperclip
+        pip install PyQt6 yt-dlp Pillow catboxpy pyperclip
 
     - name: Install optional dependencies (Linux)
       if: matrix.os == 'ubuntu-latest'
@@ -67,7 +67,7 @@ jobs:
     - name: Build executable (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
-        pyinstaller --onefile --name YTDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --add-data "icon.png:." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
+        pyinstaller --onefile --name YTDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --add-data "icon.png:." --collect-all PyQt6 --collect-submodules=PIL downloader_pyqt6.py
 
     - name: Download and bundle ffmpeg (Windows)
       if: matrix.os == 'windows-latest'
@@ -88,7 +88,7 @@ jobs:
     - name: Build executable (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        pyinstaller --onefile --name YTDownloader-Windows --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PIL._tkinter_finder --collect-submodules=PIL downloader.py
+        pyinstaller --onefile --name YTDownloader-Windows --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --collect-all PyQt6 --collect-submodules=PIL downloader_pyqt6.py
 
     - name: Create release package (Linux)
       if: matrix.os == 'ubuntu-latest'
