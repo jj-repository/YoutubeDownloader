@@ -347,6 +347,16 @@ class YouTubeDownloader(QMainWindow):
             self.resize(900, 1140)
             self.setMinimumSize(750, 600)
 
+        # Restore saved window geometry if available
+        try:
+            with open(CONFIG_FILE) as f:
+                _cfg = json.load(f)
+            _geo = _cfg.get('window_geometry')
+            if _geo:
+                self.restoreGeometry(bytes.fromhex(_geo))
+        except Exception:
+            pass
+
         # Window icon
         try:
             icon_path = self._get_resource_path('icon.png')
@@ -677,7 +687,7 @@ class YouTubeDownloader(QMainWindow):
 
         url_row = QHBoxLayout()
         self.url_entry = QLineEdit()
-        self.url_entry.setPlaceholderText("Paste YouTube URL or browse a local file")
+        self.url_entry.setPlaceholderText("Paste URL or browse a local file")
         self.url_entry.textChanged.connect(self.on_url_change)
         url_row.addWidget(self.url_entry, stretch=1)
         self.browse_file_btn = QPushButton("Browse Local File")
@@ -880,6 +890,7 @@ class YouTubeDownloader(QMainWindow):
 
         # --- Download / Stop / Speed limit ---
         btn_row = QHBoxLayout()
+        btn_row.addStretch()
         self.download_btn = _colored_btn("Download", BLUE)
         self.download_btn.clicked.connect(self.start_download)
         btn_row.addWidget(self.download_btn)
@@ -1066,6 +1077,7 @@ class YouTubeDownloader(QMainWindow):
         # Progress & controls
         layout.addWidget(self._hsep())
         ctrl_row = QHBoxLayout()
+        ctrl_row.addStretch()
         self.clipboard_download_btn = _colored_btn("Download All", BLUE)
         self.clipboard_download_btn.setEnabled(False)
         self.clipboard_download_btn.clicked.connect(self.start_clipboard_downloads)
@@ -1438,6 +1450,20 @@ class YouTubeDownloader(QMainWindow):
             self.thread_pool.shutdown(wait=False)
         except Exception as e:
             logger.error(f"Error shutting down thread pool: {e}")
+
+        # Save window geometry
+        try:
+            with self.config_lock:
+                try:
+                    with open(CONFIG_FILE) as f:
+                        _cfg = json.load(f)
+                except Exception:
+                    _cfg = {}
+                _cfg['window_geometry'] = self.saveGeometry().toHex().data().decode()
+                with open(CONFIG_FILE, 'w') as f:
+                    json.dump(_cfg, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving window geometry: {e}")
 
         logger.info("Application shutdown complete")
         event.accept()
@@ -4011,6 +4037,7 @@ class YouTubeDownloader(QMainWindow):
         allowed_keys = {
             'auto_check_updates': bool,
             'theme': str,
+            'window_geometry': str,
         }
 
         for key, value in config.items():
