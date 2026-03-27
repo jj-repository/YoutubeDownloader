@@ -1238,18 +1238,20 @@ class YouTubeDownloader(QMainWindow):
             img_path = self._get_resource_path('takodachi.webp')
             if os.path.exists(img_path):
                 with Image.open(img_path) as pil_img:
-                    pil_img.thumbnail((200, 200), Image.Resampling.LANCZOS)
+                    pil_img.thumbnail((120, 120), Image.Resampling.LANCZOS)
                     pil_img = pil_img.convert("RGBA")
                     data = pil_img.tobytes("raw", "RGBA")
                     qimg = QImage(data, pil_img.width, pil_img.height, QImage.Format.Format_RGBA8888)
                     pix = QPixmap.fromImage(qimg)
                 takodachi_label = QLabel()
                 takodachi_label.setPixmap(pix)
-                layout.addWidget(takodachi_label, alignment=Qt.AlignmentFlag.AlignLeft)
+                takodachi_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                layout.addWidget(takodachi_label)
         except Exception as e:
             logger.error(f"Error loading settings image: {e}")
 
         by_lbl = QLabel("by JJ")
+        by_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         by_lbl.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(by_lbl)
 
@@ -1279,6 +1281,11 @@ class YouTubeDownloader(QMainWindow):
             lambda: webbrowser.open(
                 f'https://github.com/{GITHUB_REPO}/issues/new?template=bug_report.yml'))
         btn_row.addWidget(self._report_bug_btn)
+
+        log_btn = QPushButton("Open Log Folder")
+        log_btn.clicked.connect(lambda: webbrowser.open(str(APP_DATA_DIR)))
+        btn_row.addWidget(log_btn)
+
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
@@ -1323,12 +1330,6 @@ class YouTubeDownloader(QMainWindow):
             d_lbl.setContentsMargins(10, 0, 0, 0)
             layout.addWidget(d_lbl)
             layout.addSpacing(6)
-
-        # Open Log Folder button at bottom
-        layout.addSpacing(8)
-        log_btn = QPushButton("Open Log Folder")
-        log_btn.clicked.connect(lambda: webbrowser.open(str(APP_DATA_DIR)))
-        layout.addWidget(log_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 
         layout.addStretch()
         self._tabs.addTab(self._scroll_tab(page), "Help")
