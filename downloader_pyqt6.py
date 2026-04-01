@@ -408,6 +408,7 @@ class YouTubeDownloader(QMainWindow):
         str, object
     )  # latest_version, release_data dict
     sig_show_ytdlp_update = pyqtSignal(str, str)  # current_version, latest_version
+    sig_run_on_gui = pyqtSignal(object)  # generic callable for thread-safe GUI updates
 
     # ------------------------------------------------------------------
     #  __init__
@@ -577,6 +578,7 @@ class YouTubeDownloader(QMainWindow):
         self.sig_add_url_to_list.connect(self._do_add_url_to_list)
         self.sig_show_update_dialog.connect(self._show_update_dialog)
         self.sig_show_ytdlp_update.connect(self._show_ytdlp_update_dialog)
+        self.sig_run_on_gui.connect(self._do_run_on_gui)
 
         # ── Template GUI construction flow ───────────────────────
         self._build_groups()
@@ -2128,15 +2130,19 @@ class YouTubeDownloader(QMainWindow):
 
     # --- from _port_callbacks.py ---
 
-    def _safe_after(self, delay, callback):
-        """Schedule *callback* on the GUI thread after *delay* ms.
+    def _do_run_on_gui(self, fn):
+        """Execute a callable on the GUI thread (signal slot)."""
+        fn()
 
-        Drop-in replacement for the old tkinter ``self.root.after()`` calls
-        used by worker threads.  If the application is shutting down the
-        callback is silently discarded.
+    def _safe_after(self, delay, callback):
+        """Schedule *callback* on the GUI thread.
+
+        Uses a signal to reliably post to the GUI event loop from any thread
+        (worker threads lack their own Qt event loop, so QTimer.singleShot
+        fired from them may never execute).
         """
         if not self._shutting_down:
-            QTimer.singleShot(max(0, delay), callback)
+            self.sig_run_on_gui.emit(callback)
 
     # ==================================================================
     #  CLIPBOARD CALLBACKS
