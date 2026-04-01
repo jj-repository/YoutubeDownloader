@@ -4200,6 +4200,7 @@ class YouTubeDownloader(QMainWindow):
         except (ValueError, AttributeError):
             return url
 
+    @staticmethod
     def sanitize_filename(filename):
         """Sanitize filename to prevent path traversal and command injection."""
         if not filename:
@@ -4241,6 +4242,7 @@ class YouTubeDownloader(QMainWindow):
 
         return filename
 
+    @staticmethod
     def validate_download_path(path):
         """Validate download path to prevent path traversal attacks.
 
@@ -4297,6 +4299,7 @@ class YouTubeDownloader(QMainWindow):
     #  Process / network utilities
     # ===================================================================
 
+    @staticmethod
     def safe_process_cleanup(process, timeout=PROCESS_TERMINATE_TIMEOUT):
         """Safely terminate and cleanup a subprocess.
 
