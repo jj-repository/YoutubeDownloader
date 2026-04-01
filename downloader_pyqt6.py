@@ -6061,8 +6061,44 @@ class YouTubeDownloader(QMainWindow):
         """Download, verify, and replace .py source files, then auto-restart."""
         import urllib.request
 
+        progress_state = {"dialog": None, "label": None, "bar": None}
+
+        def _create_progress_dialog():
+            colors = THEMES[self.current_theme]
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Downloading Update")
+            dlg.setFixedSize(350, 100)
+            dlg.setStyleSheet(
+                f"background-color: {colors['bg']}; color: {colors['fg']};"
+            )
+            dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+            layout = QVBoxLayout(dlg)
+            lbl = QLabel("Downloading update...")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(lbl)
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            layout.addWidget(bar)
+            progress_state["dialog"] = dlg
+            progress_state["label"] = lbl
+            progress_state["bar"] = bar
+            dlg.show()
+
+        def _update_progress_dialog(text, pct):
+            if progress_state["label"]:
+                progress_state["label"].setText(text)
+            if progress_state["bar"]:
+                progress_state["bar"].setValue(pct)
+
+        def _close_progress_dialog():
+            if progress_state["dialog"]:
+                progress_state["dialog"].close()
+                progress_state["dialog"] = None
+
         try:
             self.update_status("Downloading update...", "blue")
+            QTimer.singleShot(0, _create_progress_dialog)
 
             tag_name = release_data.get("tag_name", "main")
             headers = {"User-Agent": f"YoutubeDownloader/{APP_VERSION}"}
@@ -6073,13 +6109,33 @@ class YouTubeDownloader(QMainWindow):
             downloaded = {}
 
             # Download and verify all modules before replacing any
-            for module_name in modules:
+            for i, module_name in enumerate(modules):
                 download_url = f"{GITHUB_RAW_URL}/{tag_name}/{module_name}"
                 logger.info(f"Downloading: {download_url}")
                 request = urllib.request.Request(download_url, headers=headers)
 
                 with urllib.request.urlopen(request, timeout=60) as response:
-                    content = response.read()
+                    total = int(response.headers.get("Content-Length", 0))
+                    chunks = []
+                    received = 0
+                    while True:
+                        chunk = response.read(64 * 1024)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        received += len(chunk)
+                        if total > 0:
+                            pct = int(received / total * 100)
+                            text = f"Downloading {module_name} ({i + 1}/{len(modules)})... {pct}%"
+                        else:
+                            pct = 0
+                            text = (
+                                f"Downloading {module_name} ({i + 1}/{len(modules)})..."
+                            )
+                        QTimer.singleShot(
+                            0, lambda t=text, p=pct: _update_progress_dialog(t, p)
+                        )
+                    content = b"".join(chunks)
 
                 self._verify_file_against_github(
                     tag_name, module_name, content, headers
@@ -6091,6 +6147,8 @@ class YouTubeDownloader(QMainWindow):
                     raise RuntimeError(f"{module_name} has syntax errors: {e}")
 
                 downloaded[module_name] = content
+
+            QTimer.singleShot(0, _close_progress_dialog)
 
             # All verified -- backup and replace
             for module_name, content in downloaded.items():
@@ -6125,6 +6183,7 @@ class YouTubeDownloader(QMainWindow):
             QTimer.singleShot(500, _do_restart)
 
         except Exception as e:
+            QTimer.singleShot(0, _close_progress_dialog)
             logger.error(f"Error applying update: {e}")
             self.sig_show_messagebox.emit(
                 "error", "Update Failed", f"Failed to download update:\n{e}"
