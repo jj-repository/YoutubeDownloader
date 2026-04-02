@@ -21,4 +21,4 @@ pip install -r requirements.txt
 4. `self.sig_foo.emit(...)` from worker
 
 ## Versioning
-Default bump: **+0.0.1** unless told otherwise.
+Default bump: **+0.0.1** unless told otherwise. Each component 0–9; rollover on overflow (0.0.9 → 0.1.0).

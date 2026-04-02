@@ -92,4 +92,4 @@ Your friend doesn't need to know Python, set up virtual environments, install ff
 
 ## For Windows Users
 
-Send them **`YoutubeDownloader-Windows.zip`** instead. Same deal - extract and run `YoutubeDownloader.exe`. All dependencies are bundled.
+Send them **`YTDownloader.exe`** instead. Just download and run it directly. All dependencies are bundled.

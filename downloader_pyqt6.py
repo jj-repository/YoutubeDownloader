@@ -4952,6 +4952,21 @@ class YouTubeDownloader(QMainWindow):
                 **_subprocess_kwargs,
             )
 
+        # Drain stderr in a background thread to prevent pipe deadlock.
+        # ffmpeg writes connection info and seeking status to stderr; if
+        # the pipe buffer fills up (~64KB), ffmpeg blocks and hangs.
+        stderr_lines = []
+
+        def _drain_stderr():
+            try:
+                for line in self.current_process.stderr:
+                    stderr_lines.append(line)
+            except (ValueError, OSError):
+                pass
+
+        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+        stderr_thread.start()
+
         for line in self.current_process.stdout:
             with self.download_lock:
                 if not self.is_downloading:
@@ -4970,14 +4985,12 @@ class YouTubeDownloader(QMainWindow):
             self.last_progress_time = time.time()
 
         self.current_process.wait()
+        stderr_thread.join(timeout=5)
+
         if self.current_process.returncode != 0:
-            stderr = (
-                self.current_process.stderr.read()
-                if self.current_process.stderr
-                else ""
-            )
+            stderr_text = "".join(stderr_lines)
             logger.error(
-                f"{status_prefix} failed (rc {self.current_process.returncode}): {stderr}"
+                f"{status_prefix} failed (rc {self.current_process.returncode}): {stderr_text}"
             )
             self.safe_process_cleanup(self.current_process)
             return False
