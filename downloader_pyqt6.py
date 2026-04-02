@@ -1594,14 +1594,23 @@ class YouTubeDownloader(QMainWindow):
             if self.clipboard_downloading:
                 self.clipboard_downloading = False
 
-        # Stop any ongoing downloads gracefully
+        # Force-kill any ongoing download process immediately (don't wait)
         with self.download_lock:
             process_to_cleanup = self.current_process
-            is_active = self.is_downloading
+            self.is_downloading = False
+            self.current_process = None
 
-        if is_active and process_to_cleanup:
-            logger.info("Terminating active download process...")
-            self.safe_process_cleanup(process_to_cleanup)
+        if process_to_cleanup:
+            logger.info("Force-killing active download process...")
+            try:
+                if process_to_cleanup.poll() is None:
+                    process_to_cleanup.kill()
+                if process_to_cleanup.stdout:
+                    process_to_cleanup.stdout.close()
+                if process_to_cleanup.stderr:
+                    process_to_cleanup.stderr.close()
+            except Exception as e:
+                logger.error(f"Error killing process on exit: {e}")
 
         # Clean up temp files
         try:
@@ -1611,8 +1620,6 @@ class YouTubeDownloader(QMainWindow):
 
         # Shutdown thread pool
         logger.info("Shutting down thread pool...")
-        with self.download_lock:
-            self.is_downloading = False
         try:
             self.thread_pool.shutdown(wait=False, cancel_futures=True)
         except TypeError:
@@ -4388,7 +4395,10 @@ class YouTubeDownloader(QMainWindow):
                         f"Process {process.pid} did not terminate, forcing kill"
                     )
                     process.kill()
-                    process.wait()
+                    try:
+                        process.wait(timeout=timeout)
+                    except subprocess.TimeoutExpired:
+                        logger.error(f"Process {process.pid} did not exit after kill")
 
             if process.stdout:
                 process.stdout.close()
@@ -4792,6 +4802,94 @@ class YouTubeDownloader(QMainWindow):
 
         cmd.extend(["-o", output_path, url])
         return cmd
+
+    # ===================================================================
+    #  Direct ffmpeg trim download (bypasses yt-dlp --download-sections)
+    # ===================================================================
+
+    def _get_direct_stream_urls(self, url, format_spec):
+        """Get direct video and audio stream URLs using yt-dlp -g.
+
+        Returns:
+            tuple: (video_url, audio_url) — audio_url may be None for
+                   combined streams.
+        """
+        cmd = [self.ytdlp_path, "-g", "-f", format_spec, url]
+        logger.info(f"Fetching direct stream URLs: {' '.join(cmd)}")
+        self.update_status("Fetching stream URLs...", "blue")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=METADATA_FETCH_TIMEOUT,
+            **_subprocess_kwargs,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to get stream URLs: {result.stderr.strip()}")
+        urls = result.stdout.strip().split("\n")
+        if len(urls) >= 2:
+            return urls[0], urls[1]
+        elif len(urls) == 1:
+            return urls[0], None
+        else:
+            raise RuntimeError("No stream URLs returned by yt-dlp")
+
+    def _download_trimmed_via_ffmpeg(
+        self,
+        url,
+        format_spec,
+        start_time,
+        end_time,
+        output_path,
+        volume_multiplier=1.0,
+        encode_args=None,
+        copy_codec=False,
+    ):
+        """Download a trimmed segment using yt-dlp -g + ffmpeg seeking.
+
+        Much more reliable than --download-sections for long videos because
+        ffmpeg uses HTTP range requests to seek directly instead of scanning
+        through thousands of DASH fragments.
+
+        Args:
+            url: YouTube URL.
+            format_spec: yt-dlp format string (e.g. "bestvideo[height<=480]+bestaudio").
+            start_time: Start time in seconds.
+            end_time: End time in seconds.
+            output_path: Output file path.
+            volume_multiplier: Audio volume multiplier.
+            encode_args: List of ffmpeg encoder args (e.g. ["-c:v", "libx264", ...]).
+                         Ignored if copy_codec is True.
+            copy_codec: If True, copy streams without re-encoding (for temp files).
+
+        Returns:
+            bool: True on success, False on failure/cancellation.
+        """
+        video_url, audio_url = self._get_direct_stream_urls(url, format_spec)
+
+        duration = end_time - start_time
+        cmd = [self.ffmpeg_path, "-y"]
+        # Video input with seeking
+        cmd.extend(["-ss", str(start_time), "-to", str(end_time), "-i", video_url])
+        # Audio input with seeking (if separate)
+        if audio_url:
+            cmd.extend(["-ss", str(start_time), "-to", str(end_time), "-i", audio_url])
+            cmd.extend(["-map", "0:v", "-map", "1:a"])
+
+        if copy_codec:
+            cmd.extend(["-c", "copy"])
+        elif encode_args:
+            cmd.extend(encode_args)
+
+        if not copy_codec and volume_multiplier != 1.0:
+            cmd.extend(["-af", f"volume={volume_multiplier}"])
+
+        cmd.extend(["-progress", "pipe:1", output_path])
+
+        return self._run_ffmpeg_with_progress(
+            cmd, duration, "Downloading trimmed segment"
+        )
 
     # ===================================================================
     #  Encoding helpers (size-constrained / two-pass / single-pass)
@@ -5388,8 +5486,100 @@ class YouTubeDownloader(QMainWindow):
                 else:
                     output_template = f"{base_name}_{height}p.%(ext)s"
 
-                if keep_below_10mb:
-                    # --- Size-constrained path ---
+                if trim_enabled:
+                    # --- Trimmed download via ffmpeg direct seeking ---
+                    # Uses yt-dlp -g + ffmpeg -ss/-to for reliable seeking
+                    # on long videos (avoids --download-sections hanging).
+                    self._download_has_progress = True
+                    format_spec = (
+                        f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
+                    )
+
+                    _dp = ui_state["download_path"] if ui_state else self.download_path
+                    title = self.video_title or "video"
+                    safe_title = self.sanitize_filename(title) or title
+                    if custom_name:
+                        safe_title = custom_name
+                    final_name = f"{safe_title}_{height}p_[{start_hms_file}_to_{end_hms_file}].mp4"
+                    final_output = os.path.join(_dp, final_name)
+
+                    if keep_below_10mb:
+                        # Download raw (copy codec) to temp, then size-constrained encode
+                        temp_dir = tempfile.mkdtemp(prefix="ytdl_10mb_")
+                        temp_file = os.path.join(temp_dir, "temp_trim.mp4")
+
+                        success = self._download_trimmed_via_ffmpeg(
+                            url,
+                            format_spec,
+                            start_time,
+                            end_time,
+                            temp_file,
+                            copy_codec=True,
+                        )
+                        if success and self.is_downloading:
+                            clip_duration = end_time - start_time
+                            success = self._size_constrained_encode(
+                                temp_file,
+                                final_output,
+                                target_bitrate,
+                                clip_duration,
+                                volume_multiplier=volume_multiplier,
+                                scale_height=height,
+                            )
+                        if success and self.is_downloading:
+                            self.update_progress(100)
+                            self.update_status("Download complete!", "green")
+                            logger.info(
+                                f"Trimmed 10MB download completed: {final_output}"
+                            )
+                            self._enable_upload_button(final_output)
+                        elif self.is_downloading:
+                            self.update_status("Download failed", "red")
+                            self.sig_show_messagebox.emit(
+                                "error",
+                                "Download Failed",
+                                "Trimmed download failed.\n\nPlease try again.",
+                            )
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        temp_dir = None
+                    else:
+                        # Normal trimmed download — encode directly
+                        encode_args = self._get_video_encoder_args(mode="crf") + [
+                            "-c:a",
+                            "aac",
+                            "-b:a",
+                            AUDIO_BITRATE,
+                        ]
+                        success = self._download_trimmed_via_ffmpeg(
+                            url,
+                            format_spec,
+                            start_time,
+                            end_time,
+                            final_output,
+                            volume_multiplier=volume_multiplier,
+                            encode_args=encode_args,
+                        )
+                        if success and self.is_downloading:
+                            self.update_progress(100)
+                            self.update_status("Download complete!", "green")
+                            logger.info(f"Trimmed download completed: {final_output}")
+                            self._enable_upload_button(final_output)
+                        elif self.is_downloading:
+                            self.update_status("Download failed", "red")
+                            self.sig_show_messagebox.emit(
+                                "error",
+                                "Download Failed",
+                                "Trimmed download failed.\n\nPlease try again.",
+                            )
+
+                    # Skip the yt-dlp Popen/progress loop below
+                    with self.download_lock:
+                        self.is_downloading = False
+                    self._reset_buttons()
+                    return
+
+                elif keep_below_10mb:
+                    # --- Size-constrained path (no trim) ---
                     temp_dir = tempfile.mkdtemp(prefix="ytdl_10mb_")
                     temp_output_template = os.path.join(temp_dir, "%(title)s.%(ext)s")
 
@@ -5415,17 +5605,6 @@ class YouTubeDownloader(QMainWindow):
                         "mp4",
                     ]
 
-                    if trim_enabled:
-                        start_hms = self.seconds_to_hms(start_time)
-                        end_hms = self.seconds_to_hms(end_time)
-                        cmd.extend(
-                            [
-                                "--download-sections",
-                                f"*{start_hms}-{end_hms}",
-                                "--force-keyframes-at-cuts",
-                            ]
-                        )
-
                     cmd.extend(self._get_speed_limit_args())
                     if is_playlist_url:
                         cmd.append("--no-playlist")
@@ -5433,7 +5612,7 @@ class YouTubeDownloader(QMainWindow):
                         ["--newline", "--progress", "-o", temp_output_template, url]
                     )
                 else:
-                    # --- Normal single-pass path ---
+                    # --- Normal single-pass path (no trim) ---
                     temp_dir = None
 
                     cmd = [
@@ -5450,18 +5629,7 @@ class YouTubeDownloader(QMainWindow):
                         "mp4",
                     ]
 
-                    if trim_enabled:
-                        start_hms = self.seconds_to_hms(start_time)
-                        end_hms = self.seconds_to_hms(end_time)
-                        cmd.extend(
-                            [
-                                "--download-sections",
-                                f"*{start_hms}-{end_hms}",
-                                "--force-keyframes-at-cuts",
-                            ]
-                        )
-
-                    needs_processing = trim_enabled or volume_multiplier != 1.0
+                    needs_processing = volume_multiplier != 1.0
 
                     if needs_processing:
                         ffmpeg_video_args = self._get_video_encoder_args(mode="crf") + [
@@ -6599,7 +6767,7 @@ class YouTubeDownloader(QMainWindow):
             str or None: The browser_download_url for the matching asset
         """
         if sys.platform == "win32":
-            target = "YTDownloader-Windows.exe"
+            target = "YTDownloader.exe"
         else:
             target = "YTDownloader-Linux.tar.gz"
 
