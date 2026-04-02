@@ -6950,4 +6950,15 @@ def main():
 
 
 if __name__ == "__main__":
+    # Suppress PyInstaller _MEI temp dir cleanup errors on Windows.
+    # PyInstaller's atexit handler raises a noisy error if the _MEI dir
+    # can't be removed (e.g. DLLs still locked after self-update).
+    # Register our own handler first to silently attempt the cleanup.
+    if getattr(sys, "frozen", False) and sys.platform == "win32":
+        import atexit
+
+        _mei = getattr(sys, "_MEIPASS", None)
+        if _mei:
+            atexit.register(lambda: shutil.rmtree(_mei, ignore_errors=True))
+
     main()
