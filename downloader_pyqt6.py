@@ -73,6 +73,8 @@ from constants import (
     TEMP_DIR_MAX_AGE,
     DOWNLOAD_TIMEOUT,
     DOWNLOAD_PROGRESS_TIMEOUT,
+    DOWNLOAD_PROGRESS_TIMEOUT_TRIM,
+    VOLUME_CHANGE_THRESHOLD,
     PREVIEW_CACHE_SIZE,
     MAX_WORKER_THREADS,
     MAX_RETRY_ATTEMPTS,
@@ -454,6 +456,8 @@ class YouTubeDownloader(QMainWindow):
         self.is_fetching_duration = False
         self.last_progress_time = None
         self.download_start_time = None
+        self._download_has_progress = False
+        self._trim_download_active = False
         self.timeout_monitor_thread = None
         self._shutting_down = False
         self._updating = False
@@ -5213,6 +5217,11 @@ class YouTubeDownloader(QMainWindow):
             self.download_start_time = time.time()
             self.last_progress_time = time.time()
             self._download_has_progress = False
+            self._trim_download_active = (
+                ui_state.get("trim_enabled", False)
+                if ui_state
+                else self.trim_enabled_check.isChecked()
+            )
 
         self.download_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -5276,14 +5285,20 @@ class YouTubeDownloader(QMainWindow):
 
             if self.last_progress_time:
                 time_since_progress = current_time - self.last_progress_time
-                if time_since_progress > DOWNLOAD_PROGRESS_TIMEOUT:
+                progress_timeout = (
+                    DOWNLOAD_PROGRESS_TIMEOUT_TRIM
+                    if self._trim_download_active
+                    else DOWNLOAD_PROGRESS_TIMEOUT
+                )
+                if time_since_progress > progress_timeout:
+                    timeout_min = progress_timeout // 60
                     logger.error(
-                        f"Download stalled (no progress for {DOWNLOAD_PROGRESS_TIMEOUT}s)"
+                        f"Download stalled (no progress for {progress_timeout}s)"
                     )
                     QTimer.singleShot(
                         0,
-                        lambda: self._timeout_download(
-                            "Download stalled (no progress for 10 minutes)"
+                        lambda m=timeout_min: self._timeout_download(
+                            f"Download stalled (no progress for {m} minutes)"
                         ),
                     )
                     break
@@ -5429,11 +5444,13 @@ class YouTubeDownloader(QMainWindow):
                 if trim_enabled:
                     trim_start_hms = self.seconds_to_hms(start_time)
                     trim_end_hms = self.seconds_to_hms(end_time)
-                    cmd.extend([
-                        "--download-sections",
-                        f"*{trim_start_hms}-{trim_end_hms}",
-                        "--force-keyframes-at-cuts",
-                    ])
+                    cmd.extend(
+                        [
+                            "--download-sections",
+                            f"*{trim_start_hms}-{trim_end_hms}",
+                            "--force-keyframes-at-cuts",
+                        ]
+                    )
 
                 ffmpeg_args = []
 
@@ -5647,22 +5664,24 @@ class YouTubeDownloader(QMainWindow):
                         "--force-keyframes-at-cuts",
                     ]
 
-                    ffmpeg_video_args = self._get_video_encoder_args(mode="crf") + [
-                        "-c:a",
-                        "aac",
-                        "-b:a",
-                        AUDIO_BITRATE,
-                    ]
-                    if volume_multiplier != 1.0:
-                        ffmpeg_video_args.extend(
-                            ["-af", f"volume={volume_multiplier}"]
-                        )
-                    cmd.extend(
-                        [
-                            "--postprocessor-args",
-                            "ffmpeg:" + " ".join(ffmpeg_video_args),
+                    # Only add postprocessor-args if volume change is significant.
+                    # --force-keyframes-at-cuts already re-encodes for accurate cuts;
+                    # extra postprocessor args cause a redundant full re-encode pass.
+                    if abs(volume_multiplier - 1.0) >= VOLUME_CHANGE_THRESHOLD:
+                        ffmpeg_video_args = self._get_video_encoder_args(mode="crf") + [
+                            "-c:a",
+                            "aac",
+                            "-b:a",
+                            AUDIO_BITRATE,
+                            "-af",
+                            f"volume={volume_multiplier}",
                         ]
-                    )
+                        cmd.extend(
+                            [
+                                "--postprocessor-args",
+                                "ffmpeg:" + " ".join(ffmpeg_video_args),
+                            ]
+                        )
 
                     _sl2 = ui_state["speed_limit"] if ui_state else None
                     cmd.extend(self._get_speed_limit_args(speed_limit_str=_sl2))

@@ -25,6 +25,9 @@ PROCESS_TERMINATE_TIMEOUT = 3
 TEMP_DIR_MAX_AGE = 3600  # 1 hour
 DOWNLOAD_TIMEOUT = 3600  # 60 minutes max for any download
 DOWNLOAD_PROGRESS_TIMEOUT = 600  # 10 minutes without progress = stalled
+DOWNLOAD_PROGRESS_TIMEOUT_TRIM = (
+    1200  # 20 minutes for trim downloads (ffmpeg seeking/encoding)
+)
 TIMEOUT_CHECK_INTERVAL = 10
 CLIPBOARD_TIMEOUT = 0.5
 METADATA_FETCH_TIMEOUT = 30
@@ -40,6 +43,7 @@ RETRY_DELAY = 2
 # Video/Audio encoding settings
 VIDEO_CRF = 23
 AUDIO_BITRATE = "128k"
+VOLUME_CHANGE_THRESHOLD = 0.15  # Skip re-encoding if volume within ±0.15 of 1.0
 BUFFER_SIZE = "128K"
 CHUNK_SIZE = "10M"
 CONCURRENT_FRAGMENTS = "8"
@@ -70,7 +74,7 @@ MAX_FILENAME_LENGTH = 200
 CLIPBOARD_URL_LIST_HEIGHT = 150
 
 # Version and Update
-APP_VERSION = "5.01"
+APP_VERSION = "5.02"
 GITHUB_REPO = "jj-repository/YoutubeDownloader"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
