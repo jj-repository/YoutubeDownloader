@@ -5217,11 +5217,7 @@ class YouTubeDownloader(QMainWindow):
             self.download_start_time = time.time()
             self.last_progress_time = time.time()
             self._download_has_progress = False
-            self._trim_download_active = (
-                ui_state.get("trim_enabled", False)
-                if ui_state
-                else self.trim_enabled_check.isChecked()
-            )
+            self._trim_download_active = self.trim_enabled_check.isChecked()
 
         self.download_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
