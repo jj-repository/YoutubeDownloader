@@ -5693,13 +5693,19 @@ class YouTubeDownloader(QMainWindow):
     # ===================================================================
 
     def download_local_file(self, filepath, ui_state=None):
-        """Process local video file with trimming, quality adjustment, and volume control.
+        """Process local video or audio file with trimming, quality adjustment, and volume control.
 
         Args:
             filepath: Path to the local file.
             ui_state: Dict of widget values snapshot from the GUI thread.
         """
         try:
+            self._download_has_progress = True
+
+            # Local audio files are always processed as audio-only
+            audio_extensions = {".mp3", ".aac", ".m4a", ".wav"}
+            is_audio_file = Path(filepath).suffix.lower() in audio_extensions
+
             if ui_state:
                 quality = ui_state["quality"]
                 trim_enabled = ui_state["trim_enabled"]
@@ -5707,7 +5713,8 @@ class YouTubeDownloader(QMainWindow):
                 quality = self.quality_combo.currentText()
                 trim_enabled = self.trim_enabled_check.isChecked()
             audio_only = (
-                quality.startswith("none")
+                is_audio_file
+                or quality.startswith("none")
                 or quality == "none (Audio only)"
                 or (ui_state and ui_state.get("audio_only", False))
             )
