@@ -5638,10 +5638,14 @@ class YouTubeDownloader(QMainWindow):
                     return
 
                 elif trim_enabled:
-                    # --- Trimmed download via yt-dlp --download-sections ---
+                    # --- Two-step trimmed download ---
+                    # Step 1: yt-dlp --download-sections (rough cut at keyframes, fast)
+                    # Step 2: local ffmpeg precise trim (instant seek on local file)
+                    # This avoids --force-keyframes-at-cuts which hangs on long videos.
                     start_hms = self.seconds_to_hms(start_time)
                     end_hms = self.seconds_to_hms(end_time)
-                    temp_dir = None
+                    temp_dir = tempfile.mkdtemp(prefix="ytdl_trim_")
+                    temp_output = os.path.join(temp_dir, "%(title)s.%(ext)s")
 
                     cmd = [
                         self.ytdlp_path,
@@ -5657,39 +5661,18 @@ class YouTubeDownloader(QMainWindow):
                         "mp4",
                         "--download-sections",
                         f"*{start_hms}-{end_hms}",
-                        "--force-keyframes-at-cuts",
                     ]
-
-                    # Only add postprocessor-args if volume change is significant.
-                    # --force-keyframes-at-cuts already re-encodes for accurate cuts;
-                    # extra postprocessor args cause a redundant full re-encode pass.
-                    if abs(volume_multiplier - 1.0) >= VOLUME_CHANGE_THRESHOLD:
-                        ffmpeg_video_args = self._get_video_encoder_args(mode="crf") + [
-                            "-c:a",
-                            "aac",
-                            "-b:a",
-                            AUDIO_BITRATE,
-                            "-af",
-                            f"volume={volume_multiplier}",
-                        ]
-                        cmd.extend(
-                            [
-                                "--postprocessor-args",
-                                "ffmpeg:" + " ".join(ffmpeg_video_args),
-                            ]
-                        )
 
                     _sl2 = ui_state["speed_limit"] if ui_state else None
                     cmd.extend(self._get_speed_limit_args(speed_limit_str=_sl2))
                     if is_playlist_url:
                         cmd.append("--no-playlist")
-                    _dp = ui_state["download_path"] if ui_state else self.download_path
                     cmd.extend(
                         [
                             "--newline",
                             "--progress",
                             "-o",
-                            os.path.join(_dp, output_template),
+                            temp_output,
                             url,
                         ]
                     )
@@ -5857,7 +5840,62 @@ class YouTubeDownloader(QMainWindow):
             self.current_process.wait()
 
             if self.current_process.returncode == 0 and self.is_downloading:
-                if not audio_only and keep_below_10mb and temp_dir:
+                if not audio_only and trim_enabled and temp_dir:
+                    # Step 2 of two-step trim: precise local ffmpeg trim
+                    temp_files = glob.glob(os.path.join(temp_dir, "*.mp4"))
+                    if not temp_files:
+                        self.update_status("Download failed", "red")
+                        logger.error("Trim: no temp file found after yt-dlp download")
+                    else:
+                        temp_file = temp_files[0]
+                        video_title = os.path.splitext(os.path.basename(temp_file))[0]
+                        if custom_name:
+                            final_base = custom_name
+                        else:
+                            final_base = (
+                                self.sanitize_filename(video_title) or video_title
+                            )
+                        final_name = f"{final_base}_{height}p_[{start_hms_file}_to_{end_hms_file}].mp4"
+                        _dp2 = (
+                            ui_state["download_path"]
+                            if ui_state
+                            else self.download_path
+                        )
+                        final_output = os.path.join(_dp2, final_name)
+                        clip_duration = end_time - start_time
+
+                        # Precise trim + optional volume adjust on local file
+                        ffmpeg_cmd = [self.ffmpeg_path, "-y", "-i", temp_file]
+                        ffmpeg_cmd.extend(["-ss", "0", "-t", str(clip_duration)])
+                        needs_encode = (
+                            abs(volume_multiplier - 1.0) >= VOLUME_CHANGE_THRESHOLD
+                        )
+                        if needs_encode:
+                            ffmpeg_cmd.extend(
+                                self._get_video_encoder_args(mode="crf")
+                                + ["-c:a", "aac", "-b:a", AUDIO_BITRATE]
+                                + ["-af", f"volume={volume_multiplier}"]
+                            )
+                        else:
+                            ffmpeg_cmd.extend(["-c", "copy"])
+                        ffmpeg_cmd.extend(["-progress", "pipe:1", final_output])
+
+                        success = self._run_ffmpeg_with_progress(
+                            ffmpeg_cmd, clip_duration, "Trimming video"
+                        )
+
+                        if success and self.is_downloading:
+                            self.update_progress(100)
+                            self.update_status("Download complete!", "green")
+                            logger.info(f"Trimmed download completed: {final_output}")
+                            self._enable_upload_button(final_output)
+                        elif self.is_downloading:
+                            self.update_status("Download failed", "red")
+                            logger.error("Trim encoding failed")
+
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+
+                elif not audio_only and keep_below_10mb and temp_dir:
                     temp_files = glob.glob(os.path.join(temp_dir, "*.mp4"))
                     if not temp_files:
                         self.update_status("Download failed", "red")
@@ -5930,7 +5968,7 @@ class YouTubeDownloader(QMainWindow):
                     "Download Failed",
                     f"Download failed.\n\n{error_detail}\n\nPlease try again.",
                 )
-                if not audio_only and keep_below_10mb and temp_dir:
+                if temp_dir:
                     shutil.rmtree(temp_dir, ignore_errors=True)
 
         except FileNotFoundError as e:
