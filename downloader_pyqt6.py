@@ -2159,8 +2159,15 @@ class YouTubeDownloader(QMainWindow):
         Uses a signal to reliably post to the GUI event loop from any thread
         (worker threads lack their own Qt event loop, so QTimer.singleShot
         fired from them may never execute).
+
+        If *delay* > 0, the callback is wrapped in a QTimer.singleShot on the
+        GUI thread so it fires after the requested milliseconds.
         """
-        if not self._shutting_down:
+        if self._shutting_down:
+            return
+        if delay > 0:
+            self.sig_run_on_gui.emit(lambda: QTimer.singleShot(delay, callback))
+        else:
             self.sig_run_on_gui.emit(callback)
 
     # ==================================================================
@@ -6192,7 +6199,7 @@ class YouTubeDownloader(QMainWindow):
 
         try:
             self.update_status("Downloading update...", "blue")
-            QTimer.singleShot(0, _create_progress_dialog)
+            self._safe_after(0, _create_progress_dialog)
 
             tag_name = release_data.get("tag_name", "main")
             headers = {"User-Agent": f"YoutubeDownloader/{APP_VERSION}"}
@@ -6226,7 +6233,7 @@ class YouTubeDownloader(QMainWindow):
                             text = (
                                 f"Downloading {module_name} ({i + 1}/{len(modules)})..."
                             )
-                        QTimer.singleShot(
+                        self._safe_after(
                             0, lambda t=text, p=pct: _update_progress_dialog(t, p)
                         )
                     content = b"".join(chunks)
@@ -6242,7 +6249,7 @@ class YouTubeDownloader(QMainWindow):
 
                 downloaded[module_name] = content
 
-            QTimer.singleShot(0, _close_progress_dialog)
+            self._safe_after(0, _close_progress_dialog)
 
             # All verified -- backup and replace
             for module_name, content in downloaded.items():
@@ -6272,12 +6279,14 @@ class YouTubeDownloader(QMainWindow):
 
             def _do_restart():
                 subprocess.Popen([sys.executable] + sys.argv)
+                self._updating = False
                 self.close()
 
-            QTimer.singleShot(500, _do_restart)
+            self._safe_after(500, _do_restart)
 
         except Exception as e:
-            QTimer.singleShot(0, _close_progress_dialog)
+            self._updating = False
+            self._safe_after(0, _close_progress_dialog)
             logger.error(f"Error applying update: {e}")
             self.sig_show_messagebox.emit(
                 "error", "Update Failed", f"Failed to download update:\n{e}"
@@ -6305,6 +6314,7 @@ class YouTubeDownloader(QMainWindow):
                 self._apply_update_frozen_linux(download_url, headers, exe_path)
 
         except Exception as e:
+            self._updating = False
             logger.error(f"Error applying frozen update: {e}")
             self.sig_show_messagebox.emit(
                 "error", "Update Failed", f"Failed to download update:\n{e}"
@@ -6363,7 +6373,7 @@ class YouTubeDownloader(QMainWindow):
                 progress_state["dialog"].close()
                 progress_state["dialog"] = None
 
-        QTimer.singleShot(0, _create_progress_dialog)
+        self._safe_after(0, _create_progress_dialog)
 
         request = urllib.request.Request(download_url, headers=headers)
         with urllib.request.urlopen(request, timeout=300) as response:
@@ -6380,7 +6390,7 @@ class YouTubeDownloader(QMainWindow):
                     pct = int(downloaded / total * 100)
                     mb = downloaded / (1024 * 1024)
                     total_mb = total / (1024 * 1024)
-                    QTimer.singleShot(
+                    self._safe_after(
                         0,
                         lambda p=pct, m=mb, t=total_mb: _update_progress_dialog(
                             p, m, t
@@ -6388,7 +6398,7 @@ class YouTubeDownloader(QMainWindow):
                     )
             content = b"".join(chunks)
 
-        QTimer.singleShot(0, _close_progress_dialog)
+        self._safe_after(0, _close_progress_dialog)
 
         if len(content) < 1024:
             raise RuntimeError("Downloaded file is too small — likely corrupted.")
@@ -6415,12 +6425,12 @@ class YouTubeDownloader(QMainWindow):
             # Success -- tell user to reopen
             logger.info(f"Update applied: {exe_path}")
             self.update_status("Update installed!", "green")
+            self._updating = False
             self.sig_show_messagebox.emit(
                 "info",
                 "Update Installed",
                 "Updated to the latest version.\n\nPlease close and reopen the app to use it.",
             )
-            QTimer.singleShot(0, lambda: self.close())
 
         except OSError as rename_err:
             # Rename failed -- use bat to move file after we exit
@@ -6447,12 +6457,12 @@ class YouTubeDownloader(QMainWindow):
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 close_fds=True,
             )
+            self._updating = False
             self.sig_show_messagebox.emit(
                 "info",
                 "Update Installed",
                 "Updated to the latest version.\n\nPlease close and reopen the app to use it.",
             )
-            QTimer.singleShot(0, lambda: self.close())
 
     def _apply_update_frozen_linux(self, download_url, headers, exe_path):
         """Linux portable binary update: download tar.gz, extract, replace in place."""
@@ -6495,7 +6505,7 @@ class YouTubeDownloader(QMainWindow):
                 progress_state["dialog"].close()
                 progress_state["dialog"] = None
 
-        QTimer.singleShot(0, _create_progress_dialog)
+        self._safe_after(0, _create_progress_dialog)
 
         request = urllib.request.Request(download_url, headers=headers)
         with urllib.request.urlopen(request, timeout=300) as response:
@@ -6512,7 +6522,7 @@ class YouTubeDownloader(QMainWindow):
                     pct = int(downloaded / total * 100)
                     mb = downloaded / (1024 * 1024)
                     total_mb = total / (1024 * 1024)
-                    QTimer.singleShot(
+                    self._safe_after(
                         0,
                         lambda p=pct, m=mb, t=total_mb: _update_progress_dialog(
                             p, m, t
@@ -6520,7 +6530,7 @@ class YouTubeDownloader(QMainWindow):
                     )
             content = b"".join(chunks)
 
-        QTimer.singleShot(0, _close_progress_dialog)
+        self._safe_after(0, _close_progress_dialog)
 
         if len(content) < 1024:
             raise RuntimeError("Downloaded file is too small — likely corrupted.")
@@ -6559,9 +6569,10 @@ class YouTubeDownloader(QMainWindow):
         def _do_restart():
             logger.info(f"Launching updated binary: {exe_path}")
             subprocess.Popen([str(exe_path)])
+            self._updating = False
             self.close()
 
-        QTimer.singleShot(500, _do_restart)
+        self._safe_after(500, _do_restart)
 
     def _is_onedir_frozen(self):
         """Check if running as PyInstaller --onedir (installed) vs --onefile (portable).
