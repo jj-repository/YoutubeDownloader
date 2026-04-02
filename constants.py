@@ -4,6 +4,8 @@ Contains all application constants for configuration, timeouts, validation limit
 and UI settings.
 """
 
+import os
+import sys
 from pathlib import Path
 
 # Preview and UI dimensions
@@ -68,14 +70,22 @@ MAX_FILENAME_LENGTH = 200
 CLIPBOARD_URL_LIST_HEIGHT = 150
 
 # Version and Update
-APP_VERSION = "5.0.12"
+APP_VERSION = "5.0.13"
 GITHUB_REPO = "jj-repository/YoutubeDownloader"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}"
 
 # File paths for persistence
-APP_DATA_DIR = Path.home() / ".youtubedownloader"
+if sys.platform == "win32":
+    APP_DATA_DIR = (
+        Path(os.environ.get("LOCALAPPDATA", Path.home())) / "YoutubeDownloader"
+    )
+else:
+    APP_DATA_DIR = (
+        Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+        / "youtubedownloader"
+    )
 UPLOAD_HISTORY_FILE = APP_DATA_DIR / "upload_history.txt"
 CLIPBOARD_URLS_FILE = APP_DATA_DIR / "clipboard_urls.json"
 CONFIG_FILE = APP_DATA_DIR / "config.json"
