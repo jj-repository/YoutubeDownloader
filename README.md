@@ -129,7 +129,7 @@ To keep your desktop clean, create a shortcut to `YoutubeDownloader.exe` and pla
 Or manually:
 ```bash
 source venv/bin/activate
-python downloader.py
+python downloader_pyqt6.py
 ```
 
 ### Using the Application

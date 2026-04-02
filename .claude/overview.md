@@ -12,8 +12,5 @@ v5.01 — Downloads video/audio from YouTube and supported sites.
 
 ## Files
 - `downloader_pyqt6.py` — main app (PyQt6, ~6000 lines)
-- `downloader.py` — legacy tkinter, archived, ignore
 - `constants.py` — all config constants
 - `requirements.txt`
-
-Untracked scratch files (ignore): `_port_callbacks.py`, `_port_download.py`, `_port_updates.py`, `downloader_pyqt6_part1.py`
