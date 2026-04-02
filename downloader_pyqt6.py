@@ -4835,30 +4835,6 @@ class YouTubeDownloader(QMainWindow):
         else:
             raise RuntimeError("No stream URLs returned by yt-dlp")
 
-    @staticmethod
-    def _add_byte_range_to_url(stream_url, start_time, buffer_seconds=60):
-        """Add &range= parameter to a YouTube DASH URL for fast seeking.
-
-        YouTube's CDN supports byte-range requests via the &range= parameter
-        and returns data from the nearest valid fragment boundary. This lets
-        ffmpeg skip directly to the right position instead of reading from
-        the start of a multi-GB stream.
-        """
-        try:
-            from urllib.parse import urlparse, parse_qs
-
-            params = parse_qs(urlparse(stream_url).query)
-            clen = int(params.get("clen", [0])[0])
-            dur = float(params.get("dur", [0])[0])
-
-            if clen > 0 and dur > 0:
-                target_time = max(0, start_time - buffer_seconds)
-                byte_start = int(clen * (target_time / dur))
-                return f"{stream_url}&range={byte_start}-"
-        except (ValueError, KeyError, IndexError):
-            pass
-        return stream_url
-
     def _download_trimmed_via_ffmpeg(
         self,
         url,
@@ -4871,9 +4847,6 @@ class YouTubeDownloader(QMainWindow):
         copy_codec=False,
     ):
         """Download a trimmed segment using yt-dlp -g + ffmpeg seeking.
-
-        Uses byte-range URLs so ffmpeg starts reading near the target
-        position instead of from the beginning of a multi-GB stream.
 
         Args:
             url: YouTube URL.
@@ -4890,11 +4863,6 @@ class YouTubeDownloader(QMainWindow):
             bool: True on success, False on failure/cancellation.
         """
         video_url, audio_url = self._get_direct_stream_urls(url, format_spec)
-
-        # Add byte-range to URLs so ffmpeg starts near the trim position
-        video_url = self._add_byte_range_to_url(video_url, start_time)
-        if audio_url:
-            audio_url = self._add_byte_range_to_url(audio_url, start_time)
 
         duration = end_time - start_time
         cmd = [self.ffmpeg_path, "-y"]
@@ -4968,6 +4936,7 @@ class YouTubeDownloader(QMainWindow):
         logger.info(f"{status_prefix}: {' '.join(cmd)}")
         self.last_progress_time = time.time()
         self.update_progress(0)
+        self.update_status(f"{status_prefix}...", "blue")
 
         with self.download_lock:
             self.current_process = subprocess.Popen(
@@ -4981,14 +4950,23 @@ class YouTubeDownloader(QMainWindow):
             )
 
         # Drain stderr in a background thread to prevent pipe deadlock.
-        # ffmpeg writes connection info and seeking status to stderr; if
-        # the pipe buffer fills up (~64KB), ffmpeg blocks and hangs.
+        # Also use stderr activity as a heartbeat — ffmpeg writes connection
+        # and seeking info to stderr while working, even before producing
+        # any progress output on stdout. This prevents the download monitor
+        # from killing ffmpeg during long seeks on HTTP streams.
         stderr_lines = []
+        has_stdout_progress = threading.Event()
 
         def _drain_stderr():
             try:
                 for line in self.current_process.stderr:
                     stderr_lines.append(line)
+                    # Keep the stall timeout alive while ffmpeg is active
+                    self.last_progress_time = time.time()
+                    if not has_stdout_progress.is_set():
+                        self.update_status(
+                            f"{status_prefix}... seeking to position", "blue"
+                        )
             except (ValueError, OSError):
                 pass
 
@@ -5001,6 +4979,7 @@ class YouTubeDownloader(QMainWindow):
                     self.safe_process_cleanup(self.current_process)
                     return False
             if "out_time_ms=" in line:
+                has_stdout_progress.set()
                 try:
                     time_ms = int(line.split("=")[1].strip())
                     current = time_ms / 1_000_000
