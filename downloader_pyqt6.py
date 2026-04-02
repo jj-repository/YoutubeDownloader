@@ -5426,10 +5426,16 @@ class YouTubeDownloader(QMainWindow):
                     ),
                 ]
 
-                ffmpeg_args = []
-
                 if trim_enabled:
-                    ffmpeg_args.extend(["-ss", str(start_time), "-to", str(end_time)])
+                    trim_start_hms = self.seconds_to_hms(start_time)
+                    trim_end_hms = self.seconds_to_hms(end_time)
+                    cmd.extend([
+                        "--download-sections",
+                        f"*{trim_start_hms}-{trim_end_hms}",
+                        "--force-keyframes-at-cuts",
+                    ])
+
+                ffmpeg_args = []
 
                 _vol = (
                     (ui_state["volume_raw"] / 100.0)
@@ -5506,37 +5512,84 @@ class YouTubeDownloader(QMainWindow):
                 else:
                     output_template = f"{base_name}_{height}p.%(ext)s"
 
-                if trim_enabled:
-                    # --- Trimmed download via ffmpeg direct seeking ---
-                    # Uses yt-dlp -g + ffmpeg -ss/-to for reliable seeking
-                    # on long videos (avoids --download-sections hanging).
-                    self._download_has_progress = True
-                    format_spec = (
-                        f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
+                if trim_enabled and keep_below_10mb:
+                    # --- Trimmed + 10MB: download segment via yt-dlp, then encode ---
+                    temp_dir = tempfile.mkdtemp(prefix="ytdl_10mb_")
+                    temp_output_template = os.path.join(temp_dir, "%(title)s.%(ext)s")
+                    start_hms = self.seconds_to_hms(start_time)
+                    end_hms = self.seconds_to_hms(end_time)
+
+                    cmd = [
+                        self.ytdlp_path,
+                        "--concurrent-fragments",
+                        CONCURRENT_FRAGMENTS,
+                        "--buffer-size",
+                        BUFFER_SIZE,
+                        "--http-chunk-size",
+                        CHUNK_SIZE,
+                        "-f",
+                        f"bestvideo[height<={height}]+bestaudio/best[height<={height}]",
+                        "--merge-output-format",
+                        "mp4",
+                        "--download-sections",
+                        f"*{start_hms}-{end_hms}",
+                        "--force-keyframes-at-cuts",
+                    ]
+                    _sl2 = ui_state["speed_limit"] if ui_state else None
+                    cmd.extend(self._get_speed_limit_args(speed_limit_str=_sl2))
+                    if is_playlist_url:
+                        cmd.append("--no-playlist")
+                    cmd.extend(
+                        ["--newline", "--progress", "-o", temp_output_template, url]
                     )
 
-                    _dp = ui_state["download_path"] if ui_state else self.download_path
-                    title = self.video_title or "video"
-                    safe_title = self.sanitize_filename(title) or title
-                    if custom_name:
-                        safe_title = custom_name
-                    final_name = f"{safe_title}_{height}p_[{start_hms_file}_to_{end_hms_file}].mp4"
-                    final_output = os.path.join(_dp, final_name)
-
-                    if keep_below_10mb:
-                        # Download raw (copy codec) to temp, then size-constrained encode
-                        temp_dir = tempfile.mkdtemp(prefix="ytdl_10mb_")
-                        temp_file = os.path.join(temp_dir, "temp_trim.mp4")
-
-                        success = self._download_trimmed_via_ffmpeg(
-                            url,
-                            format_spec,
-                            start_time,
-                            end_time,
-                            temp_file,
-                            copy_codec=True,
+                    logger.info(f"Trimmed 10MB download: {' '.join(cmd)}")
+                    with self.download_lock:
+                        self.current_process = subprocess.Popen(
+                            cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            encoding="utf-8",
+                            errors="replace",
+                            bufsize=1,
+                            **_subprocess_kwargs,
                         )
-                        if success and self.is_downloading:
+
+                    for line in self.current_process.stdout:
+                        if not self.is_downloading:
+                            break
+                        if "[download]" in line or "Downloading" in line:
+                            self._download_has_progress = True
+                            progress_match = PROGRESS_REGEX.search(line)
+                            if progress_match:
+                                progress = float(progress_match.group(1))
+                                self.update_progress(progress * 0.5)
+                                self.last_progress_time = time.time()
+
+                    self.current_process.wait()
+                    dl_ok = self.current_process.returncode == 0 and self.is_downloading
+
+                    if dl_ok:
+                        # Find the downloaded file
+                        downloaded = [
+                            os.path.join(temp_dir, f)
+                            for f in os.listdir(temp_dir)
+                            if not f.startswith(".")
+                        ]
+                        if downloaded:
+                            temp_file = downloaded[0]
+                            _dp = (
+                                ui_state["download_path"]
+                                if ui_state
+                                else self.download_path
+                            )
+                            title = self.video_title or "video"
+                            safe_title = self.sanitize_filename(title) or title
+                            if custom_name:
+                                safe_title = custom_name
+                            final_name = f"{safe_title}_{height}p_[{start_hms_file}_to_{end_hms_file}].mp4"
+                            final_output = os.path.join(_dp, final_name)
+
                             clip_duration = end_time - start_time
                             success = self._size_constrained_encode(
                                 temp_file,
@@ -5546,57 +5599,85 @@ class YouTubeDownloader(QMainWindow):
                                 volume_multiplier=volume_multiplier,
                                 scale_height=height,
                             )
-                        if success and self.is_downloading:
-                            self.update_progress(100)
-                            self.update_status("Download complete!", "green")
-                            logger.info(
-                                f"Trimmed 10MB download completed: {final_output}"
-                            )
-                            self._enable_upload_button(final_output)
-                        elif self.is_downloading:
+                            if success and self.is_downloading:
+                                self.update_progress(100)
+                                self.update_status("Download complete!", "green")
+                                logger.info(
+                                    f"Trimmed 10MB download completed: {final_output}"
+                                )
+                                self._enable_upload_button(final_output)
+                            elif self.is_downloading:
+                                self.update_status("Download failed", "red")
+                                self.sig_show_messagebox.emit(
+                                    "error",
+                                    "Download Failed",
+                                    "Trimmed download failed.\n\nPlease try again.",
+                                )
+                        else:
                             self.update_status("Download failed", "red")
-                            self.sig_show_messagebox.emit(
-                                "error",
-                                "Download Failed",
-                                "Trimmed download failed.\n\nPlease try again.",
-                            )
-                        shutil.rmtree(temp_dir, ignore_errors=True)
-                        temp_dir = None
-                    else:
-                        # Normal trimmed download — encode directly
-                        encode_args = self._get_video_encoder_args(mode="crf") + [
-                            "-c:a",
-                            "aac",
-                            "-b:a",
-                            AUDIO_BITRATE,
-                        ]
-                        success = self._download_trimmed_via_ffmpeg(
-                            url,
-                            format_spec,
-                            start_time,
-                            end_time,
-                            final_output,
-                            volume_multiplier=volume_multiplier,
-                            encode_args=encode_args,
-                        )
-                        if success and self.is_downloading:
-                            self.update_progress(100)
-                            self.update_status("Download complete!", "green")
-                            logger.info(f"Trimmed download completed: {final_output}")
-                            self._enable_upload_button(final_output)
-                        elif self.is_downloading:
-                            self.update_status("Download failed", "red")
-                            self.sig_show_messagebox.emit(
-                                "error",
-                                "Download Failed",
-                                "Trimmed download failed.\n\nPlease try again.",
-                            )
+                    elif self.is_downloading:
+                        self.update_status("Download failed", "red")
 
-                    # Skip the yt-dlp Popen/progress loop below
+                    shutil.rmtree(temp_dir, ignore_errors=True)
                     with self.download_lock:
                         self.is_downloading = False
                     self._reset_buttons()
                     return
+
+                elif trim_enabled:
+                    # --- Trimmed download via yt-dlp --download-sections ---
+                    start_hms = self.seconds_to_hms(start_time)
+                    end_hms = self.seconds_to_hms(end_time)
+                    temp_dir = None
+
+                    cmd = [
+                        self.ytdlp_path,
+                        "--concurrent-fragments",
+                        CONCURRENT_FRAGMENTS,
+                        "--buffer-size",
+                        BUFFER_SIZE,
+                        "--http-chunk-size",
+                        CHUNK_SIZE,
+                        "-f",
+                        f"bestvideo[height<={height}]+bestaudio/best[height<={height}]",
+                        "--merge-output-format",
+                        "mp4",
+                        "--download-sections",
+                        f"*{start_hms}-{end_hms}",
+                        "--force-keyframes-at-cuts",
+                    ]
+
+                    ffmpeg_video_args = self._get_video_encoder_args(mode="crf") + [
+                        "-c:a",
+                        "aac",
+                        "-b:a",
+                        AUDIO_BITRATE,
+                    ]
+                    if volume_multiplier != 1.0:
+                        ffmpeg_video_args.extend(
+                            ["-af", f"volume={volume_multiplier}"]
+                        )
+                    cmd.extend(
+                        [
+                            "--postprocessor-args",
+                            "ffmpeg:" + " ".join(ffmpeg_video_args),
+                        ]
+                    )
+
+                    _sl2 = ui_state["speed_limit"] if ui_state else None
+                    cmd.extend(self._get_speed_limit_args(speed_limit_str=_sl2))
+                    if is_playlist_url:
+                        cmd.append("--no-playlist")
+                    _dp = ui_state["download_path"] if ui_state else self.download_path
+                    cmd.extend(
+                        [
+                            "--newline",
+                            "--progress",
+                            "-o",
+                            os.path.join(_dp, output_template),
+                            url,
+                        ]
+                    )
 
                 elif keep_below_10mb:
                     # --- Size-constrained path (no trim) ---
