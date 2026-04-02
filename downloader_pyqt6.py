@@ -4835,6 +4835,30 @@ class YouTubeDownloader(QMainWindow):
         else:
             raise RuntimeError("No stream URLs returned by yt-dlp")
 
+    @staticmethod
+    def _add_byte_range_to_url(stream_url, start_time, buffer_seconds=60):
+        """Add &range= parameter to a YouTube DASH URL for fast seeking.
+
+        YouTube's CDN supports byte-range requests via the &range= parameter
+        and returns data from the nearest valid fragment boundary. This lets
+        ffmpeg skip directly to the right position instead of reading from
+        the start of a multi-GB stream.
+        """
+        try:
+            from urllib.parse import urlparse, parse_qs
+
+            params = parse_qs(urlparse(stream_url).query)
+            clen = int(params.get("clen", [0])[0])
+            dur = float(params.get("dur", [0])[0])
+
+            if clen > 0 and dur > 0:
+                target_time = max(0, start_time - buffer_seconds)
+                byte_start = int(clen * (target_time / dur))
+                return f"{stream_url}&range={byte_start}-"
+        except (ValueError, KeyError, IndexError):
+            pass
+        return stream_url
+
     def _download_trimmed_via_ffmpeg(
         self,
         url,
@@ -4848,9 +4872,8 @@ class YouTubeDownloader(QMainWindow):
     ):
         """Download a trimmed segment using yt-dlp -g + ffmpeg seeking.
 
-        Much more reliable than --download-sections for long videos because
-        ffmpeg uses HTTP range requests to seek directly instead of scanning
-        through thousands of DASH fragments.
+        Uses byte-range URLs so ffmpeg starts reading near the target
+        position instead of from the beginning of a multi-GB stream.
 
         Args:
             url: YouTube URL.
@@ -4867,6 +4890,11 @@ class YouTubeDownloader(QMainWindow):
             bool: True on success, False on failure/cancellation.
         """
         video_url, audio_url = self._get_direct_stream_urls(url, format_spec)
+
+        # Add byte-range to URLs so ffmpeg starts near the trim position
+        video_url = self._add_byte_range_to_url(video_url, start_time)
+        if audio_url:
+            audio_url = self._add_byte_range_to_url(audio_url, start_time)
 
         duration = end_time - start_time
         cmd = [self.ffmpeg_path, "-y"]
