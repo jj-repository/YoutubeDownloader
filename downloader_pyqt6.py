@@ -456,6 +456,7 @@ class YouTubeDownloader(QMainWindow):
         self.download_start_time = None
         self.timeout_monitor_thread = None
         self._shutting_down = False
+        self._updating = False
 
         # Detect bundled executables (when packaged with PyInstaller)
         self.ffmpeg_path = self._get_bundled_executable("ffmpeg")
@@ -808,6 +809,10 @@ class YouTubeDownloader(QMainWindow):
         self.keep_below_10mb_check = QCheckBox("Keep video below 10MB")
         self.keep_below_10mb_check.stateChanged.connect(self._on_keep_below_10mb_toggle)
         quality_row.addWidget(self.keep_below_10mb_check)
+
+        self.audio_only_check = QCheckBox("Audio only, no video")
+        self.audio_only_check.stateChanged.connect(self._on_audio_only_toggle)
+        quality_row.addWidget(self.audio_only_check)
         quality_row.addStretch()
         layout.addLayout(quality_row)
 
@@ -1142,6 +1147,17 @@ class YouTubeDownloader(QMainWindow):
         pl_row.addWidget(self.clipboard_full_playlist_check)
         pl_row.addStretch()
         layout.addLayout(pl_row)
+
+        # Audio only toggle
+        audio_row = QHBoxLayout()
+        audio_row.setContentsMargins(20, 0, 0, 0)
+        self.clipboard_audio_only_check = QCheckBox("Audio only, no video")
+        self.clipboard_audio_only_check.stateChanged.connect(
+            self._on_clipboard_audio_only_toggle
+        )
+        audio_row.addWidget(self.clipboard_audio_only_check)
+        audio_row.addStretch()
+        layout.addLayout(audio_row)
 
         # Output folder
         layout.addWidget(self._hsep())
@@ -1546,6 +1562,9 @@ class YouTubeDownloader(QMainWindow):
     # ------------------------------------------------------------------
     def closeEvent(self, event):
         """Handle window close with proper resource cleanup."""
+        if self._updating:
+            event.ignore()
+            return
         logger.info("Application shutdown initiated...")
 
         # Cancel preview timer
@@ -2410,6 +2429,7 @@ class YouTubeDownloader(QMainWindow):
         clip_state = {
             "quality": self.clipboard_quality_combo.currentText(),
             "full_playlist": self.clipboard_full_playlist_check.isChecked(),
+            "audio_only": self.clipboard_audio_only_check.isChecked(),
             "speed_limit": self.clipboard_speed_limit_entry.text().strip(),
             "download_path": self.clipboard_download_path,
         }
@@ -2486,7 +2506,9 @@ class YouTubeDownloader(QMainWindow):
             if "none" in quality.lower() or quality == "none (Audio only)":
                 quality = "none"
 
-            audio_only = quality.startswith("none")
+            audio_only = quality.startswith("none") or (
+                clip_state and clip_state.get("audio_only", False)
+            )
             is_playlist_url = self.is_playlist_url(url)
             full_playlist_enabled = (
                 clip_state["full_playlist"]
@@ -2724,6 +2746,7 @@ class YouTubeDownloader(QMainWindow):
         clip_state = {
             "quality": self.clipboard_quality_combo.currentText(),
             "full_playlist": self.clipboard_full_playlist_check.isChecked(),
+            "audio_only": self.clipboard_audio_only_check.isChecked(),
             "speed_limit": self.clipboard_speed_limit_entry.text().strip(),
             "download_path": self.clipboard_download_path,
         }
@@ -3209,6 +3232,23 @@ class YouTubeDownloader(QMainWindow):
             self.quality_combo.setEnabled(False)
         else:
             self.quality_combo.setEnabled(True)
+
+    def _on_audio_only_toggle(self, *_args):
+        """Toggle audio-only mode — disables quality and 10MB options."""
+        if self.audio_only_check.isChecked():
+            self.quality_combo.setEnabled(False)
+            self.keep_below_10mb_check.setChecked(False)
+            self.keep_below_10mb_check.setEnabled(False)
+        else:
+            self.quality_combo.setEnabled(True)
+            self.keep_below_10mb_check.setEnabled(True)
+
+    def _on_clipboard_audio_only_toggle(self, *_args):
+        """Toggle audio-only mode in clipboard — disables quality dropdown."""
+        if self.clipboard_audio_only_check.isChecked():
+            self.clipboard_quality_combo.setEnabled(False)
+        else:
+            self.clipboard_quality_combo.setEnabled(True)
 
     def on_quality_change(self, *_args):
         """Handle quality selection changes — re-fetch file size with new
@@ -3797,7 +3837,10 @@ class YouTubeDownloader(QMainWindow):
         # Cancel any pending update
         if hasattr(self, "_preview_debounce_timer"):
             self._preview_debounce_timer.stop()
-            self._preview_debounce_timer.timeout.disconnect()
+            try:
+                self._preview_debounce_timer.timeout.disconnect()
+            except TypeError:
+                pass
 
         self._preview_debounce_timer.timeout.connect(self.update_previews)
         self._preview_debounce_timer.start()
@@ -3985,7 +4028,7 @@ class YouTubeDownloader(QMainWindow):
             return True
 
         path = Path(input_text)
-        video_extensions = {
+        media_extensions = {
             ".mp4",
             ".mkv",
             ".avi",
@@ -3997,8 +4040,12 @@ class YouTubeDownloader(QMainWindow):
             ".ts",
             ".mpg",
             ".mpeg",
+            ".mp3",
+            ".aac",
+            ".m4a",
+            ".wav",
         }
-        if path.suffix.lower() in video_extensions:
+        if path.suffix.lower() in media_extensions:
             return True
 
         return False
@@ -4065,9 +4112,11 @@ class YouTubeDownloader(QMainWindow):
         """Open file dialog to select a local video file."""
         filepath, _ = QFileDialog.getOpenFileName(
             self,
-            "Select a video file",
+            "Select a media file",
             str(Path.home()),
+            "Media files (*.mp4 *.mkv *.avi *.mov *.flv *.webm *.wmv *.m4v *.mp3 *.aac *.m4a *.wav);;"
             "Video files (*.mp4 *.mkv *.avi *.mov *.flv *.webm *.wmv *.m4v);;"
+            "Audio files (*.mp3 *.aac *.m4a *.wav);;"
             "All files (*.*)",
         )
 
@@ -4075,7 +4124,14 @@ class YouTubeDownloader(QMainWindow):
             self.url_entry.clear()
             self.url_entry.setText(filepath)
             self.local_file_path = filepath
-            self.mode_label.setText(f"Mode: Local File | {Path(filepath).name}")
+
+            audio_extensions = {".mp3", ".aac", ".m4a", ".wav"}
+            if Path(filepath).suffix.lower() in audio_extensions:
+                self.audio_only_check.setChecked(True)
+                self.mode_label.setText(f"Mode: Local Audio | {Path(filepath).name}")
+            else:
+                self.audio_only_check.setChecked(False)
+                self.mode_label.setText(f"Mode: Local File | {Path(filepath).name}")
             self.mode_label.setStyleSheet("color: green; font-size: 9pt;")
             # Clear filename field for new file
             self.filename_entry.clear()
@@ -5031,6 +5087,7 @@ class YouTubeDownloader(QMainWindow):
             self.is_downloading = True
             self.download_start_time = time.time()
             self.last_progress_time = time.time()
+            self._download_has_progress = False
 
         self.download_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -5046,6 +5103,7 @@ class YouTubeDownloader(QMainWindow):
             "filename": self.filename_entry.text().strip(),
             "volume_raw": self.volume_slider.value(),
             "keep_below_10mb": self.keep_below_10mb_check.isChecked(),
+            "audio_only": self.audio_only_check.isChecked(),
             "speed_limit": self.speed_limit_entry.text().strip(),
             "download_path": self.download_path,
         }
@@ -5069,6 +5127,13 @@ class YouTubeDownloader(QMainWindow):
                 break
 
             current_time = time.time()
+
+            # Show elapsed time while yt-dlp is preparing (no output yet)
+            if self.download_start_time and not self._download_has_progress:
+                elapsed = int(current_time - self.download_start_time)
+                self.update_status(
+                    f"Preparing download... ({elapsed}s elapsed)", "blue"
+                )
 
             if self.download_start_time:
                 elapsed = current_time - self.download_start_time
@@ -5106,6 +5171,11 @@ class YouTubeDownloader(QMainWindow):
             logger.warning(f"Timing out download: {reason}")
             self.update_status(reason, "red")
             self.stop_download()
+            self.sig_show_messagebox.emit(
+                "error",
+                "Download Timed Out",
+                f"{reason}\n\nPlease try again.",
+            )
 
     def stop_download(self):
         """Stop download gracefully, with forced termination as fallback."""
@@ -5153,7 +5223,11 @@ class YouTubeDownloader(QMainWindow):
             else:
                 quality = self.quality_combo.currentText()
                 trim_enabled = self.trim_enabled_check.isChecked()
-            audio_only = quality.startswith("none") or quality == "none (Audio only)"
+            audio_only = (
+                quality.startswith("none")
+                or quality == "none (Audio only)"
+                or (ui_state and ui_state.get("audio_only", False))
+            )
 
             self.update_status("Starting download...", "blue")
 
@@ -5441,6 +5515,7 @@ class YouTubeDownloader(QMainWindow):
                         logger.warning(f"yt-dlp: {line.strip()}")
 
                     if "[download]" in line or "Downloading" in line:
+                        self._download_has_progress = True
                         progress_match = PROGRESS_REGEX.search(line)
                         if progress_match:
                             progress = float(progress_match.group(1))
@@ -5558,6 +5633,12 @@ class YouTubeDownloader(QMainWindow):
                 )
                 if error_lines:
                     logger.error(f"yt-dlp errors: {'; '.join(error_lines)}")
+                error_detail = error_lines[-1] if error_lines else "Unknown error"
+                self.sig_show_messagebox.emit(
+                    "error",
+                    "Download Failed",
+                    f"Download failed.\n\n{error_detail}\n\nPlease try again.",
+                )
                 if not audio_only and keep_below_10mb and temp_dir:
                     shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -5618,7 +5699,11 @@ class YouTubeDownloader(QMainWindow):
             else:
                 quality = self.quality_combo.currentText()
                 trim_enabled = self.trim_enabled_check.isChecked()
-            audio_only = quality.startswith("none") or quality == "none (Audio only)"
+            audio_only = (
+                quality.startswith("none")
+                or quality == "none (Audio only)"
+                or (ui_state and ui_state.get("audio_only", False))
+            )
 
             start_time = None
             end_time = None
@@ -6048,6 +6133,7 @@ class YouTubeDownloader(QMainWindow):
         - Frozen portable (onefile): download new exe, rename-dance, restart
         - Frozen installed (onedir): direct user to GitHub releases page
         """
+        self._updating = True
         if getattr(sys, "frozen", False):
             if self._is_onedir_frozen():
                 # Installed version -- can't self-update, point to installer
@@ -6078,6 +6164,8 @@ class YouTubeDownloader(QMainWindow):
                 f"background-color: {colors['bg']}; color: {colors['fg']};"
             )
             dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+            dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            dlg.setModal(True)
             layout = QVBoxLayout(dlg)
             lbl = QLabel("Downloading update...")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -6244,6 +6332,8 @@ class YouTubeDownloader(QMainWindow):
             )
             # Prevent user from closing the dialog
             dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+            dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            dlg.setModal(True)
 
             layout = QVBoxLayout(dlg)
             lbl = QLabel("Downloading update...")
@@ -6377,6 +6467,8 @@ class YouTubeDownloader(QMainWindow):
             dlg.setWindowTitle("Downloading Update")
             dlg.setFixedSize(350, 100)
             dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+            dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            dlg.setModal(True)
             layout = QVBoxLayout(dlg)
             lbl = QLabel("Downloading update...")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
