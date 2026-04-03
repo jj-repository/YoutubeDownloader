@@ -5148,13 +5148,16 @@ class YouTubeDownloader(QMainWindow):
     ):
         """Download and trim audio-only using byte-range seeking.
 
-        Step 1: Get audio stream URL via yt-dlp -g.
+        Step 1: Get audio stream URL via yt-dlp -g (prefers m4a for SIDX support).
         Step 2: Download relevant byte range via HTTP Range requests.
         Step 3: ffmpeg converts to MP3 with precise trim.
         """
         temp_dir = tempfile.mkdtemp(prefix="ytdl_atrim_")
         try:
-            audio_url, _ = self._get_stream_urls(url, "bestaudio")
+            # Prefer m4a (fMP4 container) which has SIDX for precise seeking.
+            # webm byte-range downloads produce corrupt files because we can't
+            # parse webm Cues for exact Cluster boundaries.
+            audio_url, _ = self._get_stream_urls(url, "bestaudio[ext=m4a]/bestaudio")
 
             audio_ext = "webm" if "mime=audio%2Fwebm" in audio_url else "m4a"
             audio_temp = os.path.join(temp_dir, f"audio.{audio_ext}")
