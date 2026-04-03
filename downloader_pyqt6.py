@@ -810,11 +810,7 @@ class YouTubeDownloader(QMainWindow):
         self.quality_combo.currentIndexChanged.connect(self.on_quality_change)
         quality_row.addWidget(self.quality_combo)
 
-        self.keep_below_10mb_check = QCheckBox("Keep video below 10MB")
-        self.keep_below_10mb_check.stateChanged.connect(self._on_keep_below_10mb_toggle)
-        quality_row.addWidget(self.keep_below_10mb_check)
-
-        self.audio_only_check = QCheckBox("Audio only, no video")
+        self.audio_only_check = QCheckBox("Audio only")
         self.audio_only_check.stateChanged.connect(self._on_audio_only_toggle)
         quality_row.addWidget(self.audio_only_check)
         quality_row.addStretch()
@@ -882,6 +878,15 @@ class YouTubeDownloader(QMainWindow):
         trim_ck_row.addWidget(self.fetch_duration_btn)
         trim_ck_row.addStretch()
         layout.addLayout(trim_ck_row)
+
+        # Keep below 10MB (below trim checkbox)
+        tenm_row = QHBoxLayout()
+        tenm_row.setContentsMargins(20, 0, 0, 0)
+        self.keep_below_10mb_check = QCheckBox("Keep video below 10MB")
+        self.keep_below_10mb_check.stateChanged.connect(self._on_keep_below_10mb_toggle)
+        tenm_row.addWidget(self.keep_below_10mb_check)
+        tenm_row.addStretch()
+        layout.addLayout(tenm_row)
 
         # Video info label
         self.video_info_label = QLabel("")
@@ -980,34 +985,6 @@ class YouTubeDownloader(QMainWindow):
         # --- separator ---
         layout.addWidget(self._hsep())
 
-        # --- Save path ---
-        path_row = QHBoxLayout()
-        path_row.addWidget(QLabel("Save to:"))
-        self.path_label = QLabel(self.download_path)
-        self.path_label.setStyleSheet("color: green;")
-        path_row.addWidget(self.path_label)
-        self.change_path_btn = QPushButton("Change")
-        self.change_path_btn.clicked.connect(self.change_path)
-        path_row.addWidget(self.change_path_btn)
-        self.open_folder_btn = QPushButton("Open Folder")
-        self.open_folder_btn.clicked.connect(self.open_download_folder)
-        path_row.addWidget(self.open_folder_btn)
-        path_row.addStretch()
-        layout.addLayout(path_row)
-
-        # --- Filename customization ---
-        fn_row = QHBoxLayout()
-        fn_row.addWidget(QLabel("Output filename:"))
-        self.filename_entry = QLineEdit()
-        self.filename_entry.setFixedWidth(300)
-        fn_row.addWidget(self.filename_entry)
-        fn_row.addStretch()
-        layout.addLayout(fn_row)
-        fn_hint = QLabel("(optional - leave empty for auto generated name)")
-        fn_hint.setStyleSheet("color: gray; font-size: 8pt;")
-        fn_hint.setContentsMargins(100, 0, 0, 0)
-        layout.addWidget(fn_hint)
-
         # --- Download / Stop / Speed limit ---
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -1046,6 +1023,37 @@ class YouTubeDownloader(QMainWindow):
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.status_label)
 
+        # --- separator ---
+        layout.addWidget(self._hsep())
+
+        # --- Save path ---
+        path_row = QHBoxLayout()
+        path_row.addWidget(QLabel("Save to:"))
+        self.path_label = QLabel(self.download_path)
+        self.path_label.setStyleSheet("color: green;")
+        path_row.addWidget(self.path_label)
+        self.change_path_btn = QPushButton("Change")
+        self.change_path_btn.clicked.connect(self.change_path)
+        path_row.addWidget(self.change_path_btn)
+        self.open_folder_btn = QPushButton("Open Folder")
+        self.open_folder_btn.clicked.connect(self.open_download_folder)
+        path_row.addWidget(self.open_folder_btn)
+        path_row.addStretch()
+        layout.addLayout(path_row)
+
+        # --- Filename customization ---
+        fn_row = QHBoxLayout()
+        fn_row.addWidget(QLabel("Output filename:"))
+        self.filename_entry = QLineEdit()
+        self.filename_entry.setFixedWidth(300)
+        fn_row.addWidget(self.filename_entry)
+        fn_row.addStretch()
+        layout.addLayout(fn_row)
+        fn_hint = QLabel("(optional - leave empty for auto generated name)")
+        fn_hint.setStyleSheet("color: gray; font-size: 8pt;")
+        fn_hint.setContentsMargins(100, 0, 0, 0)
+        layout.addWidget(fn_hint)
+
         # --- Upload to Catbox.moe section ---
         layout.addWidget(self._hsep())
         upl_header = QLabel("Upload to Streaming Site")
@@ -1071,13 +1079,11 @@ class YouTubeDownloader(QMainWindow):
         self.upload_status_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.upload_status_label)
 
-        # Auto-upload checkbox
-        auto_upl_row = QHBoxLayout()
-        auto_upl_row.setContentsMargins(20, 0, 0, 0)
+        # Auto-upload checkbox (centered below buttons)
         self.auto_upload_check = QCheckBox("Auto-upload after download/trim completes")
-        auto_upl_row.addWidget(self.auto_upload_check)
-        auto_upl_row.addStretch()
-        layout.addLayout(auto_upl_row)
+        layout.addWidget(
+            self.auto_upload_check, alignment=Qt.AlignmentFlag.AlignHCenter
+        )
 
         # Upload URL display (initially hidden)
         self.upload_url_widget = QWidget()
