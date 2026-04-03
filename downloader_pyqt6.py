@@ -3184,12 +3184,17 @@ class YouTubeDownloader(QMainWindow):
         """Fetch estimated file size for the video (runs in background thread)."""
         # Capture quality on GUI thread before submitting to worker
         _quality = self.quality_combo.currentText()
+        _audio_only = self.audio_only_check.isChecked()
 
         def _fetch():
             try:
                 quality = _quality
 
-                if quality.startswith("none") or quality == "none (Audio only)":
+                if (
+                    _audio_only
+                    or quality.startswith("none")
+                    or quality == "none (Audio only)"
+                ):
                     format_selector = "bestaudio"
                 else:
                     format_selector = (
@@ -3257,9 +3262,23 @@ class YouTubeDownloader(QMainWindow):
             self.quality_combo.setEnabled(False)
             self.keep_below_10mb_check.setChecked(False)
             self.keep_below_10mb_check.setEnabled(False)
+            # Re-fetch filesize for audio-only
+            url = self.current_video_url or self.url_entry.text().strip()
+            if url and not self.is_playlist:
+                is_valid, _ = self.validate_youtube_url(url)
+                if is_valid:
+                    self.filesize_label.setText("Calculating size...")
+                    self._fetch_file_size(url)
         else:
             self.quality_combo.setEnabled(True)
             self.keep_below_10mb_check.setEnabled(True)
+            # Re-fetch filesize for video quality
+            url = self.current_video_url or self.url_entry.text().strip()
+            if url and not self.is_playlist:
+                is_valid, _ = self.validate_youtube_url(url)
+                if is_valid:
+                    self.filesize_label.setText("Calculating size...")
+                    self._fetch_file_size(url)
 
     def _on_clipboard_audio_only_toggle(self, *_args):
         """Toggle audio-only mode in clipboard — disables quality dropdown."""
@@ -5119,6 +5138,48 @@ class YouTubeDownloader(QMainWindow):
         ffmpeg_cmd.extend(["-progress", "pipe:1", output_path])
         return self._run_ffmpeg_with_progress(ffmpeg_cmd, duration, "Trimming video")
 
+    def _download_audio_trimmed(
+        self, url, start_time, end_time, output_path, volume_multiplier=1.0
+    ):
+        """Download and trim audio-only using byte-range seeking.
+
+        Step 1: Get audio stream URL via yt-dlp -g.
+        Step 2: Download relevant byte range via HTTP Range requests.
+        Step 3: ffmpeg converts to MP3 with precise trim.
+        """
+        temp_dir = tempfile.mkdtemp(prefix="ytdl_atrim_")
+        try:
+            audio_url, _ = self._get_stream_urls(url, "bestaudio")
+
+            audio_ext = "webm" if "mime=audio%2Fwebm" in audio_url else "m4a"
+            audio_temp = os.path.join(temp_dir, f"audio.{audio_ext}")
+            a_start = self._download_stream_segment(
+                audio_url,
+                start_time,
+                end_time,
+                audio_temp,
+                "audio",
+                progress_base=0,
+            )
+            if not self.is_downloading:
+                return False
+
+            duration = end_time - start_time
+            ss_offset = max(0, start_time - a_start)
+
+            ffmpeg_cmd = [self.ffmpeg_path, "-y", "-i", audio_temp]
+            ffmpeg_cmd.extend(["-ss", str(ss_offset), "-t", str(duration)])
+            ffmpeg_cmd.extend(["-vn", "-c:a", "libmp3lame", "-b:a", AUDIO_BITRATE])
+            if volume_multiplier != 1.0:
+                ffmpeg_cmd.extend(["-af", f"volume={volume_multiplier}"])
+            ffmpeg_cmd.extend(["-progress", "pipe:1", output_path])
+
+            return self._run_ffmpeg_with_progress(
+                ffmpeg_cmd, duration, "Converting to MP3"
+            )
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
     # ===================================================================
     #  Encoding helpers (size-constrained / two-pass / single-pass)
     # ===================================================================
@@ -5627,17 +5688,55 @@ class YouTubeDownloader(QMainWindow):
                     else self.filename_entry.text().strip()
                 )
                 custom_name = self.sanitize_filename(_fn)
+                _vol = (
+                    (ui_state["volume_raw"] / 100.0)
+                    if ui_state
+                    else (self.volume_slider.value() / 100.0)
+                )
+                volume_multiplier = self.validate_volume(_vol)
+
+                if trim_enabled:
+                    # --- Audio-only trimmed: byte-range download + local ffmpeg ---
+                    start_hms_file = self.seconds_to_hms(start_time).replace(":", "-")
+                    end_hms_file = self.seconds_to_hms(end_time).replace(":", "-")
+                    if custom_name:
+                        final_base = custom_name
+                    else:
+                        title = self.video_title or "video"
+                        final_base = self.sanitize_filename(title) or title
+                    final_name = (
+                        f"{final_base}_[{start_hms_file}_to_{end_hms_file}].mp3"
+                    )
+                    _dp = ui_state["download_path"] if ui_state else self.download_path
+                    final_output = os.path.join(_dp, final_name)
+
+                    success = self._download_audio_trimmed(
+                        url,
+                        start_time,
+                        end_time,
+                        final_output,
+                        volume_multiplier=volume_multiplier,
+                    )
+
+                    if success and self.is_downloading:
+                        self.update_progress(100)
+                        self.update_status("Download complete!", "green")
+                        logger.info(f"Audio trim completed: {final_output}")
+                        self._enable_upload_button(final_output)
+                    elif self.is_downloading:
+                        self.update_status("Download failed", "red")
+
+                    with self.download_lock:
+                        self.is_downloading = False
+                    self._reset_buttons()
+                    return
+
+                # --- Audio-only, no trim: standard yt-dlp download ---
                 if custom_name:
                     base_name = custom_name
                 else:
                     base_name = "%(title)s"
-
-                if trim_enabled:
-                    start_hms = self.seconds_to_hms(start_time).replace(":", "-")
-                    end_hms = self.seconds_to_hms(end_time).replace(":", "-")
-                    output_template = f"{base_name}_[{start_hms}_to_{end_hms}].%(ext)s"
-                else:
-                    output_template = f"{base_name}.%(ext)s"
+                output_template = f"{base_name}.%(ext)s"
 
                 cmd = [
                     self.ytdlp_path,
@@ -5663,25 +5762,7 @@ class YouTubeDownloader(QMainWindow):
                     ),
                 ]
 
-                if trim_enabled:
-                    trim_start_hms = self.seconds_to_hms(start_time)
-                    trim_end_hms = self.seconds_to_hms(end_time)
-                    cmd.extend(
-                        [
-                            "--download-sections",
-                            f"*{trim_start_hms}-{trim_end_hms}",
-                            "--force-keyframes-at-cuts",
-                        ]
-                    )
-
                 ffmpeg_args = []
-
-                _vol = (
-                    (ui_state["volume_raw"] / 100.0)
-                    if ui_state
-                    else (self.volume_slider.value() / 100.0)
-                )
-                volume_multiplier = self.validate_volume(_vol)
                 if volume_multiplier != 1.0:
                     ffmpeg_args.extend(["-af", f"volume={volume_multiplier}"])
 
