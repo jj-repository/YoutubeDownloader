@@ -4039,6 +4039,16 @@ class YouTubeDownloader(QMainWindow):
         # Clear filename field when URL/file changes
         self.filename_entry.clear()
 
+        # Reset trim state for new URL — stale slider values from a previous
+        # video cause invalid byte-range requests (HTTP 416).
+        self.video_duration = 0
+        self.estimated_filesize = None
+        self.trim_enabled_check.setChecked(False)
+        self.start_slider.setValue(0)
+        self.end_slider.setValue(0)
+        self.filesize_label.setText("")
+        self.video_info_label.setText("")
+
         if self.is_local_file(input_text):
             self.local_file_path = input_text
             self.mode_label.setText(f"Mode: Local File | {Path(input_text).name}")
@@ -4980,6 +4990,12 @@ class YouTubeDownloader(QMainWindow):
             logger.info(
                 f"{label} estimated: bytes {data_start}-{data_end} "
                 f"({(data_end - data_start + 1) / 1024 / 1024:.1f} MB)"
+            )
+
+        if data_start >= data_end:
+            raise RuntimeError(
+                f"Invalid byte range for {label}: {data_start}-{data_end}. "
+                f"Trim range may exceed video duration — fetch duration first."
             )
 
         # Download data range with progress
