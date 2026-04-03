@@ -849,13 +849,6 @@ class YouTubeDownloader(QMainWindow):
         vol_row.addStretch()
         layout.addLayout(vol_row)
 
-        vol_note = QLabel(
-            "Volume changes may cause slower processing on 5+ hour videos"
-        )
-        vol_note.setStyleSheet("color: gray; font-size: 8pt;")
-        vol_note.setContentsMargins(20, 0, 0, 0)
-        layout.addWidget(vol_note)
-
         # --- separator ---
         layout.addWidget(self._hsep())
 
@@ -3347,8 +3340,7 @@ class YouTubeDownloader(QMainWindow):
             trimmed_size = self.estimated_filesize * duration_percentage
             trimmed_size_mb = trimmed_size / BYTES_PER_MB
             self.filesize_label.setText(
-                f"Estimated size (trimmed): {trimmed_size_mb:.1f} MB "
-                f"— with re-encoding/trimming file will be larger"
+                f"Estimated size (trimmed): {trimmed_size_mb:.1f} MB"
             )
 
     def _fetch_local_file_duration(self, filepath):
@@ -5157,22 +5149,22 @@ class YouTubeDownloader(QMainWindow):
         # Precise trim on local file
         # Data starts at ~v_start seconds; we want start_time..end_time
         ss_offset = start_time - v_start
-        needs_encode = not copy_codec and (
-            encode_args or abs(volume_multiplier - 1.0) >= VOLUME_CHANGE_THRESHOLD
-        )
+        volume_changed = abs(volume_multiplier - 1.0) >= VOLUME_CHANGE_THRESHOLD
+        needs_video_encode = not copy_codec and bool(encode_args)
+        needs_audio_encode = not copy_codec and (bool(encode_args) or volume_changed)
         ffmpeg_cmd = [self.ffmpeg_path, "-y", "-i", source_file]
         ffmpeg_cmd.extend(["-ss", str(max(0, ss_offset)), "-t", str(duration)])
 
-        if needs_encode:
-            if encode_args:
-                ffmpeg_cmd.extend(encode_args)
-            else:
-                ffmpeg_cmd.extend(
-                    self._get_video_encoder_args(mode="crf")
-                    + ["-c:a", "aac", "-b:a", AUDIO_BITRATE]
-                )
-            if volume_multiplier != 1.0:
+        if needs_video_encode:
+            # Full re-encode (encode_args includes both video + audio args)
+            ffmpeg_cmd.extend(encode_args)
+            if volume_changed:
                 ffmpeg_cmd.extend(["-af", f"volume={volume_multiplier}"])
+        elif needs_audio_encode:
+            # Volume-only change: copy video stream, re-encode audio only
+            ffmpeg_cmd.extend(["-c:v", "copy"])
+            ffmpeg_cmd.extend(["-c:a", "aac", "-b:a", AUDIO_BITRATE])
+            ffmpeg_cmd.extend(["-af", f"volume={volume_multiplier}"])
         else:
             ffmpeg_cmd.extend(["-c", "copy"])
 
@@ -5955,19 +5947,6 @@ class YouTubeDownloader(QMainWindow):
                     final_name = f"{final_base}_{height}p_[{start_hms_file}_to_{end_hms_file}].mp4"
                     final_output = os.path.join(_dp, final_name)
 
-                    needs_encode = (
-                        abs(volume_multiplier - 1.0) >= VOLUME_CHANGE_THRESHOLD
-                    )
-                    if needs_encode:
-                        encode_args = self._get_video_encoder_args(mode="crf") + [
-                            "-c:a",
-                            "aac",
-                            "-b:a",
-                            AUDIO_BITRATE,
-                        ]
-                    else:
-                        encode_args = None
-
                     success = self._download_trimmed_via_ffmpeg(
                         url,
                         format_spec,
@@ -5975,8 +5954,6 @@ class YouTubeDownloader(QMainWindow):
                         end_time,
                         final_output,
                         volume_multiplier=volume_multiplier,
-                        encode_args=encode_args,
-                        copy_codec=not needs_encode,
                     )
 
                     if success and self.is_downloading:
