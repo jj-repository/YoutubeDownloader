@@ -1648,6 +1648,11 @@ class YouTubeDownloader(QMainWindow):
         logger.info("Application shutdown complete")
         event.accept()
 
+        # Force exit after a short delay — worker threads blocked on I/O
+        # (e.g. subprocess pipe reads) can prevent Python from exiting
+        # even after thread_pool.shutdown(wait=False).
+        QTimer.singleShot(500, lambda: os._exit(0))
+
     # ------------------------------------------------------------------
     #  Signal-connected slot methods (thread-safe GUI updates)
     # ------------------------------------------------------------------
@@ -5591,6 +5596,7 @@ class YouTubeDownloader(QMainWindow):
             self.safe_process_cleanup(process)
             with self.download_lock:
                 self.is_downloading = False
+                self.current_process = None
             # Update UI via signals (thread-safe)
             self.update_status(reason, "red")
             self.sig_reset_buttons.emit()
