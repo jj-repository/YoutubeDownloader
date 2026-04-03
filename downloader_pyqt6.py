@@ -4808,79 +4808,8 @@ class YouTubeDownloader(QMainWindow):
         return cmd
 
     # ===================================================================
-    #  Direct ffmpeg trim download (bypasses yt-dlp --download-sections)
+    #  Trimmed download via yt-dlp --download-sections + local ffmpeg trim
     # ===================================================================
-
-    def _get_direct_stream_urls(self, url, format_spec):
-        """Get direct video and audio stream URLs using yt-dlp -g.
-
-        Returns:
-            tuple: (video_url, audio_url) — audio_url may be None for
-                   combined streams.
-        """
-        cmd = [self.ytdlp_path, "-g", "-f", format_spec, url]
-        logger.info(f"Fetching direct stream URLs: {' '.join(cmd)}")
-        self.update_status("Fetching stream URLs...", "blue")
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=METADATA_FETCH_TIMEOUT,
-            **_subprocess_kwargs,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to get stream URLs: {result.stderr.strip()}")
-        urls = result.stdout.strip().split("\n")
-        if len(urls) >= 2:
-            return urls[0], urls[1]
-        elif len(urls) == 1:
-            return urls[0], None
-        else:
-            raise RuntimeError("No stream URLs returned by yt-dlp")
-
-    @staticmethod
-    def _add_byte_range_to_url(stream_url, start_time, end_time):
-        """Add YouTube byte-range parameter to skip directly to the right position.
-
-        YouTube DASH streams include clen (content length) and dur (duration)
-        in the URL. We calculate the approximate byte offset for start_time
-        and append &range=START-END so YouTube CDN serves only the relevant
-        portion. Returns (modified_url, relative_start, relative_end).
-        """
-        from urllib.parse import urlparse, parse_qs
-
-        parsed = urlparse(stream_url)
-        params = parse_qs(parsed.query)
-        clen = params.get("clen", [None])[0]
-        dur = params.get("dur", [None])[0]
-
-        if not clen or not dur:
-            # Fallback: no range info available, use original URL
-            return stream_url, start_time, end_time
-
-        clen = int(clen)
-        dur = float(dur)
-        if dur <= 0:
-            return stream_url, start_time, end_time
-
-        bytes_per_sec = clen / dur
-        # Pad 30s before start for keyframe alignment
-        padded_start_time = max(0, start_time - 30)
-        start_byte = int(padded_start_time * bytes_per_sec)
-        # Pad 10s after end for safety
-        end_byte = min(clen - 1, int((end_time + 10) * bytes_per_sec))
-
-        ranged_url = f"{stream_url}&range={start_byte}-{end_byte}"
-        # ffmpeg -ss is now relative to the byte range start
-        relative_start = start_time - padded_start_time
-        relative_end = end_time - padded_start_time
-
-        logger.info(
-            f"Byte-range seek: {start_byte}-{end_byte} of {clen} "
-            f"(~{start_byte * 100 // clen}%-{end_byte * 100 // clen}%)"
-        )
-        return ranged_url, relative_start, relative_end
 
     def _download_trimmed_via_ffmpeg(
         self,
@@ -4893,10 +4822,12 @@ class YouTubeDownloader(QMainWindow):
         encode_args=None,
         copy_codec=False,
     ):
-        """Download a trimmed segment using yt-dlp -g + ffmpeg seeking.
+        """Download a trimmed segment: yt-dlp grabs the section, ffmpeg trims locally.
 
-        Uses YouTube's byte-range parameter to skip directly to the relevant
-        portion of the stream, avoiding slow linear seeking on long videos.
+        Step 1: yt-dlp --download-sections downloads only the DASH segments
+                covering the requested time range (no --concurrent-fragments
+                to avoid stalling on long videos).
+        Step 2: ffmpeg does a precise trim on the local file (instant).
 
         Args:
             url: YouTube URL.
@@ -4912,39 +4843,129 @@ class YouTubeDownloader(QMainWindow):
         Returns:
             bool: True on success, False on failure/cancellation.
         """
-        video_url, audio_url = self._get_direct_stream_urls(url, format_spec)
+        temp_dir = tempfile.mkdtemp(prefix="ytdl_trim_")
+        try:
+            return self._do_trimmed_download(
+                url,
+                format_spec,
+                start_time,
+                end_time,
+                output_path,
+                volume_multiplier,
+                encode_args,
+                copy_codec,
+                temp_dir,
+            )
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
-        # Apply byte-range seeking to skip directly to the relevant portion
-        video_url, v_ss, v_to = self._add_byte_range_to_url(
-            video_url, start_time, end_time
-        )
-        if audio_url:
-            audio_url, a_ss, a_to = self._add_byte_range_to_url(
-                audio_url, start_time, end_time
+    def _do_trimmed_download(
+        self,
+        url,
+        format_spec,
+        start_time,
+        end_time,
+        output_path,
+        volume_multiplier,
+        encode_args,
+        copy_codec,
+        temp_dir,
+    ):
+        """Inner implementation for trimmed downloads."""
+        start_hms = self.seconds_to_hms(start_time)
+        end_hms = self.seconds_to_hms(end_time)
+        duration = end_time - start_time
+        temp_output = os.path.join(temp_dir, "%(title)s.%(ext)s")
+
+        # Step 1: yt-dlp downloads only the DASH segments for this range.
+        # No --concurrent-fragments: that flag causes stalls on long videos
+        # because it changes the DASH download strategy.
+        cmd = [
+            self.ytdlp_path,
+            "-f",
+            format_spec,
+            "--merge-output-format",
+            "mp4",
+            "--download-sections",
+            f"*{start_hms}-{end_hms}",
+            "--newline",
+            "--progress",
+            "-o",
+            temp_output,
+            url,
+        ]
+        logger.info(f"Trim download (step 1): {' '.join(cmd)}")
+        self.update_status("Downloading segment...", "blue")
+
+        with self.download_lock:
+            self.current_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                **_subprocess_kwargs,
             )
 
-        duration = end_time - start_time
-        cmd = [self.ffmpeg_path, "-y"]
-        # Video input with relative seeking within the byte range
-        cmd.extend(["-ss", str(v_ss), "-to", str(v_to), "-i", video_url])
-        # Audio input with seeking (if separate)
-        if audio_url:
-            cmd.extend(["-ss", str(a_ss), "-to", str(a_to), "-i", audio_url])
-            cmd.extend(["-map", "0:v", "-map", "1:a"])
+        for line in self.current_process.stdout:
+            if not self.is_downloading:
+                self.safe_process_cleanup(self.current_process)
+                return False
+            if "[download]" in line or "Downloading" in line:
+                self._download_has_progress = True
+                progress_match = PROGRESS_REGEX.search(line)
+                if progress_match:
+                    progress = float(progress_match.group(1))
+                    self.update_progress(progress * 0.9)
+                    self.update_status(
+                        f"Downloading segment... {progress:.1f}%", "blue"
+                    )
+                    self.last_progress_time = time.time()
+            elif "[Merger]" in line or "Merging" in line:
+                self.update_status("Merging streams...", "blue")
+                self.last_progress_time = time.time()
+            elif "[ffmpeg]" in line:
+                self.update_status("Processing...", "blue")
+                self.last_progress_time = time.time()
 
-        if copy_codec:
-            cmd.extend(["-c", "copy"])
-        elif encode_args:
-            cmd.extend(encode_args)
+        self.current_process.wait()
+        if self.current_process.returncode != 0 or not self.is_downloading:
+            logger.error(
+                f"Trim download step 1 failed (rc {self.current_process.returncode})"
+            )
+            return False
 
-        if not copy_codec and volume_multiplier != 1.0:
-            cmd.extend(["-af", f"volume={volume_multiplier}"])
+        # Find the downloaded temp file
+        temp_files = glob.glob(os.path.join(temp_dir, "*.mp4"))
+        if not temp_files:
+            logger.error("Trim: no temp file found after yt-dlp download")
+            return False
+        temp_file = temp_files[0]
 
-        cmd.extend(["-progress", "pipe:1", output_path])
-
-        return self._run_ffmpeg_with_progress(
-            cmd, duration, "Downloading trimmed segment"
+        # Step 2: precise local ffmpeg trim (instant on local file)
+        needs_encode = not copy_codec and (
+            encode_args or abs(volume_multiplier - 1.0) >= VOLUME_CHANGE_THRESHOLD
         )
+        ffmpeg_cmd = [self.ffmpeg_path, "-y", "-i", temp_file]
+        ffmpeg_cmd.extend(["-ss", "0", "-t", str(duration)])
+
+        if needs_encode:
+            if encode_args:
+                ffmpeg_cmd.extend(encode_args)
+            else:
+                ffmpeg_cmd.extend(
+                    self._get_video_encoder_args(mode="crf")
+                    + ["-c:a", "aac", "-b:a", AUDIO_BITRATE]
+                )
+            if volume_multiplier != 1.0:
+                ffmpeg_cmd.extend(["-af", f"volume={volume_multiplier}"])
+        else:
+            ffmpeg_cmd.extend(["-c", "copy"])
+
+        ffmpeg_cmd.extend(["-progress", "pipe:1", output_path])
+
+        return self._run_ffmpeg_with_progress(ffmpeg_cmd, duration, "Trimming video")
 
     # ===================================================================
     #  Encoding helpers (size-constrained / two-pass / single-pass)
