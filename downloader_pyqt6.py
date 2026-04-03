@@ -421,8 +421,8 @@ class YouTubeDownloader(QMainWindow):
         self.setWindowTitle("YoutubeDownloader")
 
         if sys.platform == "win32":
-            self.resize(580, 720)
-            self.setMinimumSize(580, 400)
+            self.resize(650, 800)
+            self.setMinimumSize(650, 800)
         else:
             self.resize(900, 1140)
             self.setMinimumSize(750, 600)
