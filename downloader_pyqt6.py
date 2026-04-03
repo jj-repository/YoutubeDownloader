@@ -820,48 +820,54 @@ class YouTubeDownloader(QMainWindow):
         quality_row.addStretch()
         layout.addLayout(quality_row)
 
-        # --- separator ---
-        layout.addWidget(self._hsep())
-
-        # --- Trim + Volume header row ---
-        tv_row = QHBoxLayout()
-        tv_lbl = QLabel("Trim Video:")
-        tv_lbl.setStyleSheet(
-            tv_lbl.styleSheet() + "font-size: 11px; font-weight: bold;"
-        )
-        tv_row.addWidget(tv_lbl)
-        tv_row.addSpacing(30)
-
+        # --- Volume section (below quality, above trim) ---
+        vol_row = QHBoxLayout()
         vol_lbl = QLabel("Volume:")
         vol_lbl.setStyleSheet(
             vol_lbl.styleSheet() + "font-size: 11px; font-weight: bold;"
         )
-        tv_row.addWidget(vol_lbl)
+        vol_row.addWidget(vol_lbl)
 
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 200)
         self.volume_slider.setValue(100)
         self.volume_slider.setFixedWidth(150)
         self.volume_slider.valueChanged.connect(self._on_volume_slider_change)
-        tv_row.addWidget(self.volume_slider)
+        vol_row.addWidget(self.volume_slider)
 
         self.volume_entry = QLineEdit("100")
         self.volume_entry.setFixedWidth(50)
         self.volume_entry.returnPressed.connect(self._on_volume_entry_change)
-        tv_row.addWidget(self.volume_entry)
+        vol_row.addWidget(self.volume_entry)
 
         self.volume_label = QLabel("%")
         self.volume_label.setStyleSheet(
             self.volume_label.styleSheet() + "font-size: 9px;"
         )
-        tv_row.addWidget(self.volume_label)
+        vol_row.addWidget(self.volume_label)
 
         self.reset_volume_btn = QPushButton("Reset to 100%")
         self.reset_volume_btn.setFixedWidth(100)
         self.reset_volume_btn.clicked.connect(self.reset_volume)
-        tv_row.addWidget(self.reset_volume_btn)
-        tv_row.addStretch()
-        layout.addLayout(tv_row)
+        vol_row.addWidget(self.reset_volume_btn)
+        vol_row.addStretch()
+        layout.addLayout(vol_row)
+
+        vol_note = QLabel(
+            "Volume changes may cause slower processing on 5+ hour videos"
+        )
+        vol_note.setStyleSheet("color: gray; font-size: 8pt;")
+        vol_note.setContentsMargins(20, 0, 0, 0)
+        layout.addWidget(vol_note)
+
+        # --- separator ---
+        layout.addWidget(self._hsep())
+
+        # --- Trim Video header (centered, prominent) ---
+        tv_lbl = QLabel("Trim Video")
+        tv_lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
+        tv_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(tv_lbl)
 
         # --- Trim checkbox + fetch button ---
         trim_ck_row = QHBoxLayout()
@@ -931,7 +937,9 @@ class YouTubeDownloader(QMainWindow):
         self.start_slider.setMinimumWidth(SLIDER_LENGTH)
         self.start_slider.valueChanged.connect(self.on_start_slider_change)
         start_row.addWidget(self.start_slider)
-        start_row.addWidget(QLabel("Start Time:"))
+        _start_lbl = QLabel("Start Time:")
+        _start_lbl.setFixedWidth(70)
+        start_row.addWidget(_start_lbl)
         self.start_time_entry = QLineEdit("00:00:00")
         self.start_time_entry.setFixedWidth(80)
         self.start_time_entry.setEnabled(False)
@@ -950,7 +958,9 @@ class YouTubeDownloader(QMainWindow):
         self.end_slider.setMinimumWidth(SLIDER_LENGTH)
         self.end_slider.valueChanged.connect(self.on_end_slider_change)
         end_row.addWidget(self.end_slider)
-        end_row.addWidget(QLabel("End Time:"))
+        _end_lbl = QLabel("End Time:")
+        _end_lbl.setFixedWidth(70)
+        end_row.addWidget(_end_lbl)
         self.end_time_entry = QLineEdit("00:00:00")
         self.end_time_entry.setFixedWidth(80)
         self.end_time_entry.setEnabled(False)
@@ -991,16 +1001,17 @@ class YouTubeDownloader(QMainWindow):
         self.filename_entry = QLineEdit()
         self.filename_entry.setFixedWidth(300)
         fn_row.addWidget(self.filename_entry)
-        opt_lbl = QLabel("(Optional - leave empty for auto-generated name)")
-        opt_lbl.setStyleSheet("color: gray; font-size: 8pt;")
-        fn_row.addWidget(opt_lbl)
         fn_row.addStretch()
         layout.addLayout(fn_row)
+        fn_hint = QLabel("(optional - leave empty for auto generated name)")
+        fn_hint.setStyleSheet("color: gray; font-size: 8pt;")
+        fn_hint.setContentsMargins(100, 0, 0, 0)
+        layout.addWidget(fn_hint)
 
         # --- Download / Stop / Speed limit ---
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        self.download_btn = _colored_btn("Download", BLUE)
+        self.download_btn = _colored_btn("Download/Trim", BLUE)
         self.download_btn.clicked.connect(self.start_download)
         btn_row.addWidget(self.download_btn)
 
@@ -1037,13 +1048,13 @@ class YouTubeDownloader(QMainWindow):
 
         # --- Upload to Catbox.moe section ---
         layout.addWidget(self._hsep())
-        upl_header = QLabel("Upload to Streaming Site:")
-        upl_header.setStyleSheet(
-            upl_header.styleSheet() + "font-size: 11px; font-weight: bold;"
-        )
+        upl_header = QLabel("Upload to Streaming Site")
+        upl_header.setStyleSheet("font-size: 14px; font-weight: bold;")
+        upl_header.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(upl_header)
 
         upl_row = QHBoxLayout()
+        upl_row.addStretch()
         self.upload_btn = _colored_btn("Upload to Catbox.moe", GREEN)
         self.upload_btn.setEnabled(False)
         self.upload_btn.clicked.connect(self.start_upload)
@@ -1052,12 +1063,13 @@ class YouTubeDownloader(QMainWindow):
         self.view_history_btn = QPushButton("View Upload History")
         self.view_history_btn.clicked.connect(self.view_upload_history)
         upl_row.addWidget(self.view_history_btn)
+        upl_row.addStretch()
+        layout.addLayout(upl_row)
 
         self.upload_status_label = QLabel("")
         self.upload_status_label.setStyleSheet("color: green; font-size: 9pt;")
-        upl_row.addWidget(self.upload_status_label)
-        upl_row.addStretch()
-        layout.addLayout(upl_row)
+        self.upload_status_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self.upload_status_label)
 
         # Auto-upload checkbox
         auto_upl_row = QHBoxLayout()
@@ -3262,28 +3274,27 @@ class YouTubeDownloader(QMainWindow):
             self.quality_combo.setEnabled(True)
 
     def _on_audio_only_toggle(self, *_args):
-        """Toggle audio-only mode — disables quality and 10MB options."""
+        """Toggle audio-only mode — syncs with quality combo and 10MB."""
         if self.audio_only_check.isChecked():
+            self.quality_combo.blockSignals(True)
+            self.quality_combo.setCurrentText("none (Audio only)")
+            self.quality_combo.blockSignals(False)
             self.quality_combo.setEnabled(False)
             self.keep_below_10mb_check.setChecked(False)
             self.keep_below_10mb_check.setEnabled(False)
-            # Re-fetch filesize for audio-only
-            url = self.current_video_url or self.url_entry.text().strip()
-            if url and not self.is_playlist:
-                is_valid, _ = self.validate_youtube_url(url)
-                if is_valid:
-                    self.filesize_label.setText("Calculating size...")
-                    self._fetch_file_size(url)
         else:
+            self.quality_combo.blockSignals(True)
+            self.quality_combo.setCurrentText("480")
+            self.quality_combo.blockSignals(False)
             self.quality_combo.setEnabled(True)
             self.keep_below_10mb_check.setEnabled(True)
-            # Re-fetch filesize for video quality
-            url = self.current_video_url or self.url_entry.text().strip()
-            if url and not self.is_playlist:
-                is_valid, _ = self.validate_youtube_url(url)
-                if is_valid:
-                    self.filesize_label.setText("Calculating size...")
-                    self._fetch_file_size(url)
+        # Re-fetch filesize for the new mode
+        url = self.current_video_url or self.url_entry.text().strip()
+        if url and not self.is_playlist:
+            is_valid, _ = self.validate_youtube_url(url)
+            if is_valid:
+                self.filesize_label.setText("Calculating size...")
+                self._fetch_file_size(url)
 
     def _on_clipboard_audio_only_toggle(self, *_args):
         """Toggle audio-only mode in clipboard — disables quality dropdown."""
@@ -3297,9 +3308,10 @@ class YouTubeDownloader(QMainWindow):
         quality."""
         quality = self.quality_combo.currentText()
         if quality.startswith("none") or "none (Audio only)" in quality:
-            self.keep_below_10mb_check.setChecked(False)
-            self.keep_below_10mb_check.setEnabled(False)
-            self.quality_combo.setEnabled(True)
+            # Sync: selecting audio-only quality checks the audio-only box
+            if not self.audio_only_check.isChecked():
+                self.audio_only_check.setChecked(True)
+            return  # _on_audio_only_toggle handles the rest
         else:
             self.keep_below_10mb_check.setEnabled(True)
 
