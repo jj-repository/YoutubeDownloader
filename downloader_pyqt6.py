@@ -4839,6 +4839,49 @@ class YouTubeDownloader(QMainWindow):
         else:
             raise RuntimeError("No stream URLs returned by yt-dlp")
 
+    @staticmethod
+    def _add_byte_range_to_url(stream_url, start_time, end_time):
+        """Add YouTube byte-range parameter to skip directly to the right position.
+
+        YouTube DASH streams include clen (content length) and dur (duration)
+        in the URL. We calculate the approximate byte offset for start_time
+        and append &range=START-END so YouTube CDN serves only the relevant
+        portion. Returns (modified_url, relative_start, relative_end).
+        """
+        from urllib.parse import urlparse, parse_qs
+
+        parsed = urlparse(stream_url)
+        params = parse_qs(parsed.query)
+        clen = params.get("clen", [None])[0]
+        dur = params.get("dur", [None])[0]
+
+        if not clen or not dur:
+            # Fallback: no range info available, use original URL
+            return stream_url, start_time, end_time
+
+        clen = int(clen)
+        dur = float(dur)
+        if dur <= 0:
+            return stream_url, start_time, end_time
+
+        bytes_per_sec = clen / dur
+        # Pad 30s before start for keyframe alignment
+        padded_start_time = max(0, start_time - 30)
+        start_byte = int(padded_start_time * bytes_per_sec)
+        # Pad 10s after end for safety
+        end_byte = min(clen - 1, int((end_time + 10) * bytes_per_sec))
+
+        ranged_url = f"{stream_url}&range={start_byte}-{end_byte}"
+        # ffmpeg -ss is now relative to the byte range start
+        relative_start = start_time - padded_start_time
+        relative_end = end_time - padded_start_time
+
+        logger.info(
+            f"Byte-range seek: {start_byte}-{end_byte} of {clen} "
+            f"(~{start_byte * 100 // clen}%-{end_byte * 100 // clen}%)"
+        )
+        return ranged_url, relative_start, relative_end
+
     def _download_trimmed_via_ffmpeg(
         self,
         url,
@@ -4851,6 +4894,9 @@ class YouTubeDownloader(QMainWindow):
         copy_codec=False,
     ):
         """Download a trimmed segment using yt-dlp -g + ffmpeg seeking.
+
+        Uses YouTube's byte-range parameter to skip directly to the relevant
+        portion of the stream, avoiding slow linear seeking on long videos.
 
         Args:
             url: YouTube URL.
@@ -4868,13 +4914,22 @@ class YouTubeDownloader(QMainWindow):
         """
         video_url, audio_url = self._get_direct_stream_urls(url, format_spec)
 
+        # Apply byte-range seeking to skip directly to the relevant portion
+        video_url, v_ss, v_to = self._add_byte_range_to_url(
+            video_url, start_time, end_time
+        )
+        if audio_url:
+            audio_url, a_ss, a_to = self._add_byte_range_to_url(
+                audio_url, start_time, end_time
+            )
+
         duration = end_time - start_time
         cmd = [self.ffmpeg_path, "-y"]
-        # Video input with seeking
-        cmd.extend(["-ss", str(start_time), "-to", str(end_time), "-i", video_url])
+        # Video input with relative seeking within the byte range
+        cmd.extend(["-ss", str(v_ss), "-to", str(v_to), "-i", video_url])
         # Audio input with seeking (if separate)
         if audio_url:
-            cmd.extend(["-ss", str(start_time), "-to", str(end_time), "-i", audio_url])
+            cmd.extend(["-ss", str(a_ss), "-to", str(a_to), "-i", audio_url])
             cmd.extend(["-map", "0:v", "-map", "1:a"])
 
         if copy_codec:
