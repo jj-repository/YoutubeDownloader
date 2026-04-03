@@ -130,7 +130,9 @@ except ImportError:
 # Additional imports needed by ported business logic
 import hashlib
 import io
+import socket
 import tarfile
+import urllib.error
 import urllib.request
 from PyQt6.QtGui import QImage
 from PyQt6.QtWidgets import (
@@ -4919,10 +4921,24 @@ class YouTubeDownloader(QMainWindow):
         return (urls[0], urls[1]) if len(urls) >= 2 else (urls[0], None)
 
     def _http_range_read(self, url, start, end):
-        """Download a byte range from a URL. Returns bytes."""
+        """Download a byte range from a URL. Returns bytes.
+
+        Reads in chunks and checks is_downloading between them so the
+        user can cancel during slow CDN responses (e.g. 10-hour videos).
+        """
         req = urllib.request.Request(url)
         req.add_header("Range", f"bytes={start}-{end}")
-        return urllib.request.urlopen(req, timeout=30).read()
+        chunks = []
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            while True:
+                if not self.is_downloading:
+                    return b"".join(chunks)
+                chunk = resp.read(256 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                self.last_progress_time = time.time()
+        return b"".join(chunks)
 
     def _download_stream_segment(
         self, stream_url, start_time, end_time, output_path, label, progress_base=0
@@ -4932,7 +4948,22 @@ class YouTubeDownloader(QMainWindow):
         For fMP4: parses SIDX for exact segment boundaries.
         For webm/other: estimates from clen/dur with generous padding.
         Returns the timestamp (seconds) where the downloaded data starts.
+        Raises RuntimeError with a user-friendly message on network errors.
         """
+        try:
+            return self._download_stream_segment_inner(
+                stream_url, start_time, end_time, output_path, label, progress_base
+            )
+        except (urllib.error.URLError, socket.timeout, OSError) as e:
+            raise RuntimeError(
+                f"Network error downloading {label}: {e}\n\n"
+                f"This can happen with very long videos. Try again or use a shorter trim range."
+            ) from e
+
+    def _download_stream_segment_inner(
+        self, stream_url, start_time, end_time, output_path, label, progress_base=0
+    ):
+        """Inner implementation of stream segment download."""
         params = parse_qs(urlparse(stream_url).query)
         clen = int(params.get("clen", ["0"])[0])
         dur = float(params.get("dur", ["0"])[0])

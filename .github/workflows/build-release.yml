@@ -60,6 +60,9 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: |
         wget https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O yt-dlp
+        wget https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS -O SHA2-256SUMS
+        grep ' yt-dlp$' SHA2-256SUMS | sha256sum -c -
+        rm SHA2-256SUMS
         chmod +x yt-dlp
 
     - name: Build executable (Linux)
@@ -82,6 +85,11 @@ jobs:
       shell: pwsh
       run: |
         Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" -OutFile "yt-dlp.exe"
+        Invoke-WebRequest -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS" -OutFile "SHA2-256SUMS"
+        $expected = (Get-Content SHA2-256SUMS | Select-String 'yt-dlp.exe$').ToString().Split()[0]
+        $actual = (Get-FileHash yt-dlp.exe -Algorithm SHA256).Hash.ToLower()
+        if ($actual -ne $expected) { throw "SHA256 mismatch for yt-dlp.exe! Expected: $expected Got: $actual" }
+        Remove-Item SHA2-256SUMS
 
     - name: Build executable (Windows)
       if: matrix.os == 'windows-latest'
