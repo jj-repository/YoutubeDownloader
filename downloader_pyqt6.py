@@ -421,8 +421,8 @@ class YouTubeDownloader(QMainWindow):
         self.setWindowTitle("YoutubeDownloader")
 
         if sys.platform == "win32":
-            self.resize(650, 800)
-            self.setMinimumSize(650, 800)
+            self.resize(650, 710)
+            self.setMinimumSize(650, 710)
         else:
             self.resize(900, 1140)
             self.setMinimumSize(750, 600)
@@ -1079,8 +1079,9 @@ class YouTubeDownloader(QMainWindow):
         self.upload_status_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.upload_status_label)
 
-        # Auto-upload checkbox (centered below buttons)
+        # Auto-upload checkbox (centered, tighter to buttons above)
         self.auto_upload_check = QCheckBox("Auto-upload after download/trim completes")
+        self.auto_upload_check.setContentsMargins(0, -2, 0, 0)
         layout.addWidget(
             self.auto_upload_check, alignment=Qt.AlignmentFlag.AlignHCenter
         )
@@ -4057,15 +4058,16 @@ class YouTubeDownloader(QMainWindow):
         # Clear filename field when URL/file changes
         self.filename_entry.clear()
 
-        # Reset trim state for new URL — stale slider values from a previous
+        # Reset trim data for new URL — stale slider values from a previous
         # video cause invalid byte-range requests (HTTP 416).
+        # Keep trim checkbox state so user doesn't have to re-check it.
         self.video_duration = 0
         self.estimated_filesize = None
-        self.trim_enabled_check.setChecked(False)
         self.start_slider.setValue(0)
         self.end_slider.setValue(0)
         self.filesize_label.setText("")
         self.video_info_label.setText("")
+        self.fetch_duration_btn.setEnabled(self.trim_enabled_check.isChecked())
 
         if self.is_local_file(input_text):
             self.local_file_path = input_text
