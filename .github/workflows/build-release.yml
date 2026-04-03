@@ -6,11 +6,10 @@ on:
       - 'v*'
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   build:
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -26,6 +25,8 @@ jobs:
       uses: actions/setup-python@v6
       with:
         python-version: '3.11'
+        cache: 'pip'
+        cache-dependency-path: 'requirements.txt'
 
     - name: Install system dependencies (Linux)
       if: matrix.os == 'ubuntu-latest'
@@ -37,7 +38,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install pyinstaller
-        pip install PyQt6 yt-dlp Pillow catboxpy pyperclip
+        pip install -r requirements.txt
 
     - name: Install optional dependencies (Linux)
       if: matrix.os == 'ubuntu-latest'
@@ -101,6 +102,7 @@ jobs:
       with:
         name: linux-build
         path: YTDownloader-Linux.tar.gz
+        retention-days: 1
 
     - name: Upload Windows artifact
       if: matrix.os == 'windows-latest'
@@ -108,15 +110,22 @@ jobs:
       with:
         name: windows-build
         path: dist/YTDownloader.exe
+        retention-days: 1
 
   create-release:
     needs: build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
 
     steps:
     - name: Download all artifacts
       uses: actions/download-artifact@v8
+
+    - name: Generate SHA256SUMS
+      run: |
+        sha256sum linux-build/YTDownloader-Linux.tar.gz windows-build/YTDownloader.exe | sed 's|.*/||' > SHA256SUMS
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
@@ -124,6 +133,7 @@ jobs:
         files: |
           linux-build/YTDownloader-Linux.tar.gz
           windows-build/YTDownloader.exe
+          SHA256SUMS
         body: |
           ## YTDownloader ${{ github.ref_name }}
 

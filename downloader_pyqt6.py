@@ -25,7 +25,7 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import shutil
 import signal
 import glob
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from catboxpy.catbox import CatboxClient
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -501,18 +501,15 @@ class YouTubeDownloader(QMainWindow):
         # Clean up leftover files from previous self-updates
         self._cleanup_old_updates()
 
-        # Check dependencies once at startup
-        self.dependencies_ok = self.check_dependencies()
-        if not self.dependencies_ok:
-            logger.warning("Dependencies check failed at startup")
-
-        # Detect hardware encoder
-        self.hw_encoder = self._detect_hw_encoder()
-
         # Thread pool for background tasks
         self.thread_pool = ThreadPoolExecutor(
             max_workers=MAX_WORKER_THREADS, thread_name_prefix="ytdl_worker"
         )
+
+        # Check dependencies and detect HW encoder in background (avoid startup freeze)
+        self.dependencies_ok = True  # assume ok until check completes
+        self.hw_encoder = None
+        self.thread_pool.submit(self._init_dependencies_async)
 
         # Thread safety locks
         self.preview_lock = threading.Lock()
@@ -625,6 +622,12 @@ class YouTubeDownloader(QMainWindow):
         self._preview_debounce_timer = QTimer(self)
         self._preview_debounce_timer.setSingleShot(True)
         self._preview_debounce_timer.setInterval(PREVIEW_DEBOUNCE_MS)
+
+        # File size fetch debounce timer
+        self._size_fetch_timer = QTimer(self)
+        self._size_fetch_timer.setSingleShot(True)
+        self._size_fetch_timer.setInterval(1000)
+        self._size_fetch_timer.timeout.connect(self._auto_fetch_file_size)
 
         # Check for updates on startup if enabled
         if self._load_auto_check_updates_setting():
@@ -1751,7 +1754,6 @@ class YouTubeDownloader(QMainWindow):
         widget_data = self.clipboard_url_widgets.get(url)
         if widget_data:
             status_label = widget_data.get("status_label")
-            status_text = widget_data.get("status_text")
             colors = {
                 "pending": "gray",
                 "downloading": "#ff8c00",
@@ -1763,8 +1765,6 @@ class YouTubeDownloader(QMainWindow):
                     f"background: {colors.get(status, 'gray')}; "
                     f"border-radius: 6px; border: none;"
                 )
-            if status_text:
-                status_text.setText(status.capitalize())
 
     def _do_add_url_to_list(self, url: str):
         """Add a URL to the clipboard list (called on GUI thread via signal)."""
@@ -1922,10 +1922,7 @@ class YouTubeDownloader(QMainWindow):
             for url_data in self.persisted_clipboard_urls:
                 url = url_data.get("url", "")
                 status = url_data.get("status", "pending")
-                with self.clipboard_lock:
-                    url_exists = url and url not in [
-                        item["url"] for item in self.clipboard_url_list
-                    ]
+                url_exists = url and url not in self.clipboard_url_widgets
                 if url_exists:
                     self._add_url_to_clipboard_list(url)
                     if status == "failed":
@@ -2142,6 +2139,13 @@ class YouTubeDownloader(QMainWindow):
                 logger.info(f"Hardware encoder {encoder} probe failed: {e}")
         logger.info("No hardware encoder found, using libx264")
         return None
+
+    def _init_dependencies_async(self):
+        """Check dependencies and detect HW encoder in background thread."""
+        self.dependencies_ok = self.check_dependencies()
+        if not self.dependencies_ok:
+            logger.warning("Dependencies check failed at startup")
+        self.hw_encoder = self._detect_hw_encoder()
 
     def _init_temp_directory(self):
         """Initialize temp directory and clean up orphaned ones from previous crashes."""
@@ -2872,22 +2876,18 @@ class YouTubeDownloader(QMainWindow):
                 for item in self.clipboard_url_list
                 if item["status"] in ["completed", "failed"]
             )
-        self.clipboard_total_label.setText(f"Completed: {completed}/{total} videos")
+        self.sig_clipboard_total.emit(f"Completed: {completed}/{total} videos")
 
     def update_clipboard_progress(self, value):
-        """Update clipboard mode progress bar."""
+        """Update clipboard mode progress bar (thread-safe via signal)."""
         try:
-            value = float(value)
-            value = max(0, min(100, value))
-            self.clipboard_progress.setValue(int(value))
-            self.clipboard_progress_label.setText(f"{value:.1f}%")
+            self.sig_clipboard_progress.emit(max(0.0, min(100.0, float(value))))
         except (ValueError, TypeError) as e:
             logger.warning(f"Invalid progress value: {value} - {e}")
 
     def update_clipboard_status(self, message, color):
-        """Update clipboard mode status label."""
-        self.clipboard_status_label.setText(message)
-        self.clipboard_status_label.setStyleSheet(f"color: {color};")
+        """Update clipboard mode status label (thread-safe via signal)."""
+        self.sig_clipboard_status.emit(str(message), str(color))
 
     def change_clipboard_path(self):
         """Change clipboard mode download path."""
@@ -3043,8 +3043,13 @@ class YouTubeDownloader(QMainWindow):
             if self.is_local_file(url):
                 return self._fetch_local_file_duration(url)
 
-            def _fetch_duration():
-                cmd = [self.ytdlp_path, "--get-duration", url]
+            def _fetch_metadata():
+                cmd = [
+                    self.ytdlp_path,
+                    "--print",
+                    "%(duration_string)s\n%(title)s",
+                    url,
+                ]
                 return subprocess.run(
                     cmd,
                     capture_output=True,
@@ -3054,23 +3059,11 @@ class YouTubeDownloader(QMainWindow):
                     **_subprocess_kwargs,
                 )
 
-            result = self.retry_network_operation(_fetch_duration, "Fetch duration")
-
-            def _fetch_title():
-                cmd = [self.ytdlp_path, "--get-title", url]
-                return subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=METADATA_FETCH_TIMEOUT,
-                    **_subprocess_kwargs,
-                )
-
-            title_result = self.retry_network_operation(_fetch_title, "Fetch title")
+            result = self.retry_network_operation(_fetch_metadata, "Fetch metadata")
 
             if result.returncode == 0:
-                duration_str = result.stdout.strip()
+                lines = result.stdout.strip().splitlines()
+                duration_str = lines[0] if lines else ""
                 parts = duration_str.split(":")
                 try:
                     if len(parts) == 1:
@@ -3117,14 +3110,15 @@ class YouTubeDownloader(QMainWindow):
                     raise ValueError(f"Invalid duration format: {duration_str} ({e})")
 
                 video_title = None
-                if title_result and title_result.returncode == 0:
-                    video_title = title_result.stdout.strip()
+                if len(lines) >= 2 and lines[1].strip():
+                    video_title = lines[1].strip()
                     self.video_title = video_title
                     logger.info(f"Video title: {video_title}")
 
                 self._safe_after(0, lambda: self._update_duration_ui(video_title))
 
-                self._fetch_file_size(url)
+                # Dispatch to GUI thread so widget reads in _fetch_file_size are safe
+                self._safe_after(0, lambda u=url: self._fetch_file_size(u))
 
                 self.update_status("Duration fetched successfully", "green")
                 logger.info(
@@ -3197,11 +3191,19 @@ class YouTubeDownloader(QMainWindow):
             self.video_info_label.setText(f"File: {video_title}")
             self.video_info_label.setStyleSheet("color: green;")
 
-    def _fetch_file_size(self, url):
+    def _auto_fetch_file_size(self):
+        """Called by debounce timer on GUI thread — reads URL and dispatches fetch."""
+        url = self.url_entry.text().strip()
+        if url:
+            self._fetch_file_size(url)
+
+    def _fetch_file_size(self, url, quality=None, audio_only=None):
         """Fetch estimated file size for the video (runs in background thread)."""
-        # Capture quality on GUI thread before submitting to worker
-        _quality = self.quality_combo.currentText()
-        _audio_only = self.audio_only_check.isChecked()
+        # Use provided values (thread-safe) or read from widgets (GUI thread only)
+        _quality = quality if quality is not None else self.quality_combo.currentText()
+        _audio_only = (
+            audio_only if audio_only is not None else self.audio_only_check.isChecked()
+        )
 
         def _fetch():
             try:
@@ -3438,20 +3440,10 @@ class YouTubeDownloader(QMainWindow):
 
     def on_start_slider_change(self, value):
         """Handle start slider value changed."""
-        end_val = self.end_slider.value()
-        if value >= end_val:
-            self.end_slider.blockSignals(True)
-            self.end_slider.setValue(min(value + 1, self.video_duration))
-            self.end_slider.blockSignals(False)
         self.on_slider_change()
 
     def on_end_slider_change(self, value):
         """Handle end slider value changed."""
-        start_val = self.start_slider.value()
-        if value <= start_val:
-            self.start_slider.blockSignals(True)
-            self.start_slider.setValue(max(value - 1, 0))
-            self.start_slider.blockSignals(False)
         self.on_slider_change()
 
     def hms_to_seconds(self, hms_str):
@@ -3462,7 +3454,7 @@ class YouTubeDownloader(QMainWindow):
                 return None
             hours, minutes, seconds = map(int, parts)
             if hours < 0 or not (0 <= minutes <= 59) or not (0 <= seconds <= 59):
-                return 0
+                return None
             return hours * 3600 + minutes * 60 + seconds
         except (ValueError, AttributeError):
             return None
@@ -4073,17 +4065,6 @@ class YouTubeDownloader(QMainWindow):
             # Auto-fetch file size estimate for valid YouTube URLs (debounced)
             is_valid, _ = self.validate_youtube_url(input_text)
             if is_valid:
-                if (
-                    hasattr(self, "_size_fetch_timer")
-                    and self._size_fetch_timer is not None
-                ):
-                    self._size_fetch_timer.stop()
-                self._size_fetch_timer = QTimer(self)
-                self._size_fetch_timer.setSingleShot(True)
-                self._size_fetch_timer.setInterval(1000)
-                self._size_fetch_timer.timeout.connect(
-                    lambda: self._fetch_file_size(input_text)
-                )
                 self._size_fetch_timer.start()
 
     def is_local_file(self, input_text):
@@ -4386,7 +4367,7 @@ class YouTubeDownloader(QMainWindow):
             safe_dirs = [
                 home_dir,
                 Path("/tmp"),
-                Path(os.path.expandvars("$TEMP"))
+                Path(os.environ.get("TEMP", "/tmp"))
                 if sys.platform == "win32"
                 else Path("/tmp"),
             ]
@@ -4408,7 +4389,7 @@ class YouTubeDownloader(QMainWindow):
                     "Download path must be within home directory or temp folder",
                 )
 
-            return (True, normalized, None)
+            return (True, str(normalized_path.resolve()), None)
         except Exception as e:
             return (False, None, f"Path validation error: {str(e)}")
 
@@ -4728,6 +4709,8 @@ class YouTubeDownloader(QMainWindow):
         except Exception as e:
             logger.error(f"Error cleaning up temp files: {e}")
 
+    _upload_save_count = 0
+
     def save_upload_link(self, link, filename=""):
         """Save uploaded video link to history file."""
         try:
@@ -4735,15 +4718,18 @@ class YouTubeDownloader(QMainWindow):
             with open(UPLOAD_HISTORY_FILE, "a", encoding="utf-8") as f:
                 timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
                 f.write(f"{timestamp} | {filename} | {link}\n")
-            try:
-                with open(UPLOAD_HISTORY_FILE, "r", encoding="utf-8") as f:
-                    lines = f.readlines()
-                if len(lines) > 1000:
-                    with open(UPLOAD_HISTORY_FILE, "w", encoding="utf-8") as f:
-                        f.writelines(lines[-500:])
-                    logger.info("Trimmed upload history to last 500 entries")
-            except Exception as trim_err:
-                logger.error(f"Error trimming upload history: {trim_err}")
+            self._upload_save_count += 1
+            if self._upload_save_count >= 100:
+                self._upload_save_count = 0
+                try:
+                    with open(UPLOAD_HISTORY_FILE, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                    if len(lines) > 1000:
+                        with open(UPLOAD_HISTORY_FILE, "w", encoding="utf-8") as f:
+                            f.writelines(lines[-500:])
+                        logger.info("Trimmed upload history to last 500 entries")
+                except Exception as trim_err:
+                    logger.error(f"Error trimming upload history: {trim_err}")
             logger.info(f"Saved upload link to history: {link}")
         except Exception as e:
             logger.error(f"Error saving upload link: {e}")
@@ -5139,6 +5125,7 @@ class YouTubeDownloader(QMainWindow):
                 capture_output=True,
                 encoding="utf-8",
                 errors="replace",
+                timeout=DOWNLOAD_PROGRESS_TIMEOUT_TRIM,
                 **_subprocess_kwargs,
             )
             if merge_result.returncode != 0:
@@ -5283,7 +5270,7 @@ class YouTubeDownloader(QMainWindow):
         # and seeking info to stderr while working, even before producing
         # any progress output on stdout. This prevents the download monitor
         # from killing ffmpeg during long seeks on HTTP streams.
-        stderr_lines = []
+        stderr_lines = deque(maxlen=200)
         has_stdout_progress = threading.Event()
 
         def _drain_stderr():
@@ -5303,10 +5290,9 @@ class YouTubeDownloader(QMainWindow):
         stderr_thread.start()
 
         for line in self.current_process.stdout:
-            with self.download_lock:
-                if not self.is_downloading:
-                    self.safe_process_cleanup(self.current_process)
-                    return False
+            if not self.is_downloading:
+                self.safe_process_cleanup(self.current_process)
+                return False
             if "out_time_ms=" in line:
                 has_stdout_progress.set()
                 try:
@@ -5320,15 +5306,16 @@ class YouTubeDownloader(QMainWindow):
                     pass
             self.last_progress_time = time.time()
 
-        self.current_process.wait()
+        proc = self.current_process
+        proc.wait()
         stderr_thread.join(timeout=5)
 
-        if self.current_process.returncode != 0:
+        if proc.returncode != 0:
             stderr_text = "".join(stderr_lines)
             logger.error(
-                f"{status_prefix} failed (rc {self.current_process.returncode}): {stderr_text}"
+                f"{status_prefix} failed (rc {proc.returncode}): {stderr_text}"
             )
-            self.safe_process_cleanup(self.current_process)
+            self.safe_process_cleanup(proc)
             return False
         return True
 
@@ -5669,6 +5656,9 @@ class YouTubeDownloader(QMainWindow):
         """
         keep_below_10mb = False
         temp_dir = None
+        cmd = []
+        start_hms_file = ""
+        end_hms_file = ""
         try:
             # Route to local file handler if needed
             if self.is_local_file(url):
@@ -5996,7 +5986,8 @@ class YouTubeDownloader(QMainWindow):
                         "mp4",
                     ]
 
-                    cmd.extend(self._get_speed_limit_args())
+                    _sl = ui_state["speed_limit"] if ui_state else None
+                    cmd.extend(self._get_speed_limit_args(speed_limit_str=_sl))
                     if is_playlist_url:
                         cmd.append("--no-playlist")
                     cmd.extend(
@@ -6318,7 +6309,7 @@ class YouTubeDownloader(QMainWindow):
                 base_name = custom_name
             else:
                 input_path = Path(filepath)
-                base_name = input_path.stem
+                base_name = self.sanitize_filename(input_path.stem) or input_path.stem
 
             if trim_enabled:
                 start_hms = self.seconds_to_hms(start_time).replace(":", "-")
@@ -6448,6 +6439,20 @@ class YouTubeDownloader(QMainWindow):
                 self.video_duration if not trim_enabled else (end_time - start_time)
             )
 
+            # Drain stderr in background to prevent pipe deadlock
+            stderr_lines = []
+
+            def _drain_stderr():
+                try:
+                    for line in self.current_process.stderr:
+                        stderr_lines.append(line)
+                        self.last_progress_time = time.time()
+                except (ValueError, OSError):
+                    pass
+
+            stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+            stderr_thread.start()
+
             for line in self.current_process.stdout:
                 if not self.is_downloading:
                     break
@@ -6466,6 +6471,7 @@ class YouTubeDownloader(QMainWindow):
                         pass
 
             self.current_process.wait()
+            stderr_thread.join(timeout=5)
 
             if self.current_process.returncode == 0 and self.is_downloading:
                 self.update_progress(100)
@@ -6474,11 +6480,7 @@ class YouTubeDownloader(QMainWindow):
                 self._enable_upload_button(output_file)
 
             elif self.is_downloading:
-                stderr = (
-                    self.current_process.stderr.read()
-                    if self.current_process.stderr
-                    else ""
-                )
+                stderr = "".join(stderr_lines)
                 self.update_status("Processing failed", "red")
                 logger.error(f"ffmpeg failed: {stderr}")
 
@@ -6858,6 +6860,26 @@ class YouTubeDownloader(QMainWindow):
                 "error", "Update Failed", f"Failed to download update:\n{e}"
             )
 
+    def _get_expected_sha256(self, release_data, asset_name, headers):
+        """Fetch SHA256SUMS from release and return expected hash for asset_name."""
+        import urllib.request
+
+        tag_name = release_data.get("tag_name", "")
+        sha_url = (
+            f"https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/SHA256SUMS"
+        )
+        try:
+            req = urllib.request.Request(sha_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=30) as response:
+                sha256sums = response.read().decode("utf-8")
+            for line in sha256sums.strip().splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] == asset_name:
+                    return parts[0].lower()
+        except Exception as e:
+            logger.warning(f"Could not fetch SHA256SUMS: {e}")
+        return None
+
     def _apply_update_frozen(self, release_data):
         """Self-update a frozen portable exe via download + rename-and-replace."""
         import urllib.request
@@ -6875,9 +6897,13 @@ class YouTubeDownloader(QMainWindow):
             exe_path = Path(sys.executable).resolve()
 
             if sys.platform == "win32":
-                self._apply_update_frozen_windows(download_url, headers, exe_path)
+                self._apply_update_frozen_windows(
+                    download_url, headers, exe_path, release_data
+                )
             else:
-                self._apply_update_frozen_linux(download_url, headers, exe_path)
+                self._apply_update_frozen_linux(
+                    download_url, headers, exe_path, release_data
+                )
 
         except Exception as e:
             self._updating = False
@@ -6886,7 +6912,9 @@ class YouTubeDownloader(QMainWindow):
                 "error", "Update Failed", f"Failed to download update:\n{e}"
             )
 
-    def _apply_update_frozen_windows(self, download_url, headers, exe_path):
+    def _apply_update_frozen_windows(
+        self, download_url, headers, exe_path, release_data=None
+    ):
         """Windows portable exe update: rename-dance with .bat trampoline fallback."""
         import urllib.request
 
@@ -6944,33 +6972,49 @@ class YouTubeDownloader(QMainWindow):
         request = urllib.request.Request(download_url, headers=headers)
         with urllib.request.urlopen(request, timeout=300) as response:
             total = int(response.headers.get("Content-Length", 0))
-            chunks = []
             downloaded = 0
-            while True:
-                chunk = response.read(256 * 1024)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                downloaded += len(chunk)
-                if total > 0:
-                    pct = int(downloaded / total * 100)
-                    mb = downloaded / (1024 * 1024)
-                    total_mb = total / (1024 * 1024)
-                    self._safe_after(
-                        0,
-                        lambda p=pct, m=mb, t=total_mb: _update_progress_dialog(
-                            p, m, t
-                        ),
-                    )
-            content = b"".join(chunks)
+            with open(new_exe, "wb") as f:
+                while True:
+                    chunk = response.read(256 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        pct = int(downloaded / total * 100)
+                        mb = downloaded / (1024 * 1024)
+                        total_mb = total / (1024 * 1024)
+                        self._safe_after(
+                            0,
+                            lambda p=pct, m=mb, t=total_mb: _update_progress_dialog(
+                                p, m, t
+                            ),
+                        )
 
         self._safe_after(0, _close_progress_dialog)
 
-        if len(content) < 1024:
+        if downloaded < 1024:
+            new_exe.unlink(missing_ok=True)
             raise RuntimeError("Downloaded file is too small — likely corrupted.")
 
-        new_exe.write_bytes(content)
-        logger.info(f"Downloaded new exe: {new_exe} ({len(content):,} bytes)")
+        logger.info(f"Downloaded new exe: {new_exe} ({downloaded:,} bytes)")
+
+        # Verify SHA-256 if SHA256SUMS is available in the release
+        if release_data:
+            expected_hash = self._get_expected_sha256(
+                release_data, "YTDownloader.exe", headers
+            )
+            if expected_hash:
+                with open(new_exe, "rb") as f:
+                    actual_hash = hashlib.sha256(f.read()).hexdigest().lower()
+                if actual_hash != expected_hash:
+                    new_exe.unlink(missing_ok=True)
+                    raise RuntimeError(
+                        f"SHA-256 verification failed for YTDownloader.exe!\n"
+                        f"Expected: {expected_hash[:16]}...\n"
+                        f"Got: {actual_hash[:16]}..."
+                    )
+                logger.info("SHA-256 verification passed for YTDownloader.exe")
 
         # Rename dance: running.exe -> .old, .new -> running.exe
         try:
@@ -7030,7 +7074,9 @@ class YouTubeDownloader(QMainWindow):
                 "Updated to the latest version.\n\nPlease close and reopen the app to use it.",
             )
 
-    def _apply_update_frozen_linux(self, download_url, headers, exe_path):
+    def _apply_update_frozen_linux(
+        self, download_url, headers, exe_path, release_data=None
+    ):
         """Linux portable binary update: download tar.gz, extract, replace in place."""
         import urllib.request
 
@@ -7073,37 +7119,60 @@ class YouTubeDownloader(QMainWindow):
 
         self._safe_after(0, _create_progress_dialog)
 
+        tar_tmp = tempfile.NamedTemporaryFile(
+            delete=False, suffix=".tar.gz", dir=str(exe_path.parent)
+        )
+        tar_tmp_path = tar_tmp.name
+        tar_tmp.close()
+
         request = urllib.request.Request(download_url, headers=headers)
         with urllib.request.urlopen(request, timeout=300) as response:
             total = int(response.headers.get("Content-Length", 0))
-            chunks = []
             downloaded = 0
-            while True:
-                chunk = response.read(256 * 1024)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                downloaded += len(chunk)
-                if total > 0:
-                    pct = int(downloaded / total * 100)
-                    mb = downloaded / (1024 * 1024)
-                    total_mb = total / (1024 * 1024)
-                    self._safe_after(
-                        0,
-                        lambda p=pct, m=mb, t=total_mb: _update_progress_dialog(
-                            p, m, t
-                        ),
-                    )
-            content = b"".join(chunks)
+            with open(tar_tmp_path, "wb") as f:
+                while True:
+                    chunk = response.read(256 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total > 0:
+                        pct = int(downloaded / total * 100)
+                        mb = downloaded / (1024 * 1024)
+                        total_mb = total / (1024 * 1024)
+                        self._safe_after(
+                            0,
+                            lambda p=pct, m=mb, t=total_mb: _update_progress_dialog(
+                                p, m, t
+                            ),
+                        )
 
         self._safe_after(0, _close_progress_dialog)
 
-        if len(content) < 1024:
+        if downloaded < 1024:
+            os.unlink(tar_tmp_path)
             raise RuntimeError("Downloaded file is too small — likely corrupted.")
 
-        logger.info(f"Downloaded tar.gz ({len(content):,} bytes), extracting...")
+        logger.info(f"Downloaded tar.gz ({downloaded:,} bytes), extracting...")
 
-        with tarfile.open(fileobj=io.BytesIO(content), mode="r:gz") as tar:
+        # Verify SHA-256 if SHA256SUMS is available in the release
+        if release_data:
+            expected_hash = self._get_expected_sha256(
+                release_data, "YTDownloader-Linux.tar.gz", headers
+            )
+            if expected_hash:
+                with open(tar_tmp_path, "rb") as f:
+                    actual_hash = hashlib.sha256(f.read()).hexdigest().lower()
+                if actual_hash != expected_hash:
+                    os.unlink(tar_tmp_path)
+                    raise RuntimeError(
+                        f"SHA-256 verification failed for YTDownloader-Linux.tar.gz!\n"
+                        f"Expected: {expected_hash[:16]}...\n"
+                        f"Got: {actual_hash[:16]}..."
+                    )
+                logger.info("SHA-256 verification passed for Linux tar.gz")
+
+        with tarfile.open(tar_tmp_path, mode="r:gz") as tar:
             # Find the binary inside the archive
             binary_member = None
             for member in tar.getmembers():
@@ -7127,6 +7196,7 @@ class YouTubeDownloader(QMainWindow):
 
         shutil.move(str(tmp_path), str(exe_path))
         os.chmod(str(exe_path), 0o755)
+        os.unlink(tar_tmp_path)
         logger.info(f"Replaced binary: {exe_path}")
 
         # Spawn new binary and shut down
@@ -7278,6 +7348,7 @@ class YouTubeDownloader(QMainWindow):
         """Download latest yt-dlp binary from GitHub releases with SHA256 verification."""
         import urllib.request
 
+        tmp_path = None
         try:
             logger.info("Downloading latest yt-dlp binary...")
             self.update_status("Updating yt-dlp...", "blue")
@@ -7365,7 +7436,7 @@ class YouTubeDownloader(QMainWindow):
             )
 
         except Exception as e:
-            if "tmp_path" in locals() and os.path.exists(tmp_path):
+            if tmp_path and os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
                 except OSError:

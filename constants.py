@@ -83,7 +83,7 @@ GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}"
 # File paths for persistence
 if sys.platform == "win32":
     APP_DATA_DIR = (
-        Path(os.environ.get("LOCALAPPDATA", Path.home())) / "YoutubeDownloader"
+        Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "YoutubeDownloader"
     )
 else:
     APP_DATA_DIR = (
