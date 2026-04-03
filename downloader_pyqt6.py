@@ -4808,8 +4808,185 @@ class YouTubeDownloader(QMainWindow):
         return cmd
 
     # ===================================================================
-    #  Trimmed download via yt-dlp --download-sections + local ffmpeg trim
+    #  Trimmed download via byte-range seeking + local ffmpeg trim
     # ===================================================================
+
+    _TRIM_PADDING_BEFORE = 30  # seconds before start for keyframe alignment
+    _TRIM_PADDING_AFTER = 10  # seconds after end for safety
+
+    @staticmethod
+    def _parse_sidx(data):
+        """Parse SIDX box from fMP4 header data.
+
+        Returns (init_end, segments) where segments is a list of
+        (byte_offset, byte_size, start_time_sec, duration_sec), or None.
+        """
+        import struct
+
+        pos = 0
+        while pos < len(data) - 8:
+            box_size = struct.unpack(">I", data[pos : pos + 4])[0]
+            box_type = data[pos + 4 : pos + 8]
+            if box_size < 8:
+                break
+            if box_type == b"sidx":
+                sidx_end = pos + box_size
+                p = pos + 8  # skip size + type
+                version = data[p]
+                p += 4  # version(1) + flags(3)
+                p += 4  # reference_id
+                timescale = struct.unpack(">I", data[p : p + 4])[0]
+                p += 4
+                if version == 0:
+                    p += 4  # earliest_presentation_time
+                    first_offset = struct.unpack(">I", data[p : p + 4])[0]
+                    p += 4
+                else:
+                    p += 8  # earliest_presentation_time (64-bit)
+                    first_offset = struct.unpack(">Q", data[p : p + 8])[0]
+                    p += 8
+                p += 2  # reserved
+                ref_count = struct.unpack(">H", data[p : p + 2])[0]
+                p += 2
+
+                seg_offset = sidx_end + first_offset
+                cur_time = 0.0
+                segments = []
+                for _ in range(ref_count):
+                    if p + 12 > len(data):
+                        break
+                    ref_info = struct.unpack(">I", data[p : p + 4])[0]
+                    ref_size = ref_info & 0x7FFFFFFF
+                    seg_dur = struct.unpack(">I", data[p + 4 : p + 8])[0]
+                    p += 12
+                    dur_sec = seg_dur / timescale
+                    segments.append((seg_offset, ref_size, cur_time, dur_sec))
+                    seg_offset += ref_size
+                    cur_time += dur_sec
+
+                return sidx_end, segments
+            pos += box_size
+        return None
+
+    def _get_stream_urls(self, url, format_spec):
+        """Get direct video and audio stream URLs using yt-dlp -g."""
+        cmd = [self.ytdlp_path, "-g", "-f", format_spec, url]
+        logger.info(f"Fetching stream URLs: {' '.join(cmd)}")
+        self.update_status("Fetching stream URLs...", "blue")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=METADATA_FETCH_TIMEOUT,
+            **_subprocess_kwargs,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Failed to get stream URLs: {result.stderr.strip()}")
+        urls = result.stdout.strip().split("\n")
+        return (urls[0], urls[1]) if len(urls) >= 2 else (urls[0], None)
+
+    def _http_range_read(self, url, start, end):
+        """Download a byte range from a URL. Returns bytes."""
+        req = urllib.request.Request(url)
+        req.add_header("Range", f"bytes={start}-{end}")
+        return urllib.request.urlopen(req, timeout=30).read()
+
+    def _download_stream_segment(
+        self, stream_url, start_time, end_time, output_path, label, progress_base=0
+    ):
+        """Download init + relevant byte range from a YouTube stream.
+
+        For fMP4: parses SIDX for exact segment boundaries.
+        For webm/other: estimates from clen/dur with generous padding.
+        Returns the timestamp (seconds) where the downloaded data starts.
+        """
+        params = parse_qs(urlparse(stream_url).query)
+        clen = int(params.get("clen", ["0"])[0])
+        dur = float(params.get("dur", ["0"])[0])
+        if not clen or dur <= 0:
+            raise RuntimeError(f"Missing clen/dur in {label} URL")
+
+        pad_before = self._TRIM_PADDING_BEFORE
+        pad_after = self._TRIM_PADDING_AFTER
+        target_start = max(0, start_time - pad_before)
+        target_end = min(dur, end_time + pad_after)
+
+        # Download header (enough for init + SIDX/Cues)
+        header_size = min(clen, 512 * 1024)  # 512KB
+        self.update_status(f"Fetching {label} index...", "blue")
+        self.last_progress_time = time.time()
+        header_data = self._http_range_read(stream_url, 0, header_size - 1)
+
+        # Try SIDX parsing for precise segment boundaries
+        sidx_result = self._parse_sidx(header_data)
+        if sidx_result:
+            init_end, segments = sidx_result
+            init_data = header_data[:init_end]
+
+            # Find segments covering our padded time range
+            first_idx = last_idx = None
+            for i, (_, _, seg_t, seg_d) in enumerate(segments):
+                if first_idx is None and seg_t + seg_d > target_start:
+                    first_idx = i
+                if seg_t < target_end:
+                    last_idx = i
+
+            if first_idx is not None and last_idx is not None:
+                data_start = segments[first_idx][0]
+                last = segments[last_idx]
+                data_end = last[0] + last[1] - 1
+                actual_start = segments[first_idx][2]
+                logger.info(
+                    f"{label} SIDX: segments {first_idx}-{last_idx} of "
+                    f"{len(segments)}, bytes {data_start}-{data_end} "
+                    f"({(data_end - data_start + 1) / 1024 / 1024:.1f} MB), "
+                    f"time {actual_start:.1f}s-{last[2] + last[3]:.1f}s"
+                )
+            else:
+                sidx_result = None  # no matching segments, fall back
+
+        if not sidx_result:
+            # Fallback: estimate byte positions from bitrate
+            init_data = header_data
+            bps = clen / dur
+            data_start = max(len(header_data), int(target_start * bps))
+            data_end = min(clen - 1, int(target_end * bps))
+            actual_start = target_start
+            logger.info(
+                f"{label} estimated: bytes {data_start}-{data_end} "
+                f"({(data_end - data_start + 1) / 1024 / 1024:.1f} MB)"
+            )
+
+        # Download data range with progress
+        total_data = data_end - data_start + 1
+        self.update_status(f"Downloading {label}...", "blue")
+        req = urllib.request.Request(stream_url)
+        req.add_header("Range", f"bytes={data_start}-{data_end}")
+        resp = urllib.request.urlopen(req, timeout=30)
+
+        with open(output_path, "wb") as f:
+            f.write(init_data)
+            downloaded = 0
+            while True:
+                if not self.is_downloading:
+                    return actual_start
+                chunk = resp.read(256 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+                pct = min(100, downloaded * 100 / total_data)
+                self.update_progress(progress_base + pct * 0.45)
+                self.update_status(
+                    f"Downloading {label}... {downloaded / 1024 / 1024:.1f} MB",
+                    "blue",
+                )
+                self.last_progress_time = time.time()
+
+        file_size = len(init_data) + downloaded
+        logger.info(f"{label} downloaded: {file_size / 1024 / 1024:.1f} MB")
+        return actual_start
 
     def _download_trimmed_via_ffmpeg(
         self,
@@ -4822,26 +4999,13 @@ class YouTubeDownloader(QMainWindow):
         encode_args=None,
         copy_codec=False,
     ):
-        """Download a trimmed segment: yt-dlp grabs the section, ffmpeg trims locally.
+        """Download a trimmed segment by fetching only the relevant byte ranges.
 
-        Step 1: yt-dlp --download-sections downloads only the DASH segments
-                covering the requested time range (no --concurrent-fragments
-                to avoid stalling on long videos).
-        Step 2: ffmpeg does a precise trim on the local file (instant).
-
-        Args:
-            url: YouTube URL.
-            format_spec: yt-dlp format string (e.g. "bestvideo[height<=480]+bestaudio").
-            start_time: Start time in seconds.
-            end_time: End time in seconds.
-            output_path: Output file path.
-            volume_multiplier: Audio volume multiplier.
-            encode_args: List of ffmpeg encoder args (e.g. ["-c:v", "libx264", ...]).
-                         Ignored if copy_codec is True.
-            copy_codec: If True, copy streams without re-encoding (for temp files).
-
-        Returns:
-            bool: True on success, False on failure/cancellation.
+        Step 1: yt-dlp -g to get direct stream URLs.
+        Step 2: Download init segment + relevant data via HTTP Range requests
+                (uses SIDX for precise segment boundaries on fMP4).
+        Step 3: Merge video+audio with ffmpeg -c copy.
+        Step 4: Precise local trim with ffmpeg.
         """
         temp_dir = tempfile.mkdtemp(prefix="ytdl_trim_")
         try:
@@ -4872,83 +5036,72 @@ class YouTubeDownloader(QMainWindow):
         temp_dir,
     ):
         """Inner implementation for trimmed downloads."""
-        start_hms = self.seconds_to_hms(start_time)
-        end_hms = self.seconds_to_hms(end_time)
+        video_url, audio_url = self._get_stream_urls(url, format_spec)
         duration = end_time - start_time
-        temp_output = os.path.join(temp_dir, "%(title)s.%(ext)s")
 
-        # Step 1: yt-dlp downloads only the DASH segments for this range.
-        # No --concurrent-fragments: that flag causes stalls on long videos
-        # because it changes the DASH download strategy.
-        cmd = [
-            self.ytdlp_path,
-            "-f",
-            format_spec,
-            "--merge-output-format",
-            "mp4",
-            "--download-sections",
-            f"*{start_hms}-{end_hms}",
-            "--newline",
-            "--progress",
-            "-o",
-            temp_output,
-            url,
-        ]
-        logger.info(f"Trim download (step 1): {' '.join(cmd)}")
-        self.update_status("Downloading segment...", "blue")
+        # Download video stream segment
+        video_temp = os.path.join(temp_dir, "video.mp4")
+        v_start = self._download_stream_segment(
+            video_url, start_time, end_time, video_temp, "video", progress_base=0
+        )
+        if not self.is_downloading:
+            return False
 
-        with self.download_lock:
-            self.current_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+        # Download audio stream segment (if separate)
+        source_file = video_temp
+        if audio_url:
+            audio_ext = "webm" if "mime=audio%2Fwebm" in audio_url else "m4a"
+            audio_temp = os.path.join(temp_dir, f"audio.{audio_ext}")
+            self._download_stream_segment(
+                audio_url,
+                start_time,
+                end_time,
+                audio_temp,
+                "audio",
+                progress_base=45,
+            )
+            if not self.is_downloading:
+                return False
+
+            # Merge video + audio
+            merged = os.path.join(temp_dir, "merged.mp4")
+            self.update_status("Merging streams...", "blue")
+            merge_cmd = [
+                self.ffmpeg_path,
+                "-y",
+                "-i",
+                video_temp,
+                "-i",
+                audio_temp,
+                "-c",
+                "copy",
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                merged,
+            ]
+            logger.info(f"Merging: {' '.join(merge_cmd)}")
+            merge_result = subprocess.run(
+                merge_cmd,
+                capture_output=True,
                 encoding="utf-8",
                 errors="replace",
-                bufsize=1,
                 **_subprocess_kwargs,
             )
-
-        for line in self.current_process.stdout:
-            if not self.is_downloading:
-                self.safe_process_cleanup(self.current_process)
+            if merge_result.returncode != 0:
+                logger.error(f"Merge failed: {merge_result.stderr}")
                 return False
-            if "[download]" in line or "Downloading" in line:
-                self._download_has_progress = True
-                progress_match = PROGRESS_REGEX.search(line)
-                if progress_match:
-                    progress = float(progress_match.group(1))
-                    self.update_progress(progress * 0.9)
-                    self.update_status(
-                        f"Downloading segment... {progress:.1f}%", "blue"
-                    )
-                    self.last_progress_time = time.time()
-            elif "[Merger]" in line or "Merging" in line:
-                self.update_status("Merging streams...", "blue")
-                self.last_progress_time = time.time()
-            elif "[ffmpeg]" in line:
-                self.update_status("Processing...", "blue")
-                self.last_progress_time = time.time()
+            source_file = merged
 
-        self.current_process.wait()
-        if self.current_process.returncode != 0 or not self.is_downloading:
-            logger.error(
-                f"Trim download step 1 failed (rc {self.current_process.returncode})"
-            )
-            return False
-
-        # Find the downloaded temp file
-        temp_files = glob.glob(os.path.join(temp_dir, "*.mp4"))
-        if not temp_files:
-            logger.error("Trim: no temp file found after yt-dlp download")
-            return False
-        temp_file = temp_files[0]
-
-        # Step 2: precise local ffmpeg trim (instant on local file)
+        # Precise trim on local file
+        # Data starts at ~v_start seconds; we want start_time..end_time
+        ss_offset = start_time - v_start
         needs_encode = not copy_codec and (
             encode_args or abs(volume_multiplier - 1.0) >= VOLUME_CHANGE_THRESHOLD
         )
-        ffmpeg_cmd = [self.ffmpeg_path, "-y", "-i", temp_file]
-        ffmpeg_cmd.extend(["-ss", "0", "-t", str(duration)])
+        ffmpeg_cmd = [self.ffmpeg_path, "-y", "-i", source_file]
+        ffmpeg_cmd.extend(["-ss", str(max(0, ss_offset)), "-t", str(duration)])
 
         if needs_encode:
             if encode_args:
@@ -4964,7 +5117,6 @@ class YouTubeDownloader(QMainWindow):
             ffmpeg_cmd.extend(["-c", "copy"])
 
         ffmpeg_cmd.extend(["-progress", "pipe:1", output_path])
-
         return self._run_ffmpeg_with_progress(ffmpeg_cmd, duration, "Trimming video")
 
     # ===================================================================
