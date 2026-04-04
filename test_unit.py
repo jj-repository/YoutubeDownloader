@@ -6,6 +6,7 @@ Run with: pytest test_unit.py -v
 Run with coverage: pytest test_unit.py -v --cov=constants --cov=managers
 """
 
+import re
 import struct
 from pathlib import Path
 
@@ -874,27 +875,23 @@ class TestBuildBatchCommands:
 class TestExtractingUrlRegex:
     """Test _EXTRACTING_URL_RE regex for batch output parsing."""
 
-    def test_youtube_video(self):
-        from downloader_pyqt6 import _EXTRACTING_URL_RE
+    _RE = re.compile(r"Extracting URL:\s+(\S+)")
 
+    def test_youtube_video(self):
         line = "[youtube] Extracting URL: https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-        m = _EXTRACTING_URL_RE.search(line)
+        m = self._RE.search(line)
         assert m is not None
         assert m.group(1) == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
     def test_youtube_playlist(self):
-        from downloader_pyqt6 import _EXTRACTING_URL_RE
-
         line = "[youtube:tab] Extracting URL: https://www.youtube.com/playlist?list=PLtest"
-        m = _EXTRACTING_URL_RE.search(line)
+        m = self._RE.search(line)
         assert m is not None
         assert "playlist" in m.group(1)
 
     def test_no_match(self):
-        from downloader_pyqt6 import _EXTRACTING_URL_RE
-
         line = "[download] 45.3% of 10.00MiB"
-        m = _EXTRACTING_URL_RE.search(line)
+        m = self._RE.search(line)
         assert m is None
 
 
