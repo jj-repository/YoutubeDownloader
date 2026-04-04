@@ -14,7 +14,7 @@
 ## Won't Fix
 | Issue | Reason |
 |-------|--------|
-| ~6000-line downloader_pyqt6.py | Works; splitting adds complexity |
+| ~~6000-line downloader_pyqt6.py~~ | Resolved: split into 7 manager modules (2026-04-04) |
 | Hardcoded site patterns | yt-dlp handles detection; patterns are hints |
 | `_find_latest_file` heuristic | Rare edge case, acceptable |
 | No Catbox timeout/cancel | Library limitation |

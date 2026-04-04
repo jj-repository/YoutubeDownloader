@@ -50,6 +50,13 @@ jobs:
       if: matrix.os == 'ubuntu-latest'
       run: |
         wget https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+        # Verify download is a real archive (>10MB)
+        FILE_SIZE=$(stat -c%s ffmpeg-master-latest-linux64-gpl.tar.xz)
+        if [ "$FILE_SIZE" -lt 10000000 ]; then
+          echo "::error::ffmpeg download too small ($FILE_SIZE bytes) — likely corrupted"
+          exit 1
+        fi
+        echo "ffmpeg archive: $FILE_SIZE bytes, SHA256=$(sha256sum ffmpeg-master-latest-linux64-gpl.tar.xz | cut -d' ' -f1)"
         tar -xf ffmpeg-master-latest-linux64-gpl.tar.xz
         mv ffmpeg-master-latest-linux64-gpl/bin/ffmpeg ffmpeg
         mv ffmpeg-master-latest-linux64-gpl/bin/ffprobe ffprobe
@@ -75,6 +82,11 @@ jobs:
       shell: pwsh
       run: |
         Invoke-WebRequest -Uri "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile "ffmpeg.zip"
+        # Verify download is a real archive (>10MB)
+        $size = (Get-Item ffmpeg.zip).Length
+        if ($size -lt 10000000) { throw "ffmpeg download too small ($size bytes) - likely corrupted" }
+        $hash = (Get-FileHash ffmpeg.zip -Algorithm SHA256).Hash
+        Write-Host "ffmpeg archive: $size bytes, SHA256=$hash"
         Expand-Archive -Path ffmpeg.zip -DestinationPath .
         Move-Item -Path ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe -Destination ffmpeg.exe
         Move-Item -Path ffmpeg-master-latest-win64-gpl/bin/ffprobe.exe -Destination ffprobe.exe
@@ -126,22 +138,36 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
+      id-token: write  # needed for cosign keyless signing
 
     steps:
+    - name: Checkout code
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
     - name: Download all artifacts
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
 
     - name: Generate SHA256SUMS
       run: |
+        # Binary artifacts
         sha256sum linux-build/YTDownloader-Linux.tar.gz windows-build/YTDownloader.exe | sed 's|.*/||' > SHA256SUMS
+        # Source files (for source-mode self-update verification)
+        sha256sum downloader_pyqt6.py constants.py >> SHA256SUMS
+
+    - name: Sign SHA256SUMS with cosign (keyless)
+      uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3
+    - run: cosign sign-blob --yes SHA256SUMS --output-signature SHA256SUMS.sig --output-certificate SHA256SUMS.pem
 
     - name: Create Release
       uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
       with:
+        generate_release_notes: true
         files: |
           linux-build/YTDownloader-Linux.tar.gz
           windows-build/YTDownloader.exe
           SHA256SUMS
+          SHA256SUMS.sig
+          SHA256SUMS.pem
         body: |
           ## YTDownloader ${{ github.ref_name }}
 

@@ -25,9 +25,7 @@ PROCESS_TERMINATE_TIMEOUT = 3
 TEMP_DIR_MAX_AGE = 3600  # 1 hour
 DOWNLOAD_TIMEOUT = 3600  # 60 minutes max for any download
 DOWNLOAD_PROGRESS_TIMEOUT = 600  # 10 minutes without progress = stalled
-DOWNLOAD_PROGRESS_TIMEOUT_TRIM = (
-    1200  # 20 minutes for trim downloads (ffmpeg seeking/encoding)
-)
+DOWNLOAD_PROGRESS_TIMEOUT_TRIM = 1200  # 20 minutes for trim downloads (ffmpeg seeking/encoding)
 TIMEOUT_CHECK_INTERVAL = 10
 CLIPBOARD_TIMEOUT = 0.5
 METADATA_FETCH_TIMEOUT = 30
@@ -82,12 +80,10 @@ GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}"
 
 # File paths for persistence
 if sys.platform == "win32":
-    APP_DATA_DIR = (
-        Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "YoutubeDownloader"
-    )
+    APP_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "YoutubeDownloader"
 else:
     APP_DATA_DIR = (
-        Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+        Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
         / "youtubedownloader"
     )
 UPLOAD_HISTORY_FILE = APP_DATA_DIR / "upload_history.txt"

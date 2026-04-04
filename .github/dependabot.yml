@@ -5,8 +5,13 @@ updates:
     schedule:
       interval: "weekly"
     groups:
-      all-deps:
+      pyqt:
+        patterns: ["PyQt6*"]
+      yt-dlp:
+        patterns: ["yt-dlp"]
+      other:
         patterns: ["*"]
+        exclude-patterns: ["PyQt6*", "yt-dlp"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

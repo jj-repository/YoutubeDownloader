@@ -5,10 +5,7 @@ import os
 import sys
 import subprocess
 
-# On Windows, prevent subprocess calls from opening visible console windows
-_subprocess_kwargs = {}
-if sys.platform == "win32":
-    _subprocess_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+from managers.utils import _subprocess_kwargs
 
 import threading
 import re
@@ -17,7 +14,7 @@ import logging.handlers
 import json
 import webbrowser
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -25,8 +22,7 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import shutil
 import signal
 import glob
-from collections import OrderedDict, deque
-from catboxpy.catbox import CatboxClient
+from collections import OrderedDict
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
@@ -64,6 +60,14 @@ from PyQt6.QtWidgets import (
 )
 
 # Import from modular components
+from managers import utils
+from managers.encoding import EncodeCallbacks, EncodingService
+from managers.update_manager import UpdateManager
+from managers.clipboard_manager import ClipboardManager
+from managers.download_manager import DownloadManager
+from managers.trimming_manager import TrimmingManager
+from managers.upload_manager import UploadManager
+
 from constants import (
     PREVIEW_WIDTH,
     PREVIEW_HEIGHT,
@@ -129,7 +133,6 @@ except ImportError:
 
 # Additional imports needed by ported business logic
 import hashlib
-import io
 import socket
 import tarfile
 import urllib.error
@@ -156,9 +159,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.handlers.RotatingFileHandler(
-            LOG_FILE, maxBytes=1 * 1024 * 1024, backupCount=0
-        ),
+        logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=1 * 1024 * 1024, backupCount=0),
         logging.StreamHandler(),
     ],
 )
@@ -173,12 +174,8 @@ def _excepthook(exc_type, exc_value, exc_tb):
 
 sys.excepthook = _excepthook
 
-# Compiled regex patterns for performance
+# Compiled regex pattern for clipboard-mode progress parsing
 PROGRESS_REGEX = re.compile(r"(\d+\.?\d*)%")
-SPEED_REGEX = re.compile(r"(\d+\.?\d*\s*[KMG]iB/s)")
-ETA_REGEX = re.compile(r"ETA\s+(\d{2}:\d{2}(?::\d{2})?)")
-FILESIZE_REGEX = re.compile(r"(\d+\.?\d*\s*[KMG]iB)")
-TIME_REGEX = re.compile(r"^(\d{1,2}):(\d{2}):(\d{2})$")
 
 # ── Color constants (template convention) ──────────────────────────────
 GREEN = ("#2e7d32", "#388e3c")  # (normal, hover) — primary action
@@ -395,23 +392,9 @@ class YouTubeDownloader(QMainWindow):
     sig_update_status = pyqtSignal(str, str)  # message, color
     sig_reset_buttons = pyqtSignal()
     sig_show_messagebox = pyqtSignal(str, str, str)  # type, title, message
-    sig_clipboard_progress = pyqtSignal(float)  # clipboard tab progress
-    sig_clipboard_status = pyqtSignal(str, str)  # clipboard tab status
-    sig_clipboard_total = pyqtSignal(str)  # clipboard total label
-    sig_upload_status = pyqtSignal(str, str)  # trimmer upload status
-    sig_uploader_status = pyqtSignal(str, str)  # uploader tab status
-    sig_set_upload_url = pyqtSignal(str)  # show trimmer upload URL
-    sig_set_uploader_url = pyqtSignal(str)  # show uploader upload URL
-    sig_enable_upload_btn = pyqtSignal(bool)  # enable/disable upload btn
     sig_set_mode_label = pyqtSignal(str)  # trimmer mode indicator
     sig_set_video_info = pyqtSignal(str)  # trimmer video info
     sig_set_filesize_label = pyqtSignal(str)  # trimmer filesize
-    sig_update_url_status = pyqtSignal(str, str)  # url, new_status
-    sig_add_url_to_list = pyqtSignal(str)  # url to add
-    sig_show_update_dialog = pyqtSignal(
-        str, object
-    )  # latest_version, release_data dict
-    sig_show_ytdlp_update = pyqtSignal(str, str)  # current_version, latest_version
     sig_run_on_gui = pyqtSignal(object)  # generic callable for thread-safe GUI updates
 
     # ------------------------------------------------------------------
@@ -429,15 +412,22 @@ class YouTubeDownloader(QMainWindow):
             self.resize(900, 1140)
             self.setMinimumSize(750, 600)
 
-        # Restore saved window geometry if available
+        # Load config once for all init settings
+        self._config = {}
         try:
-            with open(CONFIG_FILE) as f:
-                _cfg = json.load(f)
-            _geo = _cfg.get("window_geometry")
-            if _geo:
-                self.restoreGeometry(bytes.fromhex(_geo))
+            if CONFIG_FILE.exists():
+                with open(CONFIG_FILE) as f:
+                    self._config = json.load(f)
         except Exception:
             pass
+
+        # Restore saved window geometry if available
+        _geo = self._config.get("window_geometry")
+        if _geo:
+            try:
+                self.restoreGeometry(bytes.fromhex(_geo))
+            except Exception:
+                pass
 
         # Window icon
         try:
@@ -451,16 +441,10 @@ class YouTubeDownloader(QMainWindow):
 
         # ---------- state variables ----------
         self.download_path = str(Path.home() / "Downloads")
-        self.current_process = None
-        self.is_downloading = False
-        self.video_duration = 0
+        # Download state → download_mgr (current_process, is_downloading, etc.)
+        self.video_duration = 0  # mirrored from trimming_mgr via signals
         self.video_title = None
-        self.is_fetching_duration = False
-        self.last_progress_time = None
-        self.download_start_time = None
-        self._download_has_progress = False
-        self._trim_download_active = False
-        self.timeout_monitor_thread = None
+        self.current_video_url = None
         self._shutting_down = False
         self._updating = False
 
@@ -469,15 +453,12 @@ class YouTubeDownloader(QMainWindow):
         self.ffprobe_path = self._get_bundled_executable("ffprobe")
         self.ytdlp_path = self._get_bundled_executable("yt-dlp")
 
-        # Frame preview variables
+        # Frame preview variables (state in trimming_mgr, created after temp_dir init)
         self.start_preview_image = None
         self.end_preview_image = None
-        self.temp_dir = None
-        self.current_video_url = None
+        self.temp_dir = None  # set by _init_temp_directory
         self.preview_update_timer = None
         self.last_preview_update = 0
-        self.preview_thread_running = False
-        self.preview_cache = OrderedDict()
 
         # Volume control — stored as int 0-200 (mapping to 0.0-2.0)
         self._volume_int = 100  # 100 = 1.0 = 100%
@@ -485,10 +466,23 @@ class YouTubeDownloader(QMainWindow):
         # Local file support
         self.local_file_path = None
 
-        # Upload to Catbox.moe
-        self.last_output_file = None
-        self.is_uploading = False
-        self.catbox_client = CatboxClient()
+        # Thread pool for background tasks (must be created before managers)
+        self.thread_pool = ThreadPoolExecutor(
+            max_workers=MAX_WORKER_THREADS, thread_name_prefix="ytdl_worker"
+        )
+
+        # Upload to Catbox.moe (state in UploadManager)
+        self.upload_mgr = UploadManager(thread_pool=self.thread_pool)
+        self.upload_mgr.sig_upload_status.connect(self._do_upload_status)
+        self.upload_mgr.sig_uploader_status.connect(self._do_uploader_status)
+        self.upload_mgr.sig_set_upload_url.connect(self._do_set_upload_url)
+        self.upload_mgr.sig_set_uploader_url.connect(self._do_set_uploader_url)
+        self.upload_mgr.sig_enable_upload_btn.connect(self._do_enable_upload_btn)
+        self.upload_mgr.sig_show_messagebox.connect(self._do_show_messagebox)
+        self.upload_mgr.sig_run_on_gui.connect(self._do_run_on_gui)
+        self.upload_mgr.sig_upload_complete.connect(self._on_upload_complete)
+        self.upload_mgr.sig_uploader_file_uploaded.connect(self._show_upload_url)
+        self.upload_mgr.sig_uploader_queue_done.connect(self._on_uploader_queue_done)
 
         # Custom filename
         self.custom_filename = None
@@ -500,47 +494,79 @@ class YouTubeDownloader(QMainWindow):
         # Initialize temp directory with cleanup on exit
         self._init_temp_directory()
 
+        # Trimming manager (needs temp_dir)
+        self.trimming_mgr = TrimmingManager(
+            ytdlp_path=self.ytdlp_path,
+            ffmpeg_path=self.ffmpeg_path,
+            ffprobe_path=self.ffprobe_path,
+            temp_dir=self.temp_dir,
+        )
+        self.trimming_mgr.sig_update_status.connect(self._do_update_status)
+        self.trimming_mgr.sig_show_messagebox.connect(self._do_show_messagebox)
+        self.trimming_mgr.sig_run_on_gui.connect(self._do_run_on_gui)
+        self.trimming_mgr.sig_duration_fetched.connect(self._on_duration_fetched)
+        self.trimming_mgr.sig_local_duration_fetched.connect(self._on_local_duration_fetched)
+        self.trimming_mgr.sig_preview_ready.connect(self._on_preview_ready)
+        self.trimming_mgr.sig_fetch_done.connect(self._on_fetch_done)
+
         # Clean up leftover files from previous self-updates
         self._cleanup_old_updates()
-
-        # Thread pool for background tasks
-        self.thread_pool = ThreadPoolExecutor(
-            max_workers=MAX_WORKER_THREADS, thread_name_prefix="ytdl_worker"
-        )
 
         # Check dependencies and detect HW encoder in background (avoid startup freeze)
         self.dependencies_ok = True  # assume ok until check completes
         self.hw_encoder = None
+        self.encoding = EncodingService(
+            ffmpeg_path=getattr(self, "ffmpeg_path", "ffmpeg"),
+            hw_encoder=None,
+        )
+        self.clipboard_mgr = ClipboardManager(thread_pool=self.thread_pool)
+        self.clipboard_mgr.sig_clipboard_progress.connect(self._do_clipboard_progress)
+        self.clipboard_mgr.sig_clipboard_status.connect(self._do_clipboard_status)
+        self.clipboard_mgr.sig_clipboard_total.connect(self._do_clipboard_total)
+        self.clipboard_mgr.sig_update_url_status.connect(self._do_update_url_status)
+        self.clipboard_mgr.sig_add_url_to_list.connect(self._do_add_url_to_list)
+        self.clipboard_mgr.sig_show_messagebox.connect(self._do_show_messagebox)
+        self.clipboard_mgr.sig_run_on_gui.connect(self._do_run_on_gui)
+        self.clipboard_mgr.sig_downloads_finished.connect(self._on_clipboard_downloads_finished)
+
+        self.download_mgr = DownloadManager(
+            ytdlp_path=getattr(self, "ytdlp_path", "yt-dlp"),
+            ffmpeg_path=getattr(self, "ffmpeg_path", "ffmpeg"),
+            ffprobe_path=getattr(self, "ffprobe_path", "ffprobe"),
+            encoding=self.encoding,
+            thread_pool=self.thread_pool,
+        )
+        self.download_mgr.sig_update_progress.connect(self._do_update_progress)
+        self.download_mgr.sig_update_status.connect(self._do_update_status)
+        self.download_mgr.sig_reset_buttons.connect(self._do_reset_buttons)
+        self.download_mgr.sig_show_messagebox.connect(self._do_show_messagebox)
+        self.download_mgr.sig_run_on_gui.connect(self._do_run_on_gui)
+        self.download_mgr.sig_enable_upload.connect(self._enable_upload_button)
+
+        self.update_mgr = UpdateManager(
+            ytdlp_path=getattr(self, "ytdlp_path", "yt-dlp"),
+            thread_pool=self.thread_pool,
+        )
+        self.update_mgr.sig_show_update_dialog.connect(self._show_update_dialog)
+        self.update_mgr.sig_show_ytdlp_update.connect(self._show_ytdlp_update_dialog)
+        self.update_mgr.sig_show_messagebox.connect(self._do_show_messagebox)
+        self.update_mgr.sig_update_status.connect(self._do_update_status)
+        self.update_mgr.sig_run_on_gui.connect(self._do_run_on_gui)
+        self.update_mgr.sig_request_close.connect(self.close)
+
         self.thread_pool.submit(self._init_dependencies_async)
 
-        # Thread safety locks
-        self.preview_lock = threading.Lock()
-        self.clipboard_lock = threading.Lock()
-        self.auto_download_lock = threading.Lock()
-        self.download_lock = threading.Lock()
-        self.upload_lock = threading.Lock()
-        self.uploader_lock = threading.RLock()
-        self.fetch_lock = threading.Lock()
+        # Thread safety locks (download_lock → download_mgr; others → respective managers)
         self.config_lock = threading.Lock()
 
-        # Clipboard Mode variables
-        self.clipboard_monitoring = False
-        self.clipboard_monitor_thread = None
-        self.clipboard_last_content = ""
-        self.clipboard_url_list = []
-        self.clipboard_download_path = str(Path.home() / "Downloads")
-        self.clipboard_downloading = False
-        self.clipboard_auto_downloading = False
-        self.clipboard_current_download_index = 0
+        # Clipboard Mode (state in clipboard_mgr, created after thread_pool)
         self.clipboard_url_widgets = {}
         self.klipper_interface = None
 
         # Theme mode
         self.current_theme = self._load_theme_preference()
 
-        # Uploader tab variables
-        self.uploader_file_queue = []
-        self.uploader_is_uploading = False
+        # Uploader tab variables (state in upload_mgr)
         self.uploader_current_index = 0
 
         # Load persisted clipboard URLs
@@ -551,37 +577,23 @@ class YouTubeDownloader(QMainWindow):
             try:
                 bus = dbus.SessionBus()
                 klipper = bus.get_object("org.kde.klipper", "/klipper")
-                self.klipper_interface = dbus.Interface(
-                    klipper, "org.kde.klipper.klipper"
-                )
+                self.klipper_interface = dbus.Interface(klipper, "org.kde.klipper.klipper")
                 logger.info("Connected to KDE Klipper clipboard manager")
             except Exception as e:
                 logger.info(f"KDE Klipper not available: {e}")
                 self.klipper_interface = None
 
         # Create clipboard download directory
-        Path(self.clipboard_download_path).mkdir(parents=True, exist_ok=True)
+        Path(self.clipboard_mgr.clipboard_download_path).mkdir(parents=True, exist_ok=True)
 
         # ---------- connect signals to slots ----------
         self.sig_update_progress.connect(self._do_update_progress)
         self.sig_update_status.connect(self._do_update_status)
         self.sig_reset_buttons.connect(self._do_reset_buttons)
         self.sig_show_messagebox.connect(self._do_show_messagebox)
-        self.sig_clipboard_progress.connect(self._do_clipboard_progress)
-        self.sig_clipboard_status.connect(self._do_clipboard_status)
-        self.sig_clipboard_total.connect(self._do_clipboard_total)
-        self.sig_upload_status.connect(self._do_upload_status)
-        self.sig_uploader_status.connect(self._do_uploader_status)
-        self.sig_set_upload_url.connect(self._do_set_upload_url)
-        self.sig_set_uploader_url.connect(self._do_set_uploader_url)
-        self.sig_enable_upload_btn.connect(self._do_enable_upload_btn)
         self.sig_set_mode_label.connect(self._do_set_mode_label)
         self.sig_set_video_info.connect(self._do_set_video_info)
         self.sig_set_filesize_label.connect(self._do_set_filesize_label)
-        self.sig_update_url_status.connect(self._do_update_url_status)
-        self.sig_add_url_to_list.connect(self._do_add_url_to_list)
-        self.sig_show_update_dialog.connect(self._show_update_dialog)
-        self.sig_show_ytdlp_update.connect(self._show_ytdlp_update_dialog)
         self.sig_run_on_gui.connect(self._do_run_on_gui)
 
         # ── Template GUI construction flow ───────────────────────
@@ -624,6 +636,7 @@ class YouTubeDownloader(QMainWindow):
         self._preview_debounce_timer = QTimer(self)
         self._preview_debounce_timer.setSingleShot(True)
         self._preview_debounce_timer.setInterval(PREVIEW_DEBOUNCE_MS)
+        self._preview_debounce_timer.timeout.connect(self.update_previews)
 
         # File size fetch debounce timer
         self._size_fetch_timer = QTimer(self)
@@ -631,10 +644,17 @@ class YouTubeDownloader(QMainWindow):
         self._size_fetch_timer.setInterval(1000)
         self._size_fetch_timer.timeout.connect(self._auto_fetch_file_size)
 
+        # Clipboard URL persistence debounce timer (coalesces rapid writes)
+        self._clipboard_save_timer = QTimer(self)
+        self._clipboard_save_timer.setSingleShot(True)
+        self._clipboard_save_timer.setInterval(2000)
+        self._clipboard_save_timer.timeout.connect(self._save_clipboard_urls)
+
         # Check for updates on startup if enabled
         if self._load_auto_check_updates_setting():
             QTimer.singleShot(
-                2000, lambda: self.thread_pool.submit(self._check_for_updates, True)
+                2000,
+                lambda: self.thread_pool.submit(self.update_mgr._check_for_updates, True),
             )
 
     # ------------------------------------------------------------------
@@ -824,9 +844,7 @@ class YouTubeDownloader(QMainWindow):
         # --- Volume section (below quality, above trim) ---
         vol_row = QHBoxLayout()
         vol_lbl = QLabel("Volume:")
-        vol_lbl.setStyleSheet(
-            vol_lbl.styleSheet() + "font-size: 11px; font-weight: bold;"
-        )
+        vol_lbl.setStyleSheet(vol_lbl.styleSheet() + "font-size: 11px; font-weight: bold;")
         vol_row.addWidget(vol_lbl)
 
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
@@ -842,9 +860,7 @@ class YouTubeDownloader(QMainWindow):
         vol_row.addWidget(self.volume_entry)
 
         self.volume_label = QLabel("%")
-        self.volume_label.setStyleSheet(
-            self.volume_label.styleSheet() + "font-size: 9px;"
-        )
+        self.volume_label.setStyleSheet(self.volume_label.styleSheet() + "font-size: 9px;")
         vol_row.addWidget(self.volume_label)
 
         self.reset_volume_btn = QPushButton("Reset to 100%")
@@ -974,9 +990,7 @@ class YouTubeDownloader(QMainWindow):
 
         # Trim duration display
         self.trim_duration_label = QLabel("Selected Duration: 00:00:00")
-        self.trim_duration_label.setStyleSheet(
-            "color: green; font-size: 9pt; font-weight: bold;"
-        )
+        self.trim_duration_label.setStyleSheet("color: green; font-size: 9pt; font-weight: bold;")
         self.trim_duration_label.setContentsMargins(40, 0, 0, 0)
         layout.addWidget(self.trim_duration_label)
 
@@ -1080,18 +1094,14 @@ class YouTubeDownloader(QMainWindow):
         # Auto-upload checkbox (centered, tighter to buttons above)
         self.auto_upload_check = QCheckBox("Auto-upload after download/trim completes")
         self.auto_upload_check.setContentsMargins(0, -2, 0, 0)
-        layout.addWidget(
-            self.auto_upload_check, alignment=Qt.AlignmentFlag.AlignHCenter
-        )
+        layout.addWidget(self.auto_upload_check, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         # Upload URL display (initially hidden)
         self.upload_url_widget = QWidget()
         uurl_row = QHBoxLayout(self.upload_url_widget)
         uurl_row.setContentsMargins(0, 0, 0, 0)
         uurl_lbl = QLabel("Upload URL:")
-        uurl_lbl.setStyleSheet(
-            uurl_lbl.styleSheet() + "font-size: 9px; font-weight: bold;"
-        )
+        uurl_lbl.setStyleSheet(uurl_lbl.styleSheet() + "font-size: 9px; font-weight: bold;")
         uurl_row.addWidget(uurl_lbl)
         self.upload_url_entry = QLineEdit()
         self.upload_url_entry.setReadOnly(True)
@@ -1115,9 +1125,7 @@ class YouTubeDownloader(QMainWindow):
         hdr.setStyleSheet(hdr.styleSheet() + "font-size: 14px; font-weight: bold;")
         layout.addWidget(hdr)
 
-        desc = QLabel(
-            "Copy YouTube URLs (Ctrl+C) to automatically detect and download them."
-        )
+        desc = QLabel("Copy YouTube URLs (Ctrl+C) to automatically detect and download them.")
         desc.setStyleSheet("color: gray; font-size: 9pt;")
         layout.addWidget(desc)
 
@@ -1126,9 +1134,7 @@ class YouTubeDownloader(QMainWindow):
         mlbl = QLabel("Download Mode:")
         mlbl.setStyleSheet(mlbl.styleSheet() + "font-size: 10px; font-weight: bold;")
         mode_row.addWidget(mlbl)
-        self.clipboard_auto_download_check = QCheckBox(
-            "Auto-download (starts immediately)"
-        )
+        self.clipboard_auto_download_check = QCheckBox("Auto-download (starts immediately)")
         mode_row.addWidget(self.clipboard_auto_download_check)
         mode_row.addStretch()
         layout.addLayout(mode_row)
@@ -1173,9 +1179,7 @@ class YouTubeDownloader(QMainWindow):
         audio_row = QHBoxLayout()
         audio_row.setContentsMargins(20, 0, 0, 0)
         self.clipboard_audio_only_check = QCheckBox("Audio only, no video")
-        self.clipboard_audio_only_check.stateChanged.connect(
-            self._on_clipboard_audio_only_toggle
-        )
+        self.clipboard_audio_only_check.stateChanged.connect(self._on_clipboard_audio_only_toggle)
         audio_row.addWidget(self.clipboard_audio_only_check)
         audio_row.addStretch()
         layout.addLayout(audio_row)
@@ -1184,7 +1188,7 @@ class YouTubeDownloader(QMainWindow):
         layout.addWidget(self._hsep())
         folder_row = QHBoxLayout()
         folder_row.addWidget(QLabel("Save to:"))
-        self.clipboard_path_label = QLabel(self.clipboard_download_path)
+        self.clipboard_path_label = QLabel(self.clipboard_mgr.clipboard_download_path)
         self.clipboard_path_label.setStyleSheet("color: green;")
         folder_row.addWidget(self.clipboard_path_label)
         chg_btn = QPushButton("Change")
@@ -1244,9 +1248,7 @@ class YouTubeDownloader(QMainWindow):
         self.clipboard_progress.setRange(0, 100)
         self.clipboard_progress.setValue(0)
         self.clipboard_progress.setFixedWidth(560)
-        layout.addWidget(
-            self.clipboard_progress, alignment=Qt.AlignmentFlag.AlignHCenter
-        )
+        layout.addWidget(self.clipboard_progress, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         self.clipboard_progress_label = QLabel("0%")
         self.clipboard_progress_label.setStyleSheet("color: green;")
@@ -1255,9 +1257,7 @@ class YouTubeDownloader(QMainWindow):
 
         # Total progress
         self.clipboard_total_label = QLabel("Completed: 0/0 videos")
-        self.clipboard_total_label.setStyleSheet(
-            "color: green; font-size: 9pt; font-weight: bold;"
-        )
+        self.clipboard_total_label.setStyleSheet("color: green; font-size: 9pt; font-weight: bold;")
         self.clipboard_total_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(self.clipboard_total_label)
 
@@ -1340,9 +1340,7 @@ class YouTubeDownloader(QMainWindow):
         uurl_row = QHBoxLayout(self.uploader_url_widget)
         uurl_row.setContentsMargins(0, 0, 0, 0)
         uurl_lbl = QLabel("Upload URL:")
-        uurl_lbl.setStyleSheet(
-            uurl_lbl.styleSheet() + "font-size: 9px; font-weight: bold;"
-        )
+        uurl_lbl.setStyleSheet(uurl_lbl.styleSheet() + "font-size: 9px; font-weight: bold;")
         uurl_row.addWidget(uurl_lbl)
         self.uploader_url_entry = QLineEdit()
         self.uploader_url_entry.setReadOnly(True)
@@ -1379,7 +1377,9 @@ class YouTubeDownloader(QMainWindow):
 
         # Action buttons
         self.check_updates_btn = QPushButton("Check for Updates")
-        self.check_updates_btn.clicked.connect(self._check_for_updates_clicked)
+        self.check_updates_btn.clicked.connect(
+            lambda: self.thread_pool.submit(self.update_mgr._check_for_updates, False)
+        )
         layout.addWidget(self.check_updates_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 
         readme_btn = _colored_btn("Readme", BLUE)
@@ -1392,12 +1392,8 @@ class YouTubeDownloader(QMainWindow):
 
         # Settings checkboxes
         self.auto_check_updates_check = QCheckBox("Check for updates on startup")
-        self.auto_check_updates_check.setChecked(
-            self._load_auto_check_updates_setting()
-        )
-        self.auto_check_updates_check.stateChanged.connect(
-            self._save_auto_check_updates_setting
-        )
+        self.auto_check_updates_check.setChecked(self._load_auto_check_updates_setting())
+        self.auto_check_updates_check.stateChanged.connect(self._save_auto_check_updates_setting)
         layout.addWidget(self.auto_check_updates_check)
 
         self.dark_mode_check = QCheckBox("Dark Mode")
@@ -1554,18 +1550,14 @@ class YouTubeDownloader(QMainWindow):
             self.clipboard_url_scroll.setStyleSheet(
                 f"QScrollArea {{ border: 1px solid {colors['border']}; background: {colors['canvas_bg']}; }}"
             )
-            self.clipboard_url_list_widget.setStyleSheet(
-                f"background: {colors['canvas_bg']};"
-            )
+            self.clipboard_url_list_widget.setStyleSheet(f"background: {colors['canvas_bg']};")
 
         # Uploader file list
         if hasattr(self, "uploader_file_scroll"):
             self.uploader_file_scroll.setStyleSheet(
                 f"QScrollArea {{ border: 1px solid {colors['border']}; background: {colors['canvas_bg']}; }}"
             )
-            self.uploader_file_list_widget.setStyleSheet(
-                f"background: {colors['canvas_bg']};"
-            )
+            self.uploader_file_list_widget.setStyleSheet(f"background: {colors['canvas_bg']};")
 
     def _toggle_theme(self):
         """Toggle between light and dark theme."""
@@ -1589,10 +1581,7 @@ class YouTubeDownloader(QMainWindow):
         logger.info("Application shutdown initiated...")
 
         # Cancel preview timer
-        if (
-            hasattr(self, "_preview_debounce_timer")
-            and self._preview_debounce_timer.isActive()
-        ):
+        if hasattr(self, "_preview_debounce_timer") and self._preview_debounce_timer.isActive():
             self._preview_debounce_timer.stop()
 
         self._shutting_down = True
@@ -1611,15 +1600,15 @@ class YouTubeDownloader(QMainWindow):
         self.stop_clipboard_monitoring()
 
         # Stop clipboard downloads
-        with self.clipboard_lock:
-            if self.clipboard_downloading:
-                self.clipboard_downloading = False
+        with self.clipboard_mgr.clipboard_lock:
+            if self.clipboard_mgr.clipboard_downloading:
+                self.clipboard_mgr.clipboard_downloading = False
 
         # Force-kill any ongoing download process immediately (don't wait)
-        with self.download_lock:
-            process_to_cleanup = self.current_process
-            self.is_downloading = False
-            self.current_process = None
+        with self.download_mgr.download_lock:
+            process_to_cleanup = self.download_mgr.current_process
+            self.download_mgr.is_downloading = False
+            self.download_mgr.current_process = None
 
         if process_to_cleanup:
             logger.info("Force-killing active download process...")
@@ -1635,7 +1624,7 @@ class YouTubeDownloader(QMainWindow):
 
         # Clean up temp files
         try:
-            self.cleanup_temp_files()
+            DownloadManager.cleanup_temp_files(self.temp_dir)
         except Exception as e:
             logger.error(f"Error cleaning temp files: {e}")
 
@@ -1764,8 +1753,7 @@ class YouTubeDownloader(QMainWindow):
             }
             if status_label:
                 status_label.setStyleSheet(
-                    f"background: {colors.get(status, 'gray')}; "
-                    f"border-radius: 6px; border: none;"
+                    f"background: {colors.get(status, 'gray')}; border-radius: 6px; border: none;"
                 )
 
     def _do_add_url_to_list(self, url: str):
@@ -1775,22 +1763,47 @@ class YouTubeDownloader(QMainWindow):
     # ------------------------------------------------------------------
     #  Thread-safe helper (replaces _safe_after)
     # ------------------------------------------------------------------
-    def update_progress(self, value):
-        """Update main progress bar (thread-safe)."""
-        try:
-            value = float(value)
-            value = max(0, min(100, value))
-            self.sig_update_progress.emit(value)
-        except (ValueError, TypeError) as e:
-            logger.warning(f"Invalid progress value: {value} - {e}")
-
-    def update_status(self, message, color):
-        """Update status label (thread-safe)."""
-        self.sig_update_status.emit(str(message), str(color))
-
     def _reset_buttons(self):
         """Reset download/stop buttons (thread-safe)."""
         self.sig_reset_buttons.emit()
+
+    # -- Trimming manager signal slots --
+    def _on_duration_fetched(self, duration, video_title):
+        """Handle successful duration fetch from TrimmingManager."""
+        self.video_duration = duration
+        self.video_title = video_title or None
+        self._update_duration_ui(video_title or None)
+        url = self.url_entry.text().strip()
+        self._fetch_file_size(url)
+
+    def _on_local_duration_fetched(self, duration, video_title):
+        """Handle successful local file duration fetch."""
+        self.video_duration = duration
+        self._update_duration_ui_local(video_title)
+
+    def _on_preview_ready(self, image, position):
+        """Handle preview frame ready from TrimmingManager.
+
+        Receives a QImage (thread-safe) and converts to QPixmap on the GUI thread.
+        """
+        pixmap = QPixmap.fromImage(image)
+        if position == "start":
+            self.start_preview_image = pixmap
+            self.start_preview_label.setPixmap(pixmap)
+            self.start_preview_label.setText("")
+        else:
+            self.end_preview_image = pixmap
+            self.end_preview_label.setPixmap(pixmap)
+            self.end_preview_label.setText("")
+
+    def _on_fetch_done(self):
+        """Re-enable fetch button after duration fetch completes."""
+        if self.trim_enabled_check.isChecked():
+            self.fetch_duration_btn.setEnabled(True)
+
+    def _on_clipboard_downloads_finished(self):
+        """Handle clipboard download queue completion."""
+        self._finish_clipboard_downloads()
 
     # ------------------------------------------------------------------
     #  Tab change handling & clipboard monitoring
@@ -1864,13 +1877,6 @@ class YouTubeDownloader(QMainWindow):
         painter.end()
         return pix
 
-    def seconds_to_hms(self, seconds):
-        """Convert seconds to HH:MM:SS format."""
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-
     # ------------------------------------------------------------------
     #  Persistence methods (carried over from tkinter version)
     # ------------------------------------------------------------------
@@ -1881,13 +1887,9 @@ class YouTubeDownloader(QMainWindow):
                 with open(CLIPBOARD_URLS_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     if not isinstance(data, dict):
-                        raise ValueError(
-                            "Invalid clipboard URLs file format: expected dict"
-                        )
+                        raise ValueError("Invalid clipboard URLs file format: expected dict")
                     if "urls" not in data:
-                        raise ValueError(
-                            "Invalid clipboard URLs file format: missing 'urls' key"
-                        )
+                        raise ValueError("Invalid clipboard URLs file format: missing 'urls' key")
                     if not isinstance(data["urls"], list):
                         raise ValueError(
                             "Invalid clipboard URLs file format: 'urls' must be a list"
@@ -1906,10 +1908,10 @@ class YouTubeDownloader(QMainWindow):
         """Save clipboard URLs to file for persistence between sessions."""
         try:
             CLIPBOARD_URLS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with self.clipboard_lock:
+            with self.clipboard_mgr.clipboard_lock:
                 urls_to_save = [
                     {"url": item["url"], "status": item["status"]}
-                    for item in self.clipboard_url_list
+                    for item in self.clipboard_mgr.clipboard_url_list
                     if item["status"] in ["pending", "failed"]
                 ]
             with open(CLIPBOARD_URLS_FILE, "w", encoding="utf-8") as f:
@@ -1929,22 +1931,12 @@ class YouTubeDownloader(QMainWindow):
                     self._add_url_to_clipboard_list(url)
                     if status == "failed":
                         self._update_url_status(url, "failed")
-            logger.info(
-                f"Restored {len(self.persisted_clipboard_urls)} URLs to clipboard list"
-            )
+            logger.info(f"Restored {len(self.persisted_clipboard_urls)} URLs to clipboard list")
             self.persisted_clipboard_urls = None
 
     def _load_auto_check_updates_setting(self):
         """Load auto-check updates setting from config."""
-        try:
-            with self.config_lock:
-                if CONFIG_FILE.exists():
-                    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                        config = json.load(f)
-                        return config.get("auto_check_updates", True)
-        except Exception as e:
-            logger.error(f"Error loading auto_check_updates setting: {e}")
-        return True
+        return self._config.get("auto_check_updates", True)
 
     def _save_auto_check_updates_setting(self):
         """Save auto-check updates setting to config."""
@@ -1973,17 +1965,8 @@ class YouTubeDownloader(QMainWindow):
 
     def _load_theme_preference(self):
         """Load saved theme preference from config."""
-        try:
-            with self.config_lock:
-                if CONFIG_FILE.exists():
-                    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                        config = json.load(f)
-                        theme = config.get("theme", "dark")
-                        if theme in THEMES:
-                            return theme
-        except Exception as e:
-            logger.error(f"Error loading theme preference: {e}")
-        return "dark"
+        theme = self._config.get("theme", "dark")
+        return theme if theme in THEMES else "dark"
 
     def _save_theme_preference(self):
         """Save theme preference to config."""
@@ -2122,9 +2105,7 @@ class YouTubeDownloader(QMainWindow):
                     encoder,
                     probe_out,
                 ]
-                result = subprocess.run(
-                    cmd, capture_output=True, timeout=10, **_subprocess_kwargs
-                )
+                result = subprocess.run(cmd, capture_output=True, timeout=10, **_subprocess_kwargs)
                 try:
                     os.remove(probe_out)
                 except OSError:
@@ -2134,9 +2115,7 @@ class YouTubeDownloader(QMainWindow):
                     return encoder
                 else:
                     stderr = result.stderr.decode("utf-8", errors="replace").strip()
-                    logger.info(
-                        f"Hardware encoder {encoder} not available: {stderr[-200:]}"
-                    )
+                    logger.info(f"Hardware encoder {encoder} not available: {stderr[-200:]}")
             except (subprocess.TimeoutExpired, OSError) as e:
                 logger.info(f"Hardware encoder {encoder} probe failed: {e}")
         logger.info("No hardware encoder found, using libx264")
@@ -2148,6 +2127,12 @@ class YouTubeDownloader(QMainWindow):
         if not self.dependencies_ok:
             logger.warning("Dependencies check failed at startup")
         self.hw_encoder = self._detect_hw_encoder()
+        self.encoding.hw_encoder = self.hw_encoder
+        self.encoding.ffmpeg_path = self.ffmpeg_path
+        self.update_mgr.ytdlp_path = self.ytdlp_path
+        self.download_mgr.ytdlp_path = self.ytdlp_path
+        self.download_mgr.ffmpeg_path = self.ffmpeg_path
+        self.download_mgr.ffprobe_path = self.ffprobe_path
 
     def _init_temp_directory(self):
         """Initialize temp directory and clean up orphaned ones from previous crashes."""
@@ -2210,31 +2195,31 @@ class YouTubeDownloader(QMainWindow):
 
     def start_clipboard_monitoring(self):
         """Start clipboard monitoring using QTimer polling."""
-        with self.clipboard_lock:
-            if self.clipboard_monitoring:
+        with self.clipboard_mgr.clipboard_lock:
+            if self.clipboard_mgr.clipboard_monitoring:
                 return
-            self.clipboard_monitoring = True
+            self.clipboard_mgr.clipboard_monitoring = True
             logger.info("Clipboard monitoring started (QTimer polling)")
             try:
                 content = QApplication.clipboard().text()
-                self.clipboard_last_content = content.strip() if content else ""
+                self.clipboard_mgr.clipboard_last_content = content.strip() if content else ""
             except Exception:
-                self.clipboard_last_content = ""
+                self.clipboard_mgr.clipboard_last_content = ""
         self._clipboard_timer.start()
 
     def stop_clipboard_monitoring(self):
         """Stop clipboard monitoring."""
-        with self.clipboard_lock:
-            if not self.clipboard_monitoring:
+        with self.clipboard_mgr.clipboard_lock:
+            if not self.clipboard_mgr.clipboard_monitoring:
                 return
-            self.clipboard_monitoring = False
+            self.clipboard_mgr.clipboard_monitoring = False
             logger.info("Clipboard monitoring stopped")
         self._clipboard_timer.stop()
 
     def _poll_clipboard(self):
         """Poll clipboard for new YouTube URLs (called by QTimer)."""
-        with self.clipboard_lock:
-            if not self.clipboard_monitoring:
+        with self.clipboard_mgr.clipboard_lock:
+            if not self.clipboard_mgr.clipboard_monitoring:
                 return
 
         clipboard_content = None
@@ -2243,9 +2228,7 @@ class YouTubeDownloader(QMainWindow):
             # Try KDE Klipper first (most reliable on KDE Plasma Linux)
             if self.klipper_interface:
                 try:
-                    clipboard_content = str(
-                        self.klipper_interface.getClipboardContents()
-                    )
+                    clipboard_content = str(self.klipper_interface.getClipboardContents())
                 except Exception as e:
                     logger.debug(f"Klipper read failed: {e}")
                     clipboard_content = None
@@ -2270,20 +2253,22 @@ class YouTubeDownloader(QMainWindow):
             if clipboard_content:
                 clipboard_content = clipboard_content.strip()
 
-            if clipboard_content and clipboard_content != self.clipboard_last_content:
-                logger.info(f"Clipboard changed: {clipboard_content[:80]}")
-                self.clipboard_last_content = clipboard_content
+            if clipboard_content and clipboard_content != self.clipboard_mgr.clipboard_last_content:
+                self.clipboard_mgr.clipboard_last_content = clipboard_content
 
-                is_valid, message = self.validate_youtube_url(clipboard_content)
+                is_valid, message = utils.validate_youtube_url(clipboard_content)
+                logger.info(
+                    f"Clipboard changed: {clipboard_content[:80]}"
+                    if is_valid
+                    else "Clipboard changed (not a YouTube URL)"
+                )
 
                 if is_valid:
                     url_exists = clipboard_content in self.clipboard_url_widgets
 
                     if not url_exists:
                         self._add_url_to_clipboard_list(clipboard_content)
-                        logger.info(
-                            f"New YouTube URL detected and added: {clipboard_content}"
-                        )
+                        logger.info(f"New YouTube URL detected and added: {clipboard_content}")
 
                         if self.clipboard_auto_download_check.isChecked():
                             logger.info(
@@ -2291,9 +2276,7 @@ class YouTubeDownloader(QMainWindow):
                             )
                             self._auto_download_single_url(clipboard_content)
                 else:
-                    logger.debug(
-                        f"Clipboard content not a valid YouTube URL: {message}"
-                    )
+                    logger.debug(f"Clipboard content not a valid YouTube URL: {message}")
 
         except Exception as e:
             logger.error(f"Error polling clipboard: {e}")
@@ -2302,9 +2285,7 @@ class YouTubeDownloader(QMainWindow):
         """Add URL to clipboard list with UI widget."""
         # Build the row widget
         url_frame = QWidget()
-        url_frame.setStyleSheet(
-            "border: 1px solid #555; border-radius: 2px; padding: 2px;"
-        )
+        url_frame.setStyleSheet("border: 1px solid #555; border-radius: 2px; padding: 2px;")
         row_layout = QHBoxLayout(url_frame)
         row_layout.setContentsMargins(5, 2, 5, 2)
         row_layout.setSpacing(5)
@@ -2312,9 +2293,7 @@ class YouTubeDownloader(QMainWindow):
         # Status indicator (coloured circle via QLabel)
         status_label = QLabel()
         status_label.setFixedSize(12, 12)
-        status_label.setStyleSheet(
-            "background: gray; border-radius: 6px; border: none;"
-        )
+        status_label.setStyleSheet("background: gray; border-radius: 6px; border: none;")
         row_layout.addWidget(status_label)
 
         # URL text
@@ -2340,39 +2319,39 @@ class YouTubeDownloader(QMainWindow):
             "status_label": status_label,
         }
 
-        with self.clipboard_lock:
+        with self.clipboard_mgr.clipboard_lock:
             # Cap the list to prevent unbounded memory growth
-            if len(self.clipboard_url_list) >= 500:
-                oldest = self.clipboard_url_list.pop(0)
+            if len(self.clipboard_mgr.clipboard_url_list) >= 500:
+                oldest = self.clipboard_mgr.clipboard_url_list.pop(0)
                 self.clipboard_url_widgets.pop(oldest["url"], None)
                 if oldest.get("widget"):
                     oldest["widget"].deleteLater()
-            self.clipboard_url_list.append(url_data)
+            self.clipboard_mgr.clipboard_url_list.append(url_data)
             self.clipboard_url_widgets[url] = url_data
-            has_urls = len(self.clipboard_url_list) > 0
+            has_urls = len(self.clipboard_mgr.clipboard_url_list) > 0
 
         self._update_clipboard_url_count()
-        with self.clipboard_lock:
-            is_downloading = self.clipboard_downloading
+        with self.clipboard_mgr.clipboard_lock:
+            is_downloading = self.clipboard_mgr.clipboard_downloading
         if has_urls and not is_downloading:
             self.clipboard_download_btn.setEnabled(True)
 
-        # Save URLs to persistence file
-        self._save_clipboard_urls()
+        # Schedule debounced persistence write
+        self._clipboard_save_timer.start()
 
     def _remove_url_from_list(self, url):
         """Remove URL from clipboard list."""
         widget_to_destroy = None
         list_is_empty = False
 
-        with self.clipboard_lock:
-            for i, item in enumerate(self.clipboard_url_list):
+        with self.clipboard_mgr.clipboard_lock:
+            for i, item in enumerate(self.clipboard_mgr.clipboard_url_list):
                 if item["url"] == url:
                     widget_to_destroy = item["widget"]
-                    self.clipboard_url_list.pop(i)
+                    self.clipboard_mgr.clipboard_url_list.pop(i)
                     if url in self.clipboard_url_widgets:
                         del self.clipboard_url_widgets[url]
-                    list_is_empty = len(self.clipboard_url_list) == 0
+                    list_is_empty = len(self.clipboard_mgr.clipboard_url_list) == 0
                     break
 
         if widget_to_destroy:
@@ -2381,12 +2360,12 @@ class YouTubeDownloader(QMainWindow):
             if list_is_empty:
                 self.clipboard_download_btn.setEnabled(False)
             logger.info(f"Removed URL: {url}")
-            self._save_clipboard_urls()
+            self._clipboard_save_timer.start()
 
     def clear_all_clipboard_urls(self):
         """Clear all URLs from clipboard list."""
-        with self.clipboard_lock:
-            is_downloading = self.clipboard_downloading
+        with self.clipboard_mgr.clipboard_lock:
+            is_downloading = self.clipboard_mgr.clipboard_downloading
         if is_downloading:
             QMessageBox.warning(
                 self,
@@ -2395,11 +2374,13 @@ class YouTubeDownloader(QMainWindow):
             )
             return
 
-        with self.clipboard_lock:
+        with self.clipboard_mgr.clipboard_lock:
             widgets_to_destroy = [
-                item["widget"] for item in self.clipboard_url_list if item.get("widget")
+                item["widget"]
+                for item in self.clipboard_mgr.clipboard_url_list
+                if item.get("widget")
             ]
-            self.clipboard_url_list.clear()
+            self.clipboard_mgr.clipboard_url_list.clear()
             self.clipboard_url_widgets.clear()
 
         for widget in widgets_to_destroy:
@@ -2408,12 +2389,12 @@ class YouTubeDownloader(QMainWindow):
         self._update_clipboard_url_count()
         self.clipboard_download_btn.setEnabled(False)
         logger.info("Cleared all clipboard URLs")
-        self._save_clipboard_urls()
+        self._clipboard_save_timer.start()
 
     def _update_clipboard_url_count(self):
         """Update URL count label."""
-        with self.clipboard_lock:
-            count = len(self.clipboard_url_list)
+        with self.clipboard_mgr.clipboard_lock:
+            count = len(self.clipboard_mgr.clipboard_url_list)
         s = "s" if count != 1 else ""
         self.clipboard_url_count_label.setText(f"({count} URL{s})")
 
@@ -2436,30 +2417,32 @@ class YouTubeDownloader(QMainWindow):
                     f"background: {color}; border-radius: 6px; border: none;"
                 )
 
-            with self.clipboard_lock:
-                for item_data in self.clipboard_url_list:
+            with self.clipboard_mgr.clipboard_lock:
+                for item_data in self.clipboard_mgr.clipboard_url_list:
                     if item_data["url"] == url:
                         item_data["status"] = status
                         break
 
     def start_clipboard_downloads(self):
         """Start downloading all pending URLs sequentially."""
-        with self.clipboard_lock:
-            is_downloading = self.clipboard_downloading
+        with self.clipboard_mgr.clipboard_lock:
+            is_downloading = self.clipboard_mgr.clipboard_downloading
         if is_downloading:
             return
 
-        with self.clipboard_lock:
+        with self.clipboard_mgr.clipboard_lock:
             pending_urls = [
-                item for item in self.clipboard_url_list if item["status"] == "pending"
+                item
+                for item in self.clipboard_mgr.clipboard_url_list
+                if item["status"] == "pending"
             ]
 
         if not pending_urls:
             QMessageBox.information(self, "No URLs", "No pending URLs to download.")
             return
 
-        with self.clipboard_lock:
-            self.clipboard_downloading = True
+        with self.clipboard_mgr.clipboard_lock:
+            self.clipboard_mgr.clipboard_downloading = True
         self.clipboard_download_btn.setEnabled(False)
         self.clipboard_stop_btn.setEnabled(True)
 
@@ -2472,22 +2455,24 @@ class YouTubeDownloader(QMainWindow):
             "full_playlist": self.clipboard_full_playlist_check.isChecked(),
             "audio_only": self.clipboard_audio_only_check.isChecked(),
             "speed_limit": self.clipboard_speed_limit_entry.text().strip(),
-            "download_path": self.clipboard_download_path,
+            "download_path": self.clipboard_mgr.clipboard_download_path,
         }
         logger.info(f"Starting clipboard batch download: {total_count} URLs")
         self.thread_pool.submit(self._process_clipboard_queue, clip_state)
 
     def _process_clipboard_queue(self, clip_state=None):
         """Process clipboard download queue sequentially (runs in worker thread)."""
-        with self.clipboard_lock:
+        with self.clipboard_mgr.clipboard_lock:
             pending_urls = [
-                item for item in self.clipboard_url_list if item["status"] == "pending"
+                item
+                for item in self.clipboard_mgr.clipboard_url_list
+                if item["status"] == "pending"
             ]
         total_count = len(pending_urls)
 
         for index, item in enumerate(pending_urls):
-            with self.clipboard_lock:
-                is_downloading = self.clipboard_downloading
+            with self.clipboard_mgr.clipboard_lock:
+                is_downloading = self.clipboard_mgr.clipboard_downloading
             if not is_downloading:
                 logger.info("Clipboard downloads stopped by user")
                 break
@@ -2503,19 +2488,13 @@ class YouTubeDownloader(QMainWindow):
             )
             self._safe_after(
                 0,
-                lambda u=url: self.update_clipboard_status(
-                    f"Downloading: {u[:50]}...", "blue"
-                ),
+                lambda u=url: self.update_clipboard_status(f"Downloading: {u[:50]}...", "blue"),
             )
 
-            success = self._download_clipboard_url(
-                url, check_stop=True, clip_state=clip_state
-            )
+            success = self._download_clipboard_url(url, check_stop=True, clip_state=clip_state)
 
             if success:
-                self._safe_after(
-                    0, lambda u=url: self._update_url_status(u, "completed")
-                )
+                self._safe_after(0, lambda u=url: self._update_url_status(u, "completed"))
             else:
                 self._safe_after(0, lambda u=url: self._update_url_status(u, "failed"))
 
@@ -2540,22 +2519,21 @@ class YouTubeDownloader(QMainWindow):
         """
         process = None
         try:
-            if clip_state:
-                quality = clip_state["quality"]
-            else:
-                quality = self.clipboard_quality_combo.currentText()
+            if not clip_state:
+                logger.warning("_download_clipboard_url called without clip_state")
+                clip_state = {
+                    "quality": "best",
+                    "audio_only": False,
+                    "full_playlist": False,
+                    "download_path": self.clipboard_mgr.clipboard_download_path,
+                }
+            quality = clip_state["quality"]
             if "none" in quality.lower() or quality == "none (Audio only)":
                 quality = "none"
 
-            audio_only = quality.startswith("none") or (
-                clip_state and clip_state.get("audio_only", False)
-            )
-            is_playlist_url = self.is_playlist_url(url)
-            full_playlist_enabled = (
-                clip_state["full_playlist"]
-                if clip_state
-                else self.clipboard_full_playlist_check.isChecked()
-            )
+            audio_only = quality.startswith("none") or clip_state.get("audio_only", False)
+            is_playlist_url = utils.is_playlist_url(url)
+            full_playlist_enabled = clip_state["full_playlist"]
 
             download_as_playlist = is_playlist_url and full_playlist_enabled
 
@@ -2563,16 +2541,10 @@ class YouTubeDownloader(QMainWindow):
             self._safe_after(0, lambda: self.clipboard_progress_label.setText("0%"))
 
             # Build output path template
-            _cdp = (
-                clip_state["download_path"]
-                if clip_state
-                else self.clipboard_download_path
-            )
+            _cdp = clip_state["download_path"]
             if audio_only:
                 if download_as_playlist:
-                    output_path = os.path.join(
-                        _cdp, "%(playlist_index)s-%(title)s.%(ext)s"
-                    )
+                    output_path = os.path.join(_cdp, "%(playlist_index)s-%(title)s.%(ext)s")
                 else:
                     output_path = os.path.join(_cdp, "%(title)s.%(ext)s")
             else:
@@ -2587,16 +2559,14 @@ class YouTubeDownloader(QMainWindow):
             if audio_only:
                 cmd = self.build_audio_ytdlp_command(url, output_path, volume=1.0)
             else:
-                cmd = self.build_video_ytdlp_command(
-                    url, output_path, quality, volume=1.0
-                )
+                cmd = self.build_video_ytdlp_command(url, output_path, quality, volume=1.0)
 
             if is_playlist_url and not full_playlist_enabled:
                 cmd.insert(1, "--no-playlist")
 
             # Speed limit
             _csl = clip_state["speed_limit"] if clip_state else None
-            cmd.extend(self._get_speed_limit_args(speed_limit_str=_csl))
+            cmd.extend(utils.get_speed_limit_args(_csl))
 
             if download_as_playlist:
                 logger.info(f"Clipboard full playlist download starting: {url}")
@@ -2621,16 +2591,16 @@ class YouTubeDownloader(QMainWindow):
             for line in process.stdout:
                 # Check stop flags
                 if check_stop:
-                    with self.clipboard_lock:
-                        is_downloading = self.clipboard_downloading
+                    with self.clipboard_mgr.clipboard_lock:
+                        is_downloading = self.clipboard_mgr.clipboard_downloading
                     if not is_downloading:
-                        self.safe_process_cleanup(process)
+                        utils.safe_process_cleanup(process)
                         return False
                 if check_stop_auto:
-                    with self.auto_download_lock:
-                        is_auto_downloading = self.clipboard_auto_downloading
+                    with self.clipboard_mgr.auto_download_lock:
+                        is_auto_downloading = self.clipboard_mgr.clipboard_auto_downloading
                     if not is_auto_downloading:
-                        self.safe_process_cleanup(process)
+                        utils.safe_process_cleanup(process)
                         return False
 
                 line_lower = line.lower()
@@ -2647,118 +2617,94 @@ class YouTubeDownloader(QMainWindow):
 
                 # Detect playlist item progress
                 if download_as_playlist and "downloading item" in line_lower:
-                    item_match = re.search(
-                        r"downloading item (\d+) of (\d+)", line_lower
-                    )
+                    item_match = re.search(r"downloading item (\d+) of (\d+)", line_lower)
                     if item_match:
-                        playlist_item_info = (
-                            f" [{item_match.group(1)}/{item_match.group(2)}]"
-                        )
+                        playlist_item_info = f" [{item_match.group(1)}/{item_match.group(2)}]"
 
                 if "[download]" in line or "Downloading" in line:
                     progress_match = PROGRESS_REGEX.search(line)
                     if progress_match:
                         progress = float(progress_match.group(1))
-                        self._safe_after(
-                            0, lambda p=progress: self.update_clipboard_progress(p)
-                        )
+                        self._safe_after(0, lambda p=progress: self.update_clipboard_progress(p))
 
                         phase = current_phase
                         pinfo = playlist_item_info
                         self._safe_after(
                             0,
-                            lambda p=progress, ph=phase, pi=pinfo: (
-                                self.update_clipboard_status(
-                                    f"Downloading {ph}{pi}... {p:.1f}%", "blue"
-                                )
+                            lambda p=progress, ph=phase, pi=pinfo: self.update_clipboard_status(
+                                f"Downloading {ph}{pi}... {p:.1f}%", "blue"
                             ),
                         )
 
                 elif "[Merger]" in line or "Merging" in line:
                     self._safe_after(
                         0,
-                        lambda: self.update_clipboard_status(
-                            "Merging video and audio...", "blue"
-                        ),
+                        lambda: self.update_clipboard_status("Merging video and audio...", "blue"),
                     )
                 elif "[ffmpeg]" in line:
                     self._safe_after(
                         0,
-                        lambda: self.update_clipboard_status(
-                            "Processing with ffmpeg...", "blue"
-                        ),
+                        lambda: self.update_clipboard_status("Processing with ffmpeg...", "blue"),
                     )
                 elif "[ExtractAudio]" in line:
                     self._safe_after(
                         0,
-                        lambda: self.update_clipboard_status(
-                            "Extracting audio...", "blue"
-                        ),
+                        lambda: self.update_clipboard_status("Extracting audio...", "blue"),
                     )
 
             process.wait()
 
             if process.returncode == 0:
-                self._safe_after(
-                    0, lambda: self.update_clipboard_progress(PROGRESS_COMPLETE)
-                )
+                self._safe_after(0, lambda: self.update_clipboard_progress(PROGRESS_COMPLETE))
                 logger.info(f"Clipboard download completed: {url}")
                 success = True
             else:
-                logger.error(
-                    f"Clipboard download failed: {url}, returncode={process.returncode}"
-                )
+                logger.error(f"Clipboard download failed: {url}, returncode={process.returncode}")
                 success = False
 
-            self.safe_process_cleanup(process)
+            utils.safe_process_cleanup(process)
             return success
 
         except Exception as e:
             logger.exception(f"Error downloading clipboard URL {url}: {e}")
             if process:
-                self.safe_process_cleanup(process)
+                utils.safe_process_cleanup(process)
             return False
 
     def _finish_clipboard_downloads(self):
         """Clean up after batch downloads complete."""
-        with self.clipboard_lock:
-            self.clipboard_downloading = False
-            has_urls = len(self.clipboard_url_list) > 0
+        with self.clipboard_mgr.clipboard_lock:
+            self.clipboard_mgr.clipboard_downloading = False
+            has_urls = len(self.clipboard_mgr.clipboard_url_list) > 0
             completed = sum(
-                1 for item in self.clipboard_url_list if item["status"] == "completed"
+                1 for item in self.clipboard_mgr.clipboard_url_list if item["status"] == "completed"
             )
             failed = sum(
-                1 for item in self.clipboard_url_list if item["status"] == "failed"
+                1 for item in self.clipboard_mgr.clipboard_url_list if item["status"] == "failed"
             )
 
         self.clipboard_download_btn.setEnabled(has_urls)
         self.clipboard_stop_btn.setEnabled(False)
 
         if failed > 0:
-            self.update_clipboard_status(
-                f"Completed: {completed} | Failed: {failed}", "orange"
-            )
+            self.update_clipboard_status(f"Completed: {completed} | Failed: {failed}", "orange")
         else:
-            self.update_clipboard_status(
-                f"All downloads complete! ({completed} videos)", "green"
-            )
+            self.update_clipboard_status(f"All downloads complete! ({completed} videos)", "green")
 
-        logger.info(
-            f"Clipboard batch download finished: {completed} completed, {failed} failed"
-        )
+        logger.info(f"Clipboard batch download finished: {completed} completed, {failed} failed")
 
     def stop_clipboard_downloads(self):
         """Stop clipboard batch downloads and auto-downloads."""
         stopped = False
-        with self.clipboard_lock:
-            if self.clipboard_downloading:
-                self.clipboard_downloading = False
+        with self.clipboard_mgr.clipboard_lock:
+            if self.clipboard_mgr.clipboard_downloading:
+                self.clipboard_mgr.clipboard_downloading = False
                 stopped = True
         if stopped:
             logger.info("Clipboard batch downloads stopped by user")
-        with self.auto_download_lock:
-            if self.clipboard_auto_downloading:
-                self.clipboard_auto_downloading = False
+        with self.clipboard_mgr.auto_download_lock:
+            if self.clipboard_mgr.clipboard_auto_downloading:
+                self.clipboard_mgr.clipboard_auto_downloading = False
                 stopped = True
         if stopped:
             logger.info("Clipboard auto-downloads stopped by user")
@@ -2767,18 +2713,18 @@ class YouTubeDownloader(QMainWindow):
 
     def _auto_download_single_url(self, url):
         """Auto-download single URL when detected (if auto-download enabled)."""
-        with self.auto_download_lock:
-            with self.clipboard_lock:
+        with self.clipboard_mgr.auto_download_lock:
+            with self.clipboard_mgr.clipboard_lock:
                 downloading_count = sum(
                     1
-                    for item in self.clipboard_url_list
+                    for item in self.clipboard_mgr.clipboard_url_list
                     if item["status"] == "downloading"
                 )
             if downloading_count > 0:
                 logger.info(f"URL queued (another download in progress): {url}")
                 return
 
-            self.clipboard_auto_downloading = True
+            self.clipboard_mgr.clipboard_auto_downloading = True
             self._update_url_status(url, "downloading")
 
         self.clipboard_stop_btn.setEnabled(True)
@@ -2789,31 +2735,27 @@ class YouTubeDownloader(QMainWindow):
             "full_playlist": self.clipboard_full_playlist_check.isChecked(),
             "audio_only": self.clipboard_audio_only_check.isChecked(),
             "speed_limit": self.clipboard_speed_limit_entry.text().strip(),
-            "download_path": self.clipboard_download_path,
+            "download_path": self.clipboard_mgr.clipboard_download_path,
         }
         self.thread_pool.submit(self._auto_download_worker, url, clip_state)
 
     def _auto_download_worker(self, url, clip_state=None):
         """Worker thread for auto-downloading single URL."""
-        with self.auto_download_lock:
-            is_auto_downloading = self.clipboard_auto_downloading
+        with self.clipboard_mgr.auto_download_lock:
+            is_auto_downloading = self.clipboard_mgr.clipboard_auto_downloading
         if not is_auto_downloading:
             self._safe_after(0, lambda: self._update_url_status(url, "pending"))
             return
 
         self._safe_after(
             0,
-            lambda: self.update_clipboard_status(
-                f"Auto-downloading: {url[:50]}...", "blue"
-            ),
+            lambda: self.update_clipboard_status(f"Auto-downloading: {url[:50]}...", "blue"),
         )
 
-        success = self._download_clipboard_url(
-            url, check_stop_auto=True, clip_state=clip_state
-        )
+        success = self._download_clipboard_url(url, check_stop_auto=True, clip_state=clip_state)
 
-        with self.auto_download_lock:
-            is_auto_downloading = self.clipboard_auto_downloading
+        with self.clipboard_mgr.auto_download_lock:
+            is_auto_downloading = self.clipboard_mgr.clipboard_auto_downloading
         if not is_auto_downloading:
             self._safe_after(0, lambda: self._update_url_status(url, "pending"))
             self._safe_after(
@@ -2829,9 +2771,7 @@ class YouTubeDownloader(QMainWindow):
         if success:
             self._update_url_status(url, "completed")
             self._update_auto_download_total()
-            self.update_clipboard_status(
-                f"Auto-download complete: {url[:50]}...", "green"
-            )
+            self.update_clipboard_status(f"Auto-download complete: {url[:50]}...", "green")
             self._remove_url_from_list(url)
             logger.info(f"Auto-download completed and removed: {url}")
         else:
@@ -2844,22 +2784,22 @@ class YouTubeDownloader(QMainWindow):
 
     def _disable_stop_if_idle(self):
         """Disable stop button if no downloads in progress."""
-        with self.clipboard_lock:
-            is_downloading = self.clipboard_downloading
-        with self.auto_download_lock:
-            is_auto_downloading = self.clipboard_auto_downloading
+        with self.clipboard_mgr.clipboard_lock:
+            is_downloading = self.clipboard_mgr.clipboard_downloading
+        with self.clipboard_mgr.auto_download_lock:
+            is_auto_downloading = self.clipboard_mgr.clipboard_auto_downloading
         if not is_downloading and not is_auto_downloading:
             self.clipboard_stop_btn.setEnabled(False)
 
     def _check_pending_auto_downloads(self):
         """Check if there are pending URLs that need to be auto-downloaded."""
-        with self.auto_download_lock:
-            self.clipboard_auto_downloading = False
+        with self.clipboard_mgr.auto_download_lock:
+            self.clipboard_mgr.clipboard_auto_downloading = False
 
         if self.clipboard_auto_download_check.isChecked():
-            with self.clipboard_lock:
+            with self.clipboard_mgr.clipboard_lock:
                 next_pending_url = None
-                for item in self.clipboard_url_list:
+                for item in self.clipboard_mgr.clipboard_url_list:
                     if item["status"] == "pending":
                         next_pending_url = item["url"]
                         break
@@ -2871,11 +2811,11 @@ class YouTubeDownloader(QMainWindow):
 
     def _update_auto_download_total(self):
         """Update total progress for auto-downloads."""
-        with self.clipboard_lock:
-            total = len(self.clipboard_url_list)
+        with self.clipboard_mgr.clipboard_lock:
+            total = len(self.clipboard_mgr.clipboard_url_list)
             completed = sum(
                 1
-                for item in self.clipboard_url_list
+                for item in self.clipboard_mgr.clipboard_url_list
                 if item["status"] in ["completed", "failed"]
             )
         self.sig_clipboard_total.emit(f"Completed: {completed}/{total} videos")
@@ -2891,49 +2831,56 @@ class YouTubeDownloader(QMainWindow):
         """Update clipboard mode status label (thread-safe via signal)."""
         self.sig_clipboard_status.emit(str(message), str(color))
 
+    def _pick_directory(self, current_path, title="Select Download Folder"):
+        """Show a directory picker dialog and validate the selection.
+
+        Returns the validated path string, or None if cancelled/invalid.
+        """
+        path = QFileDialog.getExistingDirectory(self, title, current_path)
+        if not path:
+            return None
+
+        is_valid, normalized_path, error_msg = utils.validate_download_path(path)
+        if not is_valid:
+            QMessageBox.critical(self, "Error", error_msg)
+            return None
+        path = normalized_path
+
+        if not os.path.exists(path):
+            QMessageBox.critical(self, "Error", f"Path does not exist: {path}")
+            return None
+
+        if not os.path.isdir(path):
+            QMessageBox.critical(self, "Error", f"Path is not a directory: {path}")
+            return None
+
+        test_file = os.path.join(path, ".ytdl_write_test")
+        try:
+            with open(test_file, "w") as f:
+                f.write("test")
+            os.remove(test_file)
+        except (IOError, OSError) as e:
+            QMessageBox.critical(self, "Error", f"Path is not writable:\n{path}\n\n{e}")
+            return None
+
+        return path
+
     def change_clipboard_path(self):
         """Change clipboard mode download path."""
-        path = QFileDialog.getExistingDirectory(
-            self, "Select Download Folder", self.clipboard_download_path
-        )
+        path = self._pick_directory(self.clipboard_mgr.clipboard_download_path)
         if path:
-            is_valid, normalized_path, error_msg = self.validate_download_path(path)
-            if not is_valid:
-                QMessageBox.critical(self, "Error", error_msg)
-                return
-            path = normalized_path
-
-            if not os.path.exists(path):
-                QMessageBox.critical(self, "Error", f"Path does not exist: {path}")
-                return
-
-            if not os.path.isdir(path):
-                QMessageBox.critical(self, "Error", f"Path is not a directory: {path}")
-                return
-
-            test_file = os.path.join(path, ".ytdl_write_test")
-            try:
-                with open(test_file, "w") as f:
-                    f.write("test")
-                os.remove(test_file)
-            except (IOError, OSError) as e:
-                QMessageBox.critical(
-                    self, "Error", f"Path is not writable:\n{path}\n\n{e}"
-                )
-                return
-
-            self.clipboard_download_path = path
+            self.clipboard_mgr.clipboard_download_path = path
             self.clipboard_path_label.setText(path)
             logger.info(f"Clipboard download path changed to: {path}")
 
-    def open_clipboard_folder(self):
-        """Open clipboard mode download folder."""
+    def _open_folder(self, path):
+        """Open a folder in the system file manager."""
         try:
             if sys.platform == "win32":
-                os.startfile(self.clipboard_download_path)
+                os.startfile(path)
             elif sys.platform == "darwin":
                 subprocess.Popen(
-                    ["open", self.clipboard_download_path],
+                    ["open", path],
                     close_fds=True,
                     start_new_session=True,
                     stdout=subprocess.DEVNULL,
@@ -2941,7 +2888,7 @@ class YouTubeDownloader(QMainWindow):
                 )
             else:
                 subprocess.Popen(
-                    ["xdg-open", self.clipboard_download_path],
+                    ["xdg-open", path],
                     close_fds=True,
                     start_new_session=True,
                     stdout=subprocess.DEVNULL,
@@ -2949,6 +2896,10 @@ class YouTubeDownloader(QMainWindow):
                 )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to open folder:\n{e}")
+
+    def open_clipboard_folder(self):
+        """Open clipboard mode download folder."""
+        self._open_folder(self.clipboard_mgr.clipboard_download_path)
 
     # ==================================================================
     #  TRIMMER CALLBACKS
@@ -2977,26 +2928,24 @@ class YouTubeDownloader(QMainWindow):
         """Handler for fetch duration button."""
         url = self.url_entry.text().strip()
         if not url:
-            QMessageBox.critical(
-                self, "Error", "Please enter a YouTube URL or select a local file"
-            )
+            QMessageBox.critical(self, "Error", "Please enter a YouTube URL or select a local file")
             return
 
-        if self.is_local_file(url):
+        if utils.is_local_file(url):
             if not os.path.isfile(url):
                 QMessageBox.critical(self, "Error", f"File not found:\n{url}")
                 return
             self.local_file_path = url
         else:
-            is_valid, message = self.validate_youtube_url(url)
+            is_valid, message = utils.validate_youtube_url(url)
             if not is_valid:
                 QMessageBox.critical(self, "Invalid URL", message)
                 logger.warning(f"Invalid URL rejected: {url}")
                 return
             self.local_file_path = None
 
-            if self.is_playlist_url(url):
-                if self.is_pure_playlist_url(url):
+            if utils.is_playlist_url(url):
+                if utils.is_pure_playlist_url(url):
                     self.is_playlist = True
                     self.trim_enabled_check.setChecked(False)
                     self.toggle_trim()
@@ -3008,7 +2957,7 @@ class YouTubeDownloader(QMainWindow):
                     logger.info("Playlist URL detected - trimming disabled")
                     return
                 else:
-                    url = self.strip_playlist_params(url)
+                    url = utils.strip_playlist_params(url)
                     self.url_entry.clear()
                     self.url_entry.setText(url)
                     self.is_playlist = False
@@ -3020,141 +2969,25 @@ class YouTubeDownloader(QMainWindow):
             else:
                 self.is_playlist = False
 
-        with self.fetch_lock:
-            is_fetching = self.is_fetching_duration
-        if is_fetching or self.is_downloading:
+        with self.trimming_mgr.fetch_lock:
+            is_fetching = self.trimming_mgr.is_fetching_duration
+        if is_fetching or self.download_mgr.is_downloading:
             return
 
         if self.current_video_url != url:
             self.current_video_url = url
-            self._clear_preview_cache()
+            self.trimming_mgr.current_video_url = url
+            self.trimming_mgr.clear_preview_cache()
         else:
             self.current_video_url = url
+            self.trimming_mgr.current_video_url = url
 
-        with self.fetch_lock:
-            self.is_fetching_duration = True
+        with self.trimming_mgr.fetch_lock:
+            self.trimming_mgr.is_fetching_duration = True
         self.fetch_duration_btn.setEnabled(False)
-        self.update_status("Fetching video duration...", "blue")
+        self.sig_update_status.emit("Fetching video duration...", "blue")
 
-        self.thread_pool.submit(self.fetch_video_duration, url)
-
-    def fetch_video_duration(self, url):
-        """Fetch video duration and info from URL or local file
-        (runs in worker thread)."""
-        try:
-            if self.is_local_file(url):
-                return self._fetch_local_file_duration(url)
-
-            def _fetch_metadata():
-                cmd = [
-                    self.ytdlp_path,
-                    "--print",
-                    "%(duration_string)s\n%(title)s",
-                    url,
-                ]
-                return subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=METADATA_FETCH_TIMEOUT,
-                    **_subprocess_kwargs,
-                )
-
-            result = self.retry_network_operation(_fetch_metadata, "Fetch metadata")
-
-            if result.returncode == 0:
-                lines = result.stdout.strip().splitlines()
-                duration_str = lines[0] if lines else ""
-                parts = duration_str.split(":")
-                try:
-                    if len(parts) == 1:
-                        duration = int(parts[0])
-                    elif len(parts) == 2:
-                        mins, secs = int(parts[0]), int(parts[1])
-                        if mins < 0 or secs < 0 or secs >= 60:
-                            raise ValueError(
-                                f"Invalid time values in duration: {duration_str}"
-                            )
-                        duration = mins * 60 + secs
-                    elif len(parts) == 3:
-                        hours, mins, secs = (
-                            int(parts[0]),
-                            int(parts[1]),
-                            int(parts[2]),
-                        )
-                        if (
-                            hours < 0
-                            or mins < 0
-                            or secs < 0
-                            or mins >= 60
-                            or secs >= 60
-                        ):
-                            raise ValueError(
-                                f"Invalid time values in duration: {duration_str}"
-                            )
-                        duration = hours * 3600 + mins * 60 + secs
-                    else:
-                        raise ValueError(f"Invalid duration format: {duration_str}")
-
-                    MAX_DURATION = 24 * 3600
-                    if duration < 0:
-                        raise ValueError(f"Negative duration: {duration}")
-                    if duration > MAX_DURATION:
-                        logger.warning(
-                            f"Duration {duration}s exceeds max, "
-                            f"capping to {MAX_DURATION}s"
-                        )
-                        duration = MAX_DURATION
-
-                    self.video_duration = duration
-                except (ValueError, OverflowError) as e:
-                    raise ValueError(f"Invalid duration format: {duration_str} ({e})")
-
-                video_title = None
-                if len(lines) >= 2 and lines[1].strip():
-                    video_title = lines[1].strip()
-                    self.video_title = video_title
-                    logger.info(f"Video title: {video_title}")
-
-                self._safe_after(0, lambda: self._update_duration_ui(video_title))
-
-                # Dispatch to GUI thread so widget reads in _fetch_file_size are safe
-                self._safe_after(0, lambda u=url: self._fetch_file_size(u))
-
-                self.update_status("Duration fetched successfully", "green")
-                logger.info(
-                    f"Successfully fetched video duration: {self.video_duration}s"
-                )
-            else:
-                raise Exception(f"yt-dlp returned error: {result.stderr}")
-
-        except subprocess.TimeoutExpired:
-            error_msg = "Request timed out. Please check your internet connection."
-            self.sig_show_messagebox.emit("error", "Error", error_msg)
-            self.update_status("Duration fetch timed out", "red")
-            logger.error("Timeout fetching video duration")
-        except ValueError as e:
-            error_msg = f"Invalid duration format received: {e}"
-            self.sig_show_messagebox.emit("error", "Error", error_msg)
-            self.update_status("Invalid duration format", "red")
-            logger.error(f"Duration parsing error: {e}")
-        except Exception as e:
-            err_msg = f"Failed to fetch video duration:\n{e}"
-            self.sig_show_messagebox.emit("error", "Error", err_msg)
-            self.update_status("Failed to fetch duration", "red")
-            logger.exception(f"Unexpected error fetching duration: {e}")
-        finally:
-            with self.fetch_lock:
-                self.is_fetching_duration = False
-            self._safe_after(
-                0,
-                lambda: (
-                    self.fetch_duration_btn.setEnabled(True)
-                    if self.trim_enabled_check.isChecked()
-                    else None
-                ),
-            )
+        self.thread_pool.submit(self.trimming_mgr.fetch_video_duration, url)
 
     def _update_duration_ui(self, video_title=None):
         """Update duration-related UI elements on the main thread."""
@@ -3173,11 +3006,11 @@ class YouTubeDownloader(QMainWindow):
 
         self.start_time_entry.setEnabled(True)
         self.end_time_entry.setEnabled(True)
-        self.start_time_entry.setText(self.seconds_to_hms(0))
-        self.end_time_entry.setText(self.seconds_to_hms(self.video_duration))
+        self.start_time_entry.setText(utils.seconds_to_hms(0))
+        self.end_time_entry.setText(utils.seconds_to_hms(self.video_duration))
 
         self.trim_duration_label.setText(
-            f"Selected Duration: {self.seconds_to_hms(self.video_duration)}"
+            f"Selected Duration: {utils.seconds_to_hms(self.video_duration)}"
         )
 
         if video_title:
@@ -3202,25 +3035,19 @@ class YouTubeDownloader(QMainWindow):
     def _fetch_file_size(self, url, quality=None, audio_only=None):
         """Fetch estimated file size for the video (runs in background thread)."""
         # Use provided values (thread-safe) or read from widgets (GUI thread only)
+        # Capture widget values on GUI thread before submitting to thread pool
         _quality = quality if quality is not None else self.quality_combo.currentText()
-        _audio_only = (
-            audio_only if audio_only is not None else self.audio_only_check.isChecked()
-        )
+        _audio_only = audio_only if audio_only is not None else self.audio_only_check.isChecked()
 
         def _fetch():
             try:
                 quality = _quality
 
-                if (
-                    _audio_only
-                    or quality.startswith("none")
-                    or quality == "none (Audio only)"
-                ):
+                if _audio_only or quality.startswith("none") or quality == "none (Audio only)":
                     format_selector = "bestaudio"
                 else:
                     format_selector = (
-                        f"bestvideo[height<={quality}]+bestaudio/"
-                        f"best[height<={quality}]"
+                        f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]"
                     )
 
                 cmd = [self.ytdlp_path, "--dump-json", "-f", format_selector, url]
@@ -3241,18 +3068,12 @@ class YouTubeDownloader(QMainWindow):
                         filesize_mb = filesize / BYTES_PER_MB
                         self._safe_after(
                             0,
-                            lambda: self._update_filesize_display(
-                                filesize, filesize_mb
-                            ),
+                            lambda: self._update_filesize_display(filesize, filesize_mb),
                         )
                     else:
-                        self._safe_after(
-                            0, lambda: self._update_filesize_display(None, None)
-                        )
+                        self._safe_after(0, lambda: self._update_filesize_display(None, None))
                 else:
-                    self._safe_after(
-                        0, lambda: self._update_filesize_display(None, None)
-                    )
+                    self._safe_after(0, lambda: self._update_filesize_display(None, None))
             except Exception as e:
                 logger.debug(f"Could not fetch file size: {e}")
                 self._safe_after(0, lambda: self._update_filesize_display(None, None))
@@ -3295,7 +3116,7 @@ class YouTubeDownloader(QMainWindow):
         # Re-fetch filesize for the new mode
         url = self.current_video_url or self.url_entry.text().strip()
         if url and not self.is_playlist:
-            is_valid, _ = self.validate_youtube_url(url)
+            is_valid, _ = utils.validate_youtube_url(url)
             if is_valid:
                 self.filesize_label.setText("Calculating size...")
                 self._fetch_file_size(url)
@@ -3321,7 +3142,7 @@ class YouTubeDownloader(QMainWindow):
 
         url = self.current_video_url or self.url_entry.text().strip()
         if url and not self.is_playlist:
-            is_valid, _ = self.validate_youtube_url(url)
+            is_valid, _ = utils.validate_youtube_url(url)
             if is_valid:
                 self.filesize_label.setText("Calculating size...")
                 self._fetch_file_size(url)
@@ -3343,72 +3164,7 @@ class YouTubeDownloader(QMainWindow):
             duration_percentage = selected_duration / self.video_duration
             trimmed_size = self.estimated_filesize * duration_percentage
             trimmed_size_mb = trimmed_size / BYTES_PER_MB
-            self.filesize_label.setText(
-                f"Estimated size (trimmed): {trimmed_size_mb:.1f} MB"
-            )
-
-    def _fetch_local_file_duration(self, filepath):
-        """Fetch duration from local file using ffprobe (runs in worker
-        thread)."""
-        try:
-            cmd = [
-                self.ffprobe_path,
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                filepath,
-            ]
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=FFPROBE_TIMEOUT,
-                check=True,
-                **_subprocess_kwargs,
-            )
-            duration_seconds = float(result.stdout.strip())
-            self.video_duration = int(duration_seconds)
-
-            video_title = Path(filepath).stem
-
-            self._safe_after(
-                0, lambda vt=video_title: self._update_duration_ui_local(vt)
-            )
-            self.update_status("Duration fetched successfully", "green")
-            logger.info(f"Local file duration: {self.video_duration}s")
-
-        except subprocess.CalledProcessError as e:
-            error_msg = (
-                f"Failed to read video file:\n{e.stderr if e.stderr else str(e)}"
-            )
-            self.sig_show_messagebox.emit("error", "Error", error_msg)
-            self.update_status("Failed to read file", "red")
-            logger.error(f"ffprobe error: {e}")
-        except ValueError as e:
-            self.sig_show_messagebox.emit("error", "Error", "Invalid video file format")
-            self.update_status("Invalid video file format", "red")
-            logger.error(f"Duration parsing error: {e}")
-        except Exception as e:
-            err_msg = f"Failed to read file:\n{e}"
-            self.sig_show_messagebox.emit("error", "Error", err_msg)
-            self.update_status("Failed to read file", "red")
-            logger.exception(f"Unexpected error reading local file: {e}")
-        finally:
-            with self.fetch_lock:
-                self.is_fetching_duration = False
-            self._safe_after(
-                0,
-                lambda: (
-                    self.fetch_duration_btn.setEnabled(True)
-                    if self.trim_enabled_check.isChecked()
-                    else None
-                ),
-            )
+            self.filesize_label.setText(f"Estimated size (trimmed): {trimmed_size_mb:.1f} MB")
 
     def on_slider_change(self, *_args):
         """Handle slider changes and enforce valid time ranges.
@@ -3428,13 +3184,13 @@ class YouTubeDownloader(QMainWindow):
             self.end_slider.blockSignals(False)
 
         # Update entry fields
-        self.start_time_entry.setText(self.seconds_to_hms(start_time))
-        self.end_time_entry.setText(self.seconds_to_hms(end_time))
+        self.start_time_entry.setText(utils.seconds_to_hms(start_time))
+        self.end_time_entry.setText(utils.seconds_to_hms(end_time))
 
         # Update selected duration
         selected_duration = end_time - start_time
         self.trim_duration_label.setText(
-            f"Selected Duration: {self.seconds_to_hms(selected_duration)}"
+            f"Selected Duration: {utils.seconds_to_hms(selected_duration)}"
         )
 
         self._update_trimmed_filesize()
@@ -3448,23 +3204,10 @@ class YouTubeDownloader(QMainWindow):
         """Handle end slider value changed."""
         self.on_slider_change()
 
-    def hms_to_seconds(self, hms_str):
-        """Convert HH:MM:SS format to seconds."""
-        try:
-            parts = hms_str.strip().split(":")
-            if len(parts) != 3:
-                return None
-            hours, minutes, seconds = map(int, parts)
-            if hours < 0 or not (0 <= minutes <= 59) or not (0 <= seconds <= 59):
-                return None
-            return hours * 3600 + minutes * 60 + seconds
-        except (ValueError, AttributeError):
-            return None
-
     def on_start_entry_change(self, *_args):
         """Handle changes to start time entry field."""
         value_str = self.start_time_entry.text()
-        seconds = self.hms_to_seconds(value_str)
+        seconds = utils.hms_to_seconds(value_str)
 
         if seconds is not None and 0 <= seconds <= self.video_duration:
             self.start_slider.blockSignals(True)
@@ -3473,12 +3216,12 @@ class YouTubeDownloader(QMainWindow):
             self.on_slider_change()
         else:
             current_time = self.start_slider.value()
-            self.start_time_entry.setText(self.seconds_to_hms(current_time))
+            self.start_time_entry.setText(utils.seconds_to_hms(current_time))
 
     def on_end_entry_change(self, *_args):
         """Handle changes to end time entry field."""
         value_str = self.end_time_entry.text()
-        seconds = self.hms_to_seconds(value_str)
+        seconds = utils.hms_to_seconds(value_str)
 
         if seconds is not None and 0 <= seconds <= self.video_duration:
             self.end_slider.blockSignals(True)
@@ -3487,7 +3230,7 @@ class YouTubeDownloader(QMainWindow):
             self.on_slider_change()
         else:
             current_time = self.end_slider.value()
-            self.end_time_entry.setText(self.seconds_to_hms(current_time))
+            self.end_time_entry.setText(utils.seconds_to_hms(current_time))
 
     def reset_volume(self):
         """Reset volume to 100%."""
@@ -3497,37 +3240,12 @@ class YouTubeDownloader(QMainWindow):
         self.volume_slider.blockSignals(False)
         self.volume_entry.setText("100")
 
-    def create_placeholder_image(self, width, height, text):
-        """Create a placeholder QPixmap with text (replaces tkinter
-        ImageTk.PhotoImage version)."""
-        pix = QPixmap(width, height)
-        pix.fill(QColor("#2d2d2d"))
-        painter = QPainter(pix)
-        painter.setPen(QColor("#ffffff"))
-        painter.setFont(QFont("Arial", 10))
-        painter.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, text)
-        painter.end()
-        return pix
-
     def start_upload(self):
         """Start upload to Catbox.moe in a background thread."""
-        if not self.last_output_file or not os.path.isfile(self.last_output_file):
-            QMessageBox.critical(
-                self,
-                "Error",
-                "No file available to upload. Please download/process a video first.",
-            )
-            return
-
-        file_size_mb = os.path.getsize(self.last_output_file) / BYTES_PER_MB
-        if file_size_mb > CATBOX_MAX_SIZE_MB:
-            QMessageBox.critical(
-                self,
-                "File Too Large",
-                f"File size ({file_size_mb:.1f} MB) exceeds "
-                f"Catbox.moe's 200MB limit.\n"
-                f"Please trim the video or use a lower quality setting.",
-            )
+        ok, error = self.upload_mgr.start_upload_if_valid()
+        if not ok:
+            if error:
+                QMessageBox.critical(self, "Error", error)
             return
 
         self.upload_btn.setEnabled(False)
@@ -3535,32 +3253,10 @@ class YouTubeDownloader(QMainWindow):
         self.upload_status_label.setStyleSheet("color: blue; font-size: 9pt;")
         self.upload_url_widget.setVisible(False)
 
-        self.thread_pool.submit(self.upload_to_catbox)
+        self.thread_pool.submit(self.upload_mgr.upload_to_catbox)
 
-    def upload_to_catbox(self):
-        """Upload file to Catbox.moe and display the URL (runs in worker
-        thread)."""
-        try:
-            with self.upload_lock:
-                self.is_uploading = True
-            logger.info(f"Starting upload to Catbox.moe: {self.last_output_file}")
-
-            file_url = self.catbox_client.upload(self.last_output_file)
-
-            self._safe_after(0, lambda: self._upload_success(file_url))
-            logger.info(f"Upload successful: {file_url}")
-
-        except Exception as e:
-            error_msg = str(e)
-            self._safe_after(0, lambda: self._upload_failed(error_msg))
-            logger.exception(f"Upload failed: {e}")
-
-        finally:
-            with self.upload_lock:
-                self.is_uploading = False
-
-    def _upload_success(self, file_url):
-        """Handle successful upload (called on main thread)."""
+    def _on_upload_complete(self, file_url, filename):
+        """Handle successful upload (signal slot from UploadManager)."""
         self.upload_status_label.setText("Upload complete!")
         self.upload_status_label.setStyleSheet("color: green; font-size: 9pt;")
 
@@ -3571,14 +3267,6 @@ class YouTubeDownloader(QMainWindow):
 
         self.upload_btn.setEnabled(True)
 
-        # Save upload link to history
-        filename = (
-            os.path.basename(self.last_output_file)
-            if self.last_output_file
-            else "unknown"
-        )
-        self.save_upload_link(file_url, filename)
-
         QMessageBox.information(
             self,
             "Upload Complete",
@@ -3586,20 +3274,10 @@ class YouTubeDownloader(QMainWindow):
             f"The URL has been copied to your clipboard.",
         )
 
-        # Auto-copy to clipboard
         try:
             QApplication.clipboard().setText(file_url)
         except Exception:
             logger.warning("Failed to copy URL to clipboard")
-
-    def _upload_failed(self, error_msg):
-        """Handle failed upload (called on main thread)."""
-        self.upload_status_label.setText("Upload failed")
-        self.upload_status_label.setStyleSheet("color: red; font-size: 9pt;")
-        self.upload_btn.setEnabled(True)
-        QMessageBox.critical(
-            self, "Upload Failed", f"Failed to upload file:\n\n{error_msg}"
-        )
 
     def copy_upload_url(self):
         """Copy upload URL to clipboard."""
@@ -3638,20 +3316,14 @@ class YouTubeDownloader(QMainWindow):
                     )
                     continue
 
-                with self.uploader_lock:
-                    already_in_queue = any(
-                        item["path"] == file_path for item in self.uploader_file_queue
-                    )
-                if not already_in_queue:
+                if self.upload_mgr.add_to_queue(file_path):
                     self._add_file_to_uploader_queue(file_path)
                     logger.info(f"Added file to upload queue: {file_path}")
 
     def _add_file_to_uploader_queue(self, file_path):
         """Add a file to the upload queue with UI widget."""
         file_frame = QWidget()
-        file_frame.setStyleSheet(
-            "border: 1px solid #555; border-radius: 2px; padding: 2px;"
-        )
+        file_frame.setStyleSheet("border: 1px solid #555; border-radius: 2px; padding: 2px;")
         row_layout = QHBoxLayout(file_frame)
         row_layout.setContentsMargins(5, 2, 5, 2)
         row_layout.setSpacing(5)
@@ -3666,44 +3338,33 @@ class YouTubeDownloader(QMainWindow):
         remove_btn = QPushButton("X")
         remove_btn.setFixedWidth(30)
         remove_btn.setStyleSheet("border: none;")
-        remove_btn.clicked.connect(
-            lambda checked, fp=file_path: self._remove_file_from_queue(fp)
-        )
+        remove_btn.clicked.connect(lambda checked, fp=file_path: self._remove_file_from_queue(fp))
         row_layout.addWidget(remove_btn)
 
         self.uploader_file_list_layout.addWidget(file_frame)
-
-        with self.uploader_lock:
-            self.uploader_file_queue.append({"path": file_path, "widget": file_frame})
+        self.upload_mgr.set_widget_for_queue_item(file_path, file_frame)
         self._update_uploader_queue_count()
 
-        with self.uploader_lock:
-            is_uploading = self.uploader_is_uploading
-            queue_len = len(self.uploader_file_queue)
-        if queue_len > 0 and not is_uploading:
+        count = self.upload_mgr.queue_count()
+        with self.upload_mgr.uploader_lock:
+            is_uploading = self.upload_mgr.uploader_is_uploading
+        if count > 0 and not is_uploading:
             self.uploader_upload_btn.setEnabled(True)
 
     def _remove_file_from_queue(self, file_path):
         """Remove a file from the upload queue."""
-        widget_to_destroy = None
-        with self.uploader_lock:
-            for i, item in enumerate(self.uploader_file_queue):
-                if item["path"] == file_path:
-                    widget_to_destroy = item.get("widget")
-                    self.uploader_file_queue.pop(i)
-                    logger.info(f"Removed file from queue: {file_path}")
-                    break
-        if widget_to_destroy:
-            widget_to_destroy.deleteLater()
+        widget = self.upload_mgr.remove_from_queue(file_path)
+        if widget:
+            widget.deleteLater()
+        logger.info(f"Removed file from queue: {file_path}")
         self._update_uploader_queue_count()
-        with self.uploader_lock:
-            if len(self.uploader_file_queue) == 0:
-                self.uploader_upload_btn.setEnabled(False)
+        if self.upload_mgr.queue_count() == 0:
+            self.uploader_upload_btn.setEnabled(False)
 
     def clear_uploader_queue(self):
         """Clear all files from upload queue."""
-        with self.uploader_lock:
-            is_uploading = self.uploader_is_uploading
+        with self.upload_mgr.uploader_lock:
+            is_uploading = self.upload_mgr.uploader_is_uploading
         if is_uploading:
             QMessageBox.warning(
                 self,
@@ -3712,12 +3373,7 @@ class YouTubeDownloader(QMainWindow):
             )
             return
 
-        widgets_to_destroy = []
-        with self.uploader_lock:
-            for item in self.uploader_file_queue:
-                if item.get("widget"):
-                    widgets_to_destroy.append(item["widget"])
-            self.uploader_file_queue.clear()
+        widgets_to_destroy = self.upload_mgr.clear_queue()
         for widget in widgets_to_destroy:
             widget.deleteLater()
         self._update_uploader_queue_count()
@@ -3726,94 +3382,25 @@ class YouTubeDownloader(QMainWindow):
 
     def _update_uploader_queue_count(self):
         """Update file queue count label."""
-        with self.uploader_lock:
-            count = len(self.uploader_file_queue)
+        count = self.upload_mgr.queue_count()
         s = "s" if count != 1 else ""
         self.uploader_queue_count_label.setText(f"({count} file{s})")
 
     def start_uploader_upload(self):
         """Start uploading all files in queue sequentially."""
-        with self.uploader_lock:
-            queue_empty = len(self.uploader_file_queue) == 0
-        if queue_empty:
-            QMessageBox.information(
-                self, "No Files", "No files in queue. Please add files first."
-            )
+        ok, error = self.upload_mgr.start_queue_upload()
+        if not ok:
+            if error:
+                QMessageBox.information(self, "No Files", error)
             return
 
-        with self.uploader_lock:
-            is_uploading = self.uploader_is_uploading
-        if is_uploading:
-            return
-
-        with self.uploader_lock:
-            self.uploader_is_uploading = True
-        self.uploader_current_index = 0
         self.uploader_upload_btn.setEnabled(False)
         self.uploader_url_widget.setVisible(False)
 
-        self.thread_pool.submit(self._process_uploader_queue)
-
-    def _process_uploader_queue(self):
-        """Process upload queue sequentially (runs in worker thread)."""
-        with self.uploader_lock:
-            queue_snapshot = list(self.uploader_file_queue)
-        total_count = len(queue_snapshot)
-
-        for index, item in enumerate(queue_snapshot):
-            with self.uploader_lock:
-                is_uploading = self.uploader_is_uploading
-            if not is_uploading:
-                logger.info("Uploader queue processing stopped by user")
-                break
-
-            file_path = item["path"]
-            filename = os.path.basename(file_path)
-
-            self._safe_after(
-                0,
-                lambda i=index, t=total_count, fn=filename: (
-                    self.uploader_status_label.setText(
-                        f"Uploading {i + 1}/{t}: {fn}..."
-                    ),
-                    self.uploader_status_label.setStyleSheet(
-                        "color: blue; font-size: 9pt;"
-                    ),
-                ),
-            )
-
-            success = self._upload_single_file(file_path)
-
-            if not success:
-                continue
-
-        self._safe_after(0, self._finish_uploader_queue)
-
-    def _upload_single_file(self, file_path):
-        """Upload a single file from the queue. Returns True if successful."""
-        try:
-            logger.info(f"Uploading file from queue: {file_path}")
-
-            file_url = self.catbox_client.upload(file_path)
-
-            filename = os.path.basename(file_path)
-            self.save_upload_link(file_url, filename)
-
-            self._safe_after(0, lambda url=file_url: self._show_upload_url(url))
-
-            logger.info(f"Upload successful: {file_url}")
-            return True
-
-        except Exception as e:
-            logger.exception(f"Upload failed for {file_path}: {e}")
-            error_msg = str(e)
-            filename = os.path.basename(file_path)
-            full_error = f"Failed to upload {filename}:\n\n{error_msg}"
-            self.sig_show_messagebox.emit("error", "Upload Failed", full_error)
-            return False
+        self.thread_pool.submit(self.upload_mgr.process_uploader_queue)
 
     def _show_upload_url(self, file_url):
-        """Display the most recent upload URL."""
+        """Display the most recent upload URL (signal slot)."""
         self.uploader_url_entry.setReadOnly(False)
         self.uploader_url_entry.setText(file_url)
         self.uploader_url_entry.setReadOnly(True)
@@ -3824,17 +3411,10 @@ class YouTubeDownloader(QMainWindow):
         except Exception:
             logger.warning("Failed to copy URL to clipboard")
 
-    def _finish_uploader_queue(self):
-        """Clean up after queue upload completes."""
-        widgets_to_destroy = []
-        with self.uploader_lock:
-            self.uploader_is_uploading = False
-            for item in self.uploader_file_queue:
-                if item.get("widget"):
-                    widgets_to_destroy.append(item["widget"])
-            count = len(self.uploader_file_queue)
-            self.uploader_file_queue.clear()
-        for widget in widgets_to_destroy:
+    def _on_uploader_queue_done(self, count):
+        """Clean up after queue upload completes (signal slot)."""
+        widgets = self.upload_mgr.clear_queue()
+        for widget in widgets:
             widget.deleteLater()
         self._update_uploader_queue_count()
 
@@ -3855,8 +3435,8 @@ class YouTubeDownloader(QMainWindow):
 
     def _enable_upload_button(self, filepath):
         """Enable upload button after successful download (thread-safe)."""
+        self.upload_mgr.enable_upload_button(filepath)
         if filepath and os.path.isfile(filepath):
-            self.last_output_file = filepath
             self._safe_after(0, lambda: self._do_enable_upload(filepath))
 
     def _do_enable_upload(self, filepath):
@@ -3866,7 +3446,7 @@ class YouTubeDownloader(QMainWindow):
 
         if self.auto_upload_check.isChecked():
             url = self.url_entry.text().strip()
-            if url and self.is_playlist_url(url):
+            if url and utils.is_playlist_url(url):
                 logger.info("Auto-upload skipped for playlist URL")
             else:
                 logger.info("Auto-upload enabled, starting upload...")
@@ -3881,15 +3461,7 @@ class YouTubeDownloader(QMainWindow):
         if self._shutting_down:
             return
 
-        # Cancel any pending update
-        if hasattr(self, "_preview_debounce_timer"):
-            self._preview_debounce_timer.stop()
-            try:
-                self._preview_debounce_timer.timeout.disconnect()
-            except TypeError:
-                pass
-
-        self._preview_debounce_timer.timeout.connect(self.update_previews)
+        # Restart the single-shot timer (signal connected once in __init__)
         self._preview_debounce_timer.start()
 
     def update_previews(self):
@@ -3900,137 +3472,24 @@ class YouTubeDownloader(QMainWindow):
         if not self.current_video_url or self.video_duration == 0:
             return
 
-        with self.preview_lock:
-            if self.preview_thread_running:
+        with self.trimming_mgr.preview_lock:
+            if self.trimming_mgr.preview_thread_running:
                 return
-            self.preview_thread_running = True
+            self.trimming_mgr.preview_thread_running = True
 
         start_time = self.start_slider.value()
         end_time = self.end_slider.value()
 
         # Show loading indicators
-        loading_pix = self.create_placeholder_image(
-            PREVIEW_WIDTH, PREVIEW_HEIGHT, "Loading..."
-        )
+        loading_pix = self.create_placeholder_pixmap(PREVIEW_WIDTH, PREVIEW_HEIGHT, "Loading...")
         self.start_preview_label.setPixmap(loading_pix)
         self.end_preview_label.setPixmap(loading_pix)
 
         try:
-            self.thread_pool.submit(self._update_previews_thread, start_time, end_time)
+            self.thread_pool.submit(self.trimming_mgr.update_previews_thread, start_time, end_time)
         except RuntimeError:
-            with self.preview_lock:
-                self.preview_thread_running = False
-
-    def _update_previews_thread(self, start_time, end_time):
-        """Background thread to extract and update preview frames."""
-        try:
-            adjusted_end_time = end_time
-            if self.video_duration > 0 and end_time >= self.video_duration - 1:
-                adjusted_end_time = max(0, self.video_duration - 3)
-                logger.debug(
-                    f"Adjusted end preview time from {end_time}s to "
-                    f"{adjusted_end_time}s (near EOF)"
-                )
-
-            logger.info(
-                f"Extracting preview frames at {start_time}s and {adjusted_end_time}s"
-            )
-
-            # Extract start frame
-            start_frame_path = self.extract_frame(start_time)
-            if start_frame_path:
-                self._update_preview_image(start_frame_path, "start")
-            else:
-                error_pix = self.create_placeholder_image(
-                    PREVIEW_WIDTH, PREVIEW_HEIGHT, "Error"
-                )
-                self.start_preview_image = error_pix
-                self._safe_after(0, lambda pix=error_pix: self._set_start_preview(pix))
-
-            # Extract end frame
-            end_frame_path = self.extract_frame(adjusted_end_time)
-            if end_frame_path:
-                self._update_preview_image(end_frame_path, "end")
-            else:
-                error_pix = self.create_placeholder_image(
-                    PREVIEW_WIDTH, PREVIEW_HEIGHT, "Error"
-                )
-                self.end_preview_image = error_pix
-                self._safe_after(0, lambda pix=error_pix: self._set_end_preview(pix))
-        finally:
-            with self.preview_lock:
-                self.preview_thread_running = False
-
-    def _update_preview_image(self, image_path, position):
-        """Update preview image in UI."""
-        try:
-            with Image.open(image_path) as img:
-                img.thumbnail((PREVIEW_WIDTH, PREVIEW_HEIGHT), Image.Resampling.LANCZOS)
-                img = img.convert("RGBA")
-                data = img.tobytes("raw", "RGBA")
-                qimg = QImage(
-                    data, img.width, img.height, QImage.Format.Format_RGBA8888
-                )
-                pixmap = QPixmap.fromImage(qimg)
-
-            if position == "start":
-                self.start_preview_image = pixmap
-                self._safe_after(0, lambda p=pixmap: self._set_start_preview(p))
-            else:
-                self.end_preview_image = pixmap
-                self._safe_after(0, lambda p=pixmap: self._set_end_preview(p))
-
-        except Exception as e:
-            logger.error(f"Error updating preview image for {position}: {e}")
-
-    def _set_start_preview(self, pixmap):
-        """Set start preview image (called on main thread)."""
-        self.start_preview_image = pixmap
-        self.start_preview_label.setPixmap(pixmap)
-        self.start_preview_label.setText("")
-
-    def _set_end_preview(self, pixmap):
-        """Set end preview image (called on main thread)."""
-        self.end_preview_image = pixmap
-        self.end_preview_label.setPixmap(pixmap)
-        self.end_preview_label.setText("")
-
-    def _clear_preview_cache(self):
-        """Clear the preview frame cache, deleting cached files from disk."""
-        logger.info("Clearing preview cache")
-        for timestamp, file_path in self.preview_cache.items():
-            try:
-                if os.path.exists(file_path):
-                    os.unlink(file_path)
-            except OSError as e:
-                logger.debug(f"Failed to delete cached preview file {file_path}: {e}")
-        self.preview_cache.clear()
-
-    def _cache_preview_frame(self, timestamp, file_path):
-        """Add a frame to the cache with LRU eviction."""
-        if timestamp in self.preview_cache:
-            del self.preview_cache[timestamp]
-
-        if len(self.preview_cache) >= PREVIEW_CACHE_SIZE:
-            oldest_key, old_path = self.preview_cache.popitem(last=False)
-            try:
-                if os.path.exists(old_path):
-                    os.remove(old_path)
-            except OSError:
-                pass
-
-        self.preview_cache[timestamp] = file_path
-
-    def _get_cached_frame(self, timestamp):
-        """Get a cached frame if available."""
-        if timestamp in self.preview_cache:
-            self.preview_cache.move_to_end(timestamp)
-            return self.preview_cache[timestamp]
-        return None
-
-    # ==================================================================
-    #  URL / PATH CALLBACKS
-    # ==================================================================
+            with self.trimming_mgr.preview_lock:
+                self.trimming_mgr.preview_thread_running = False
 
     def on_url_change(self, *_args):
         """Detect if input is URL or file path."""
@@ -4055,7 +3514,7 @@ class YouTubeDownloader(QMainWindow):
         self.video_info_label.setText("")
         self.fetch_duration_btn.setEnabled(self.trim_enabled_check.isChecked())
 
-        if self.is_local_file(input_text):
+        if utils.is_local_file(input_text):
             self.local_file_path = input_text
             self.mode_label.setText(f"Mode: Local File | {Path(input_text).name}")
             self.mode_label.setStyleSheet("color: green; font-size: 9pt;")
@@ -4065,95 +3524,20 @@ class YouTubeDownloader(QMainWindow):
             self.mode_label.setStyleSheet("color: green; font-size: 9pt;")
 
             # Auto-fetch file size estimate for valid YouTube URLs (debounced)
-            is_valid, _ = self.validate_youtube_url(input_text)
+            is_valid, _ = utils.validate_youtube_url(input_text)
             if is_valid:
                 self._size_fetch_timer.start()
 
-    def is_local_file(self, input_text):
-        """Check if input is a local file path."""
-        if os.path.isfile(input_text):
-            return True
-
-        path = Path(input_text)
-        media_extensions = {
-            ".mp4",
-            ".mkv",
-            ".avi",
-            ".mov",
-            ".flv",
-            ".webm",
-            ".wmv",
-            ".m4v",
-            ".ts",
-            ".mpg",
-            ".mpeg",
-            ".mp3",
-            ".aac",
-            ".m4a",
-            ".wav",
-        }
-        if path.suffix.lower() in media_extensions:
-            return True
-
-        return False
-
     def change_path(self):
         """Change download path with validation."""
-        path = QFileDialog.getExistingDirectory(
-            self, "Select Download Folder", self.download_path
-        )
+        path = self._pick_directory(self.download_path)
         if path:
-            is_valid, normalized_path, error_msg = self.validate_download_path(path)
-            if not is_valid:
-                QMessageBox.critical(self, "Error", error_msg)
-                return
-            path = normalized_path
-
-            if not os.path.exists(path):
-                QMessageBox.critical(self, "Error", f"Path does not exist: {path}")
-                return
-
-            if not os.path.isdir(path):
-                QMessageBox.critical(self, "Error", f"Path is not a directory: {path}")
-                return
-
-            test_file = os.path.join(path, ".ytdl_write_test")
-            try:
-                with open(test_file, "w") as f:
-                    f.write("test")
-                os.remove(test_file)
-            except (IOError, OSError) as e:
-                QMessageBox.critical(
-                    self, "Error", f"Path is not writable:\n{path}\n\n{e}"
-                )
-                return
-
             self.download_path = path
             self.path_label.setText(path)
 
     def open_download_folder(self):
         """Open the download folder in the system file manager."""
-        try:
-            if sys.platform == "win32":
-                os.startfile(self.download_path)
-            elif sys.platform == "darwin":
-                subprocess.Popen(
-                    ["open", self.download_path],
-                    close_fds=True,
-                    start_new_session=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            else:
-                subprocess.Popen(
-                    ["xdg-open", self.download_path],
-                    close_fds=True,
-                    start_new_session=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to open folder:\n{e}")
+        self._open_folder(self.download_path)
 
     def browse_local_file(self):
         """Open file dialog to select a local video file."""
@@ -4184,1333 +3568,8 @@ class YouTubeDownloader(QMainWindow):
             self.filename_entry.clear()
             logger.info(f"Local file selected: {filepath}")
 
-    # ==================================================================
-    #  Speed limit helper (ported for QLineEdit instead of StringVar)
-    # ==================================================================
-
-    def _get_speed_limit_args(self, speed_limit_entry=None, speed_limit_str=None):
-        """Get yt-dlp speed limit arguments if speed limit is set.
-
-        Args:
-            speed_limit_entry: Optional QLineEdit to use (GUI thread only).
-                Defaults to self.speed_limit_entry.
-            speed_limit_str: Pre-captured speed limit string (thread-safe).
-                If provided, speed_limit_entry is ignored.
-        """
-        if speed_limit_str is None:
-            if speed_limit_entry is None:
-                speed_limit_entry = self.speed_limit_entry
-            speed_limit_str = speed_limit_entry.text().strip()
-        if speed_limit_str:
-            try:
-                speed_limit = float(speed_limit_str)
-                if speed_limit > 0:
-                    rate_bytes = int(speed_limit * BYTES_PER_MB)
-                    return ["--limit-rate", f"{rate_bytes}"]
-            except ValueError:
-                pass
-        return []
-
-    # --- from _port_download.py ---
-
-    def validate_youtube_url(self, url):
-        """Validate if URL is a valid YouTube URL.
-
-        Returns:
-            tuple: (is_valid: bool, message: str)
-        """
-        if not url:
-            return False, "URL is empty"
-        if len(url) > 2048:
-            return False, "URL is too long"
-
-        try:
-            parsed = urlparse(url)
-
-            valid_domains = [
-                "youtube.com",
-                "www.youtube.com",
-                "m.youtube.com",
-                "youtu.be",
-                "www.youtu.be",
-            ]
-
-            if parsed.netloc not in valid_domains:
-                return False, "Not a YouTube URL. Please enter a valid YouTube link."
-
-            if "youtu.be" in parsed.netloc:
-                if not parsed.path or parsed.path == "/":
-                    return False, "Invalid YouTube short URL"
-                return True, "Valid YouTube URL"
-
-            if "youtube.com" in parsed.netloc:
-                if "/watch" in parsed.path:
-                    query_params = parse_qs(parsed.query)
-                    if "v" not in query_params:
-                        return False, "Missing video ID in URL"
-                    return True, "Valid YouTube URL"
-                elif "/shorts/" in parsed.path:
-                    return True, "Valid YouTube Shorts URL"
-                elif "/embed/" in parsed.path:
-                    return True, "Valid YouTube embed URL"
-                elif "/v/" in parsed.path:
-                    return True, "Valid YouTube URL"
-                elif "/playlist" in parsed.path or "list=" in parsed.query:
-                    return True, "Valid YouTube Playlist URL"
-                else:
-                    return False, "Unrecognized YouTube URL format"
-
-            return False, "Invalid URL format"
-
-        except Exception as e:
-            logger.error(f"URL validation error: {e}")
-            return False, f"Invalid URL format: {str(e)}"
-
-    def is_playlist_url(self, url):
-        """Check if URL is a YouTube playlist."""
-        try:
-            parsed = urlparse(url)
-            if "/playlist" in parsed.path:
-                return True
-            query_params = parse_qs(parsed.query)
-            if "list=" in parsed.query and query_params.get("list"):
-                return True
-            return False
-        except (ValueError, AttributeError):
-            return False
-
-    def is_pure_playlist_url(self, url):
-        """Check if URL is a pure playlist URL (e.g. /playlist?list=YYY) without a video context."""
-        try:
-            parsed = urlparse(url)
-            return "/playlist" in parsed.path
-        except (ValueError, AttributeError):
-            return False
-
-    def strip_playlist_params(self, url):
-        """Strip playlist-related params (list, index) from a URL, keeping the video context."""
-        try:
-            parsed = urlparse(url)
-            params = parse_qs(parsed.query, keep_blank_values=True)
-            params.pop("list", None)
-            params.pop("index", None)
-            flat_params = {k: v[0] if len(v) == 1 else v for k, v in params.items()}
-            new_query = urlencode(flat_params, doseq=True)
-            return urlunparse(
-                (
-                    parsed.scheme,
-                    parsed.netloc,
-                    parsed.path,
-                    parsed.params,
-                    new_query,
-                    parsed.fragment,
-                )
-            )
-        except (ValueError, AttributeError):
-            return url
-
-    @staticmethod
-    def sanitize_filename(filename):
-        """Sanitize filename to prevent path traversal and command injection."""
-        if not filename:
-            return ""
-
-        for char in ["/", "\\", "\x00"]:
-            filename = filename.replace(char, "")
-        while ".." in filename:
-            filename = filename.replace("..", "")
-
-        shell_chars = [
-            "$",
-            "`",
-            "|",
-            ";",
-            "&",
-            "<",
-            ">",
-            "(",
-            ")",
-            "{",
-            "}",
-            "[",
-            "]",
-            "!",
-            "*",
-            "?",
-            "~",
-            "^",
-        ]
-        for char in shell_chars:
-            filename = filename.replace(char, "")
-
-        filename = "".join(c for c in filename if ord(c) >= 32 and ord(c) != 127)
-        filename = filename.strip(". ")
-
-        if len(filename) > MAX_FILENAME_LENGTH:
-            filename = filename[:MAX_FILENAME_LENGTH]
-
-        return filename
-
-    @staticmethod
-    def validate_download_path(path):
-        """Validate download path to prevent path traversal attacks.
-
-        Returns:
-            tuple: (is_valid, normalized_path, error_message)
-        """
-        try:
-            normalized = os.path.normpath(os.path.abspath(path))
-            normalized_path = Path(normalized)
-
-            if ".." in path or ".." in normalized:
-                return (False, None, "Path contains directory traversal sequences")
-
-            home_dir = Path.home()
-            safe_dirs = [
-                home_dir,
-                Path("/tmp"),
-                Path(os.environ.get("TEMP", "/tmp"))
-                if sys.platform == "win32"
-                else Path("/tmp"),
-            ]
-
-            is_safe = False
-            for safe_dir in safe_dirs:
-                try:
-                    safe_resolved = safe_dir.resolve()
-                    normalized_path.resolve().relative_to(safe_resolved)
-                    is_safe = True
-                    break
-                except ValueError:
-                    continue
-
-            if not is_safe:
-                return (
-                    False,
-                    None,
-                    "Download path must be within home directory or temp folder",
-                )
-
-            return (True, str(normalized_path.resolve()), None)
-        except Exception as e:
-            return (False, None, f"Path validation error: {str(e)}")
-
-    @staticmethod
-    def validate_volume(volume):
-        """Validate and clamp volume value to safe range."""
-        try:
-            vol = float(volume)
-            return max(MIN_VOLUME, min(MAX_VOLUME, vol))
-        except (ValueError, TypeError):
-            return 1.0
-
     # ===================================================================
-    #  Process / network utilities
-    # ===================================================================
-
-    @staticmethod
-    def safe_process_cleanup(process, timeout=PROCESS_TERMINATE_TIMEOUT):
-        """Safely terminate and cleanup a subprocess.
-
-        Returns:
-            bool: True if process was cleaned up successfully
-        """
-        if process is None:
-            return True
-
-        try:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    logger.warning(
-                        f"Process {process.pid} did not terminate, forcing kill"
-                    )
-                    process.kill()
-                    try:
-                        process.wait(timeout=timeout)
-                    except subprocess.TimeoutExpired:
-                        logger.error(f"Process {process.pid} did not exit after kill")
-
-            if process.stdout:
-                process.stdout.close()
-            if process.stderr:
-                process.stderr.close()
-            if process.stdin:
-                process.stdin.close()
-
-            return True
-        except Exception as e:
-            logger.error(f"Error cleaning up process: {e}")
-            return False
-
-    def retry_network_operation(self, operation, operation_name, *args, **kwargs):
-        """Retry a network operation with exponential backoff."""
-        for attempt in range(1, MAX_RETRY_ATTEMPTS + 1):
-            try:
-                return operation(*args, **kwargs)
-            except subprocess.TimeoutExpired:
-                if attempt == MAX_RETRY_ATTEMPTS:
-                    logger.error(
-                        f"{operation_name} failed after {MAX_RETRY_ATTEMPTS} attempts: timeout"
-                    )
-                    raise
-                logger.warning(
-                    f"{operation_name} timeout (attempt {attempt}/{MAX_RETRY_ATTEMPTS}), retrying in {RETRY_DELAY}s..."
-                )
-                time.sleep(RETRY_DELAY * attempt)
-            except subprocess.CalledProcessError as e:
-                if attempt == MAX_RETRY_ATTEMPTS:
-                    logger.error(
-                        f"{operation_name} failed after {MAX_RETRY_ATTEMPTS} attempts: {e}"
-                    )
-                    raise
-                logger.warning(
-                    f"{operation_name} failed (attempt {attempt}/{MAX_RETRY_ATTEMPTS}), retrying in {RETRY_DELAY}s..."
-                )
-                time.sleep(RETRY_DELAY * attempt)
-            except Exception as e:
-                logger.error(f"{operation_name} failed with unexpected error: {e}")
-                raise
-
-    # ===================================================================
-    #  Resource / dependency helpers
-    # ===================================================================
-
-    def _get_video_encoder_args(self, mode="crf", target_bitrate=None):
-        """Get video encoder arguments based on available hardware.
-
-        Args:
-            mode: 'crf' for quality-based (trim/volume), 'bitrate' for target bitrate (10MB)
-            target_bitrate: Required when mode='bitrate'
-
-        Returns:
-            list: ffmpeg encoder arguments
-        """
-        if self.hw_encoder:
-            if mode == "crf":
-                if self.hw_encoder == "h264_amf":
-                    return [
-                        "-c:v",
-                        "h264_amf",
-                        "-quality",
-                        "balanced",
-                        "-rc",
-                        "cqp",
-                        "-qp_i",
-                        "23",
-                        "-qp_p",
-                        "23",
-                    ]
-                else:  # h264_nvenc
-                    return [
-                        "-c:v",
-                        "h264_nvenc",
-                        "-preset",
-                        "p4",
-                        "-rc",
-                        "constqp",
-                        "-qp",
-                        "23",
-                    ]
-            else:  # bitrate mode
-                maxrate = int(target_bitrate * 1.5)
-                bufsize = int(target_bitrate * 2)
-                if self.hw_encoder == "h264_amf":
-                    return [
-                        "-c:v",
-                        "h264_amf",
-                        "-quality",
-                        "balanced",
-                        "-b:v",
-                        str(target_bitrate),
-                        "-maxrate",
-                        str(maxrate),
-                        "-bufsize",
-                        str(bufsize),
-                    ]
-                else:  # h264_nvenc
-                    return [
-                        "-c:v",
-                        "h264_nvenc",
-                        "-preset",
-                        "p4",
-                        "-b:v",
-                        str(target_bitrate),
-                        "-maxrate",
-                        str(maxrate),
-                        "-bufsize",
-                        str(bufsize),
-                    ]
-        else:
-            if mode == "crf":
-                return [
-                    "-c:v",
-                    "libx264",
-                    "-crf",
-                    str(VIDEO_CRF),
-                    "-preset",
-                    "ultrafast",
-                ]
-            else:  # bitrate mode
-                maxrate = int(target_bitrate * 1.5)
-                bufsize = int(target_bitrate * 2)
-                return [
-                    "-c:v",
-                    "libx264",
-                    "-b:v",
-                    str(target_bitrate),
-                    "-maxrate",
-                    str(maxrate),
-                    "-bufsize",
-                    str(bufsize),
-                    "-preset",
-                    "ultrafast",
-                ]
-
-    # ===================================================================
-    #  Temp directory management
-    # ===================================================================
-
-    def extract_frame(self, timestamp):
-        """Extract a single frame at the given timestamp."""
-        if not self.current_video_url:
-            return None
-
-        # Check cache first
-        cached = self._get_cached_frame(timestamp)
-        if cached and os.path.exists(cached):
-            logger.debug(f"Using cached frame for timestamp {timestamp}s")
-            return cached
-
-        try:
-            temp_file = os.path.join(self.temp_dir, f"frame_{timestamp}.jpg")
-
-            if self.is_local_file(self.current_video_url):
-                video_url = self.current_video_url
-            else:
-
-                def _get_stream_url():
-                    get_url_cmd = [
-                        self.ytdlp_path,
-                        "-f",
-                        "best[height<=480]/best",
-                        "--no-playlist",
-                        "-g",
-                        self.current_video_url,
-                    ]
-                    return subprocess.run(
-                        get_url_cmd,
-                        capture_output=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        timeout=STREAM_FETCH_TIMEOUT,
-                        check=True,
-                        **_subprocess_kwargs,
-                    )
-
-                result = self.retry_network_operation(
-                    _get_stream_url, f"Get stream URL for frame at {timestamp}s"
-                )
-                video_url = result.stdout.strip().split("\n")[0]
-
-                if not video_url:
-                    logger.error("Failed to get stream URL - empty response")
-                    return None
-
-                if not (
-                    video_url.startswith("http://") or video_url.startswith("https://")
-                ):
-                    logger.error(f"Invalid stream URL format: {video_url[:100]}")
-                    return None
-
-            def _extract_frame():
-                cmd = [self.ffmpeg_path, "-nostdin"]
-                if video_url.startswith("http"):
-                    cmd.extend(
-                        [
-                            "-reconnect",
-                            "1",
-                            "-reconnect_streamed",
-                            "1",
-                            "-reconnect_delay_max",
-                            "5",
-                            "-timeout",
-                            "10000000",
-                        ]
-                    )
-                cmd.extend(
-                    [
-                        "-ss",
-                        str(timestamp),
-                        "-i",
-                        video_url,
-                        "-vframes",
-                        "1",
-                        "-q:v",
-                        "2",
-                        "-y",
-                        temp_file,
-                    ]
-                )
-                return subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    timeout=STREAM_FETCH_TIMEOUT,
-                    check=True,
-                    **_subprocess_kwargs,
-                )
-
-            self.retry_network_operation(
-                _extract_frame, f"Extract frame at {timestamp}s"
-            )
-
-            if os.path.exists(temp_file):
-                self._cache_preview_frame(timestamp, temp_file)
-                return temp_file
-
-        except subprocess.TimeoutExpired:
-            logger.warning(f"Timeout while extracting frame at {timestamp}s")
-        except subprocess.CalledProcessError as e:
-            logger.error(f"FFmpeg error extracting frame at {timestamp}s: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error extracting frame at {timestamp}s: {e}")
-
-        return None
-
-    # ===================================================================
-    #  File helpers
-    # ===================================================================
-
-    def _find_latest_file(self):
-        """Find the most recently created file in the download directory."""
-        try:
-            download_dir = Path(self.download_path)
-            if not download_dir.exists():
-                return None
-
-            files = [f for f in download_dir.iterdir() if f.is_file()]
-            if not files:
-                return None
-
-            latest_file = max(files, key=lambda f: f.stat().st_ctime)
-            return str(latest_file)
-
-        except Exception as e:
-            logger.error(f"Error finding latest file: {e}")
-            return None
-
-    def cleanup_temp_files(self):
-        """Clean up temporary preview files."""
-        try:
-            self._clear_preview_cache()
-            if self.temp_dir and os.path.exists(self.temp_dir):
-                shutil.rmtree(self.temp_dir)
-                logger.info(f"Cleaned up temp directory: {self.temp_dir}")
-        except Exception as e:
-            logger.error(f"Error cleaning up temp files: {e}")
-
-    _upload_save_count = 0
-
-    def save_upload_link(self, link, filename=""):
-        """Save uploaded video link to history file."""
-        try:
-            UPLOAD_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(UPLOAD_HISTORY_FILE, "a", encoding="utf-8") as f:
-                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-                f.write(f"{timestamp} | {filename} | {link}\n")
-            self._upload_save_count += 1
-            if self._upload_save_count >= 100:
-                self._upload_save_count = 0
-                try:
-                    with open(UPLOAD_HISTORY_FILE, "r", encoding="utf-8") as f:
-                        lines = f.readlines()
-                    if len(lines) > 1000:
-                        with open(UPLOAD_HISTORY_FILE, "w", encoding="utf-8") as f:
-                            f.writelines(lines[-500:])
-                        logger.info("Trimmed upload history to last 500 entries")
-                except Exception as trim_err:
-                    logger.error(f"Error trimming upload history: {trim_err}")
-            logger.info(f"Saved upload link to history: {link}")
-        except Exception as e:
-            logger.error(f"Error saving upload link: {e}")
-
-    # ===================================================================
-    #  Command builders
-    # ===================================================================
-
-    def build_base_ytdlp_command(self):
-        """Build base yt-dlp command with common options.
-
-        Returns:
-            list: Base command with common flags
-        """
-        return [
-            self.ytdlp_path,
-            "--concurrent-fragments",
-            CONCURRENT_FRAGMENTS,
-            "--buffer-size",
-            BUFFER_SIZE,
-            "--http-chunk-size",
-            CHUNK_SIZE,
-            "--newline",
-            "--progress",
-        ]
-
-    def build_audio_ytdlp_command(self, url, output_path, volume=1.0):
-        """Build yt-dlp command for audio-only download.
-
-        Args:
-            url: YouTube URL
-            output_path: Full output path with filename template
-            volume: Volume multiplier (default 1.0)
-
-        Returns:
-            list: Complete command for audio download
-        """
-        cmd = self.build_base_ytdlp_command()
-        cmd.extend(
-            [
-                "-f",
-                "bestaudio",
-                "--extract-audio",
-                "--audio-format",
-                "mp3",
-                "--audio-quality",
-                AUDIO_BITRATE,
-            ]
-        )
-
-        if volume != 1.0:
-            cmd.extend(["--postprocessor-args", f"ffmpeg:-af volume={volume}"])
-
-        cmd.extend(["-o", output_path, url])
-        return cmd
-
-    def build_video_ytdlp_command(
-        self, url, output_path, quality, volume=1.0, trim_start=None, trim_end=None
-    ):
-        """Build yt-dlp command for video download with optional trimming.
-
-        Args:
-            url: YouTube URL
-            output_path: Full output path with filename template
-            quality: Video height (e.g., '1080', '720')
-            volume: Volume multiplier (default 1.0)
-            trim_start: Start time in seconds (optional)
-            trim_end: End time in seconds (optional)
-
-        Returns:
-            list: Complete command for video download
-        """
-        cmd = self.build_base_ytdlp_command()
-        cmd.extend(
-            [
-                "-f",
-                f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]",
-                "--merge-output-format",
-                "mp4",
-            ]
-        )
-
-        trim_enabled = trim_start is not None and trim_end is not None
-        if trim_enabled:
-            start_hms = self.seconds_to_hms(trim_start)
-            end_hms = self.seconds_to_hms(trim_end)
-            cmd.extend(
-                [
-                    "--download-sections",
-                    f"*{start_hms}-{end_hms}",
-                    "--force-keyframes-at-cuts",
-                ]
-            )
-
-        needs_processing = trim_enabled or volume != 1.0
-        if needs_processing:
-            ffmpeg_args = self._get_video_encoder_args(mode="crf") + [
-                "-c:a",
-                "aac",
-                "-b:a",
-                AUDIO_BITRATE,
-            ]
-            if volume != 1.0:
-                ffmpeg_args.extend(["-af", f"volume={volume}"])
-            cmd.extend(["--postprocessor-args", "ffmpeg:" + " ".join(ffmpeg_args)])
-
-        cmd.extend(["-o", output_path, url])
-        return cmd
-
-    # ===================================================================
-    #  Trimmed download via byte-range seeking + local ffmpeg trim
-    # ===================================================================
-
-    _TRIM_PADDING_BEFORE = 30  # seconds before start for keyframe alignment
-    _TRIM_PADDING_AFTER = 10  # seconds after end for safety
-
-    @staticmethod
-    def _parse_sidx(data):
-        """Parse SIDX box from fMP4 header data.
-
-        Returns (init_end, segments) where segments is a list of
-        (byte_offset, byte_size, start_time_sec, duration_sec), or None.
-        """
-        import struct
-
-        pos = 0
-        while pos < len(data) - 8:
-            box_size = struct.unpack(">I", data[pos : pos + 4])[0]
-            box_type = data[pos + 4 : pos + 8]
-            if box_size < 8:
-                break
-            if box_type == b"sidx":
-                sidx_end = pos + box_size
-                p = pos + 8  # skip size + type
-                version = data[p]
-                p += 4  # version(1) + flags(3)
-                p += 4  # reference_id
-                timescale = struct.unpack(">I", data[p : p + 4])[0]
-                p += 4
-                if version == 0:
-                    p += 4  # earliest_presentation_time
-                    first_offset = struct.unpack(">I", data[p : p + 4])[0]
-                    p += 4
-                else:
-                    p += 8  # earliest_presentation_time (64-bit)
-                    first_offset = struct.unpack(">Q", data[p : p + 8])[0]
-                    p += 8
-                p += 2  # reserved
-                ref_count = struct.unpack(">H", data[p : p + 2])[0]
-                p += 2
-
-                seg_offset = sidx_end + first_offset
-                cur_time = 0.0
-                segments = []
-                for _ in range(ref_count):
-                    if p + 12 > len(data):
-                        break
-                    ref_info = struct.unpack(">I", data[p : p + 4])[0]
-                    ref_size = ref_info & 0x7FFFFFFF
-                    seg_dur = struct.unpack(">I", data[p + 4 : p + 8])[0]
-                    p += 12
-                    dur_sec = seg_dur / timescale
-                    segments.append((seg_offset, ref_size, cur_time, dur_sec))
-                    seg_offset += ref_size
-                    cur_time += dur_sec
-
-                return sidx_end, segments
-            pos += box_size
-        return None
-
-    def _get_stream_urls(self, url, format_spec):
-        """Get direct video and audio stream URLs using yt-dlp -g."""
-        cmd = [self.ytdlp_path, "-g", "-f", format_spec, url]
-        logger.info(f"Fetching stream URLs: {' '.join(cmd)}")
-        self.update_status("Fetching stream URLs...", "blue")
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=METADATA_FETCH_TIMEOUT,
-            **_subprocess_kwargs,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to get stream URLs: {result.stderr.strip()}")
-        urls = result.stdout.strip().split("\n")
-        return (urls[0], urls[1]) if len(urls) >= 2 else (urls[0], None)
-
-    def _http_range_read(self, url, start, end):
-        """Download a byte range from a URL. Returns bytes.
-
-        Reads in chunks and checks is_downloading between them so the
-        user can cancel during slow CDN responses (e.g. 10-hour videos).
-        """
-        req = urllib.request.Request(url)
-        req.add_header("Range", f"bytes={start}-{end}")
-        chunks = []
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            while True:
-                if not self.is_downloading:
-                    return b"".join(chunks)
-                chunk = resp.read(256 * 1024)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                self.last_progress_time = time.time()
-        return b"".join(chunks)
-
-    def _download_stream_segment(
-        self, stream_url, start_time, end_time, output_path, label, progress_base=0
-    ):
-        """Download init + relevant byte range from a YouTube stream.
-
-        For fMP4: parses SIDX for exact segment boundaries.
-        For webm/other: estimates from clen/dur with generous padding.
-        Returns the timestamp (seconds) where the downloaded data starts.
-        Raises RuntimeError with a user-friendly message on network errors.
-        """
-        try:
-            return self._download_stream_segment_inner(
-                stream_url, start_time, end_time, output_path, label, progress_base
-            )
-        except (urllib.error.URLError, socket.timeout, OSError) as e:
-            raise RuntimeError(
-                f"Network error downloading {label}: {e}\n\n"
-                f"This can happen with very long videos. Try again or use a shorter trim range."
-            ) from e
-
-    def _download_stream_segment_inner(
-        self, stream_url, start_time, end_time, output_path, label, progress_base=0
-    ):
-        """Inner implementation of stream segment download."""
-        params = parse_qs(urlparse(stream_url).query)
-        clen = int(params.get("clen", ["0"])[0])
-        dur = float(params.get("dur", ["0"])[0])
-        if not clen or dur <= 0:
-            raise RuntimeError(f"Missing clen/dur in {label} URL")
-
-        pad_before = self._TRIM_PADDING_BEFORE
-        pad_after = self._TRIM_PADDING_AFTER
-        target_start = max(0, start_time - pad_before)
-        target_end = min(dur, end_time + pad_after)
-
-        # Download header (enough for init + SIDX/Cues)
-        header_size = min(clen, 512 * 1024)  # 512KB
-        self.update_status(f"Fetching {label} index...", "blue")
-        self.last_progress_time = time.time()
-        header_data = self._http_range_read(stream_url, 0, header_size - 1)
-
-        # Try SIDX parsing for precise segment boundaries
-        sidx_result = self._parse_sidx(header_data)
-        if sidx_result:
-            init_end, segments = sidx_result
-            init_data = header_data[:init_end]
-
-            # Find segments covering our padded time range
-            first_idx = last_idx = None
-            for i, (_, _, seg_t, seg_d) in enumerate(segments):
-                if first_idx is None and seg_t + seg_d > target_start:
-                    first_idx = i
-                if seg_t < target_end:
-                    last_idx = i
-
-            if first_idx is not None and last_idx is not None:
-                data_start = segments[first_idx][0]
-                last = segments[last_idx]
-                data_end = last[0] + last[1] - 1
-                actual_start = segments[first_idx][2]
-                logger.info(
-                    f"{label} SIDX: segments {first_idx}-{last_idx} of "
-                    f"{len(segments)}, bytes {data_start}-{data_end} "
-                    f"({(data_end - data_start + 1) / 1024 / 1024:.1f} MB), "
-                    f"time {actual_start:.1f}s-{last[2] + last[3]:.1f}s"
-                )
-            else:
-                sidx_result = None  # no matching segments, fall back
-
-        if not sidx_result:
-            # Fallback: estimate byte positions from bitrate
-            init_data = header_data
-            bps = clen / dur
-            data_start = max(len(header_data), int(target_start * bps))
-            data_end = min(clen - 1, int(target_end * bps))
-            actual_start = target_start
-            logger.info(
-                f"{label} estimated: bytes {data_start}-{data_end} "
-                f"({(data_end - data_start + 1) / 1024 / 1024:.1f} MB)"
-            )
-
-        if data_start >= data_end:
-            raise RuntimeError(
-                f"Invalid byte range for {label}: {data_start}-{data_end}. "
-                f"Trim range may exceed video duration — fetch duration first."
-            )
-
-        # Download data range with progress
-        total_data = data_end - data_start + 1
-        self.update_status(f"Downloading {label}...", "blue")
-        req = urllib.request.Request(stream_url)
-        req.add_header("Range", f"bytes={data_start}-{data_end}")
-        resp = urllib.request.urlopen(req, timeout=30)
-
-        with open(output_path, "wb") as f:
-            f.write(init_data)
-            downloaded = 0
-            while True:
-                if not self.is_downloading:
-                    return actual_start
-                chunk = resp.read(256 * 1024)
-                if not chunk:
-                    break
-                f.write(chunk)
-                downloaded += len(chunk)
-                pct = min(100, downloaded * 100 / total_data)
-                self.update_progress(progress_base + pct * 0.45)
-                self.update_status(
-                    f"Downloading {label}... {downloaded / 1024 / 1024:.1f} MB",
-                    "blue",
-                )
-                self.last_progress_time = time.time()
-
-        file_size = len(init_data) + downloaded
-        logger.info(f"{label} downloaded: {file_size / 1024 / 1024:.1f} MB")
-        return actual_start
-
-    def _download_trimmed_via_ffmpeg(
-        self,
-        url,
-        format_spec,
-        start_time,
-        end_time,
-        output_path,
-        volume_multiplier=1.0,
-        encode_args=None,
-        copy_codec=False,
-    ):
-        """Download a trimmed segment by fetching only the relevant byte ranges.
-
-        Step 1: yt-dlp -g to get direct stream URLs.
-        Step 2: Download init segment + relevant data via HTTP Range requests
-                (uses SIDX for precise segment boundaries on fMP4).
-        Step 3: Merge video+audio with ffmpeg -c copy.
-        Step 4: Precise local trim with ffmpeg.
-        """
-        temp_dir = tempfile.mkdtemp(prefix="ytdl_trim_")
-        try:
-            return self._do_trimmed_download(
-                url,
-                format_spec,
-                start_time,
-                end_time,
-                output_path,
-                volume_multiplier,
-                encode_args,
-                copy_codec,
-                temp_dir,
-            )
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-    def _do_trimmed_download(
-        self,
-        url,
-        format_spec,
-        start_time,
-        end_time,
-        output_path,
-        volume_multiplier,
-        encode_args,
-        copy_codec,
-        temp_dir,
-    ):
-        """Inner implementation for trimmed downloads."""
-        video_url, audio_url = self._get_stream_urls(url, format_spec)
-        duration = end_time - start_time
-
-        # Download video stream segment
-        video_temp = os.path.join(temp_dir, "video.mp4")
-        v_start = self._download_stream_segment(
-            video_url, start_time, end_time, video_temp, "video", progress_base=0
-        )
-        if not self.is_downloading:
-            return False
-
-        # Download audio stream segment (if separate)
-        source_file = video_temp
-        if audio_url:
-            audio_ext = "webm" if "mime=audio%2Fwebm" in audio_url else "m4a"
-            audio_temp = os.path.join(temp_dir, f"audio.{audio_ext}")
-            self._download_stream_segment(
-                audio_url,
-                start_time,
-                end_time,
-                audio_temp,
-                "audio",
-                progress_base=45,
-            )
-            if not self.is_downloading:
-                return False
-
-            # Merge video + audio
-            merged = os.path.join(temp_dir, "merged.mp4")
-            self.update_status("Merging streams...", "blue")
-            merge_cmd = [
-                self.ffmpeg_path,
-                "-y",
-                "-i",
-                video_temp,
-                "-i",
-                audio_temp,
-                "-c",
-                "copy",
-                "-map",
-                "0:v",
-                "-map",
-                "1:a",
-                merged,
-            ]
-            logger.info(f"Merging: {' '.join(merge_cmd)}")
-            merge_result = subprocess.run(
-                merge_cmd,
-                capture_output=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=DOWNLOAD_PROGRESS_TIMEOUT_TRIM,
-                **_subprocess_kwargs,
-            )
-            if merge_result.returncode != 0:
-                logger.error(f"Merge failed: {merge_result.stderr}")
-                return False
-            source_file = merged
-
-        # Precise trim on local file
-        # Data starts at ~v_start seconds; we want start_time..end_time
-        ss_offset = start_time - v_start
-        volume_changed = abs(volume_multiplier - 1.0) >= VOLUME_CHANGE_THRESHOLD
-        needs_video_encode = not copy_codec and bool(encode_args)
-        needs_audio_encode = not copy_codec and (bool(encode_args) or volume_changed)
-        ffmpeg_cmd = [self.ffmpeg_path, "-y", "-i", source_file]
-        ffmpeg_cmd.extend(["-ss", str(max(0, ss_offset)), "-t", str(duration)])
-
-        if needs_video_encode:
-            # Full re-encode (encode_args includes both video + audio args)
-            ffmpeg_cmd.extend(encode_args)
-            if volume_changed:
-                ffmpeg_cmd.extend(["-af", f"volume={volume_multiplier}"])
-        elif needs_audio_encode:
-            # Volume-only change: copy video stream, re-encode audio only
-            ffmpeg_cmd.extend(["-c:v", "copy"])
-            ffmpeg_cmd.extend(["-c:a", "aac", "-b:a", AUDIO_BITRATE])
-            ffmpeg_cmd.extend(["-af", f"volume={volume_multiplier}"])
-        else:
-            ffmpeg_cmd.extend(["-c", "copy"])
-
-        ffmpeg_cmd.extend(["-progress", "pipe:1", output_path])
-        return self._run_ffmpeg_with_progress(ffmpeg_cmd, duration, "Trimming video")
-
-    def _download_audio_trimmed(
-        self, url, start_time, end_time, output_path, volume_multiplier=1.0
-    ):
-        """Download and trim audio-only using byte-range seeking.
-
-        Step 1: Get audio stream URL via yt-dlp -g (prefers m4a for SIDX support).
-        Step 2: Download relevant byte range via HTTP Range requests.
-        Step 3: ffmpeg converts to MP3 with precise trim.
-        """
-        temp_dir = tempfile.mkdtemp(prefix="ytdl_atrim_")
-        try:
-            # Prefer m4a (fMP4 container) which has SIDX for precise seeking.
-            # webm byte-range downloads produce corrupt files because we can't
-            # parse webm Cues for exact Cluster boundaries.
-            audio_url, _ = self._get_stream_urls(url, "bestaudio[ext=m4a]/bestaudio")
-
-            audio_ext = "webm" if "mime=audio%2Fwebm" in audio_url else "m4a"
-            audio_temp = os.path.join(temp_dir, f"audio.{audio_ext}")
-            a_start = self._download_stream_segment(
-                audio_url,
-                start_time,
-                end_time,
-                audio_temp,
-                "audio",
-                progress_base=0,
-            )
-            if not self.is_downloading:
-                return False
-
-            duration = end_time - start_time
-            ss_offset = max(0, start_time - a_start)
-
-            ffmpeg_cmd = [self.ffmpeg_path, "-y", "-i", audio_temp]
-            ffmpeg_cmd.extend(["-ss", str(ss_offset), "-t", str(duration)])
-            ffmpeg_cmd.extend(["-vn", "-c:a", "libmp3lame", "-b:a", AUDIO_BITRATE])
-            if volume_multiplier != 1.0:
-                ffmpeg_cmd.extend(["-af", f"volume={volume_multiplier}"])
-            ffmpeg_cmd.extend(["-progress", "pipe:1", output_path])
-
-            return self._run_ffmpeg_with_progress(
-                ffmpeg_cmd, duration, "Converting to MP3"
-            )
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-
-    # ===================================================================
-    #  Encoding helpers (size-constrained / two-pass / single-pass)
-    # ===================================================================
-
-    def _size_constrained_encode(
-        self,
-        input_file,
-        output_file,
-        target_bitrate,
-        duration,
-        volume_multiplier=1.0,
-        scale_height=None,
-        start_time=None,
-        end_time=None,
-    ):
-        """Encode a video to hit a target bitrate (for 10MB size constraint).
-
-        Uses single-pass with hardware encoding if available, or two-pass with
-        software encoding as fallback.  Returns True on success, False on failure
-        or cancellation.
-        """
-        if self.hw_encoder:
-            return self._encode_single_pass(
-                input_file,
-                output_file,
-                target_bitrate,
-                duration,
-                volume_multiplier,
-                scale_height,
-                start_time,
-                end_time,
-            )
-        else:
-            return self._encode_two_pass(
-                input_file,
-                output_file,
-                target_bitrate,
-                duration,
-                volume_multiplier,
-                scale_height,
-                start_time,
-                end_time,
-            )
-
-    def _run_ffmpeg_with_progress(self, cmd, duration, status_prefix):
-        """Run an ffmpeg command, parsing progress output. Returns True on success."""
-        logger.info(f"{status_prefix}: {' '.join(cmd)}")
-        self.last_progress_time = time.time()
-        self.update_progress(0)
-        self.update_status(f"{status_prefix}...", "blue")
-
-        with self.download_lock:
-            self.current_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
-                **_subprocess_kwargs,
-            )
-
-        # Drain stderr in a background thread to prevent pipe deadlock.
-        # Also use stderr activity as a heartbeat — ffmpeg writes connection
-        # and seeking info to stderr while working, even before producing
-        # any progress output on stdout. This prevents the download monitor
-        # from killing ffmpeg during long seeks on HTTP streams.
-        stderr_lines = deque(maxlen=200)
-        has_stdout_progress = threading.Event()
-
-        def _drain_stderr():
-            try:
-                for line in self.current_process.stderr:
-                    stderr_lines.append(line)
-                    # Keep the stall timeout alive while ffmpeg is active
-                    self.last_progress_time = time.time()
-                    if not has_stdout_progress.is_set():
-                        self.update_status(
-                            f"{status_prefix}... seeking to position", "blue"
-                        )
-            except (ValueError, OSError):
-                pass
-
-        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
-        stderr_thread.start()
-
-        for line in self.current_process.stdout:
-            if not self.is_downloading:
-                self.safe_process_cleanup(self.current_process)
-                return False
-            if "out_time_ms=" in line:
-                has_stdout_progress.set()
-                try:
-                    time_ms = int(line.split("=")[1].strip())
-                    current = time_ms / 1_000_000
-                    if duration > 0:
-                        pct = min(100, (current / duration) * 100)
-                        self.update_progress(pct)
-                        self.update_status(f"{status_prefix}... {pct:.0f}%", "blue")
-                except (ValueError, IndexError):
-                    pass
-            self.last_progress_time = time.time()
-
-        proc = self.current_process
-        proc.wait()
-        stderr_thread.join(timeout=5)
-
-        if proc.returncode != 0:
-            stderr_text = "".join(stderr_lines)
-            logger.error(
-                f"{status_prefix} failed (rc {proc.returncode}): {stderr_text}"
-            )
-            self.safe_process_cleanup(proc)
-            return False
-        return True
-
-    def _encode_single_pass(
-        self,
-        input_file,
-        output_file,
-        target_bitrate,
-        duration,
-        volume_multiplier=1.0,
-        scale_height=None,
-        start_time=None,
-        end_time=None,
-    ):
-        """Single-pass encode using hardware encoder with bitrate target."""
-        input_args = [self.ffmpeg_path, "-y", "-i", input_file]
-        if start_time is not None and end_time is not None:
-            input_args.extend(["-ss", str(start_time), "-to", str(end_time)])
-
-        vf_args = ["-vf", f"scale=-2:{scale_height}"] if scale_height else []
-        enc_args = self._get_video_encoder_args(
-            mode="bitrate", target_bitrate=target_bitrate
-        )
-        audio_args = ["-c:a", "aac", "-b:a", AUDIO_BITRATE]
-        if volume_multiplier != 1.0:
-            audio_args.extend(["-af", f"volume={volume_multiplier}"])
-
-        cmd = (
-            input_args
-            + vf_args
-            + enc_args
-            + audio_args
-            + ["-progress", "pipe:1", output_file]
-        )
-
-        self.update_status("Encoding (GPU)...", "blue")
-        try:
-            return self._run_ffmpeg_with_progress(cmd, duration, "Encoding (GPU)")
-        finally:
-            if self.current_process:
-                for pipe in (self.current_process.stdout, self.current_process.stderr):
-                    if pipe:
-                        try:
-                            pipe.close()
-                        except OSError:
-                            pass
-
-    def _encode_two_pass(
-        self,
-        input_file,
-        output_file,
-        target_bitrate,
-        duration,
-        volume_multiplier=1.0,
-        scale_height=None,
-        start_time=None,
-        end_time=None,
-    ):
-        """Two-pass encode using software (libx264) with bitrate target."""
-        passlogfile = os.path.join(
-            tempfile.gettempdir(), f"ytdl_2pass_{os.getpid()}_{int(time.time())}"
-        )
-
-        input_args = [self.ffmpeg_path, "-y", "-i", input_file]
-        if start_time is not None and end_time is not None:
-            input_args.extend(["-ss", str(start_time), "-to", str(end_time)])
-
-        vf_args = ["-vf", f"scale=-2:{scale_height}"] if scale_height else []
-        enc_args = self._get_video_encoder_args(
-            mode="bitrate", target_bitrate=target_bitrate
-        )
-
-        try:
-            # --- Pass 1 ---
-            self.update_status("Encoding pass 1/2 (analysing)...", "blue")
-            pass1_cmd = (
-                input_args
-                + vf_args
-                + enc_args
-                + [
-                    "-pass",
-                    "1",
-                    "-passlogfile",
-                    passlogfile,
-                    "-an",
-                    "-f",
-                    "null",
-                    os.devnull,
-                    "-progress",
-                    "pipe:1",
-                ]
-            )
-            if not self._run_ffmpeg_with_progress(
-                pass1_cmd, duration, "Two-pass pass 1"
-            ):
-                return False
-
-            # Close pass 1 pipes
-            if self.current_process.stdout:
-                self.current_process.stdout.close()
-            if self.current_process.stderr:
-                self.current_process.stderr.close()
-
-            # --- Pass 2 ---
-            self.update_status("Encoding pass 2/2...", "blue")
-            pass2_cmd = (
-                input_args
-                + vf_args
-                + enc_args
-                + [
-                    "-pass",
-                    "2",
-                    "-passlogfile",
-                    passlogfile,
-                    "-c:a",
-                    "aac",
-                    "-b:a",
-                    AUDIO_BITRATE,
-                ]
-            )
-            if volume_multiplier != 1.0:
-                pass2_cmd.extend(["-af", f"volume={volume_multiplier}"])
-            pass2_cmd.extend(["-progress", "pipe:1", output_file])
-
-            return self._run_ffmpeg_with_progress(
-                pass2_cmd, duration, "Two-pass pass 2"
-            )
-
-        finally:
-            if self.current_process:
-                for pipe in (self.current_process.stdout, self.current_process.stderr):
-                    if pipe:
-                        try:
-                            pipe.close()
-                        except OSError:
-                            pass
-            for suffix in ["", "-0.log", "-0.log.mbtree"]:
-                p = passlogfile + suffix
-                if os.path.exists(p):
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
-
-    def _calculate_optimal_quality(self, duration_seconds):
-        """Calculate optimal resolution and video bitrate to keep output below 10MB.
-
-        Returns (height: int, video_bitrate_bps: int).
-        """
-        if duration_seconds <= 0:
-            return (360, 100000)
-        available_bitrate = int(
-            (TARGET_MAX_SIZE_BYTES * 8) / duration_seconds - TARGET_AUDIO_BITRATE_BPS
-        )
-        available_bitrate = max(available_bitrate, 100000)
-
-        for height in SIZE_CONSTRAINED_RESOLUTIONS:
-            if available_bitrate >= SIZE_CONSTRAINED_MIN_BITRATES[height]:
-                return (height, available_bitrate)
-
-        return (360, available_bitrate)
-
-    # ===================================================================
-    #  Download entry-point & speed-limit helper
+    #  Download entry-point
     # ===================================================================
 
     def start_download(self):
@@ -5523,26 +3582,24 @@ class YouTubeDownloader(QMainWindow):
             )
             return
 
-        is_local = self.is_local_file(url)
+        is_local = utils.is_local_file(url)
 
         if is_local:
             if not os.path.isfile(url):
-                self.sig_show_messagebox.emit(
-                    "error", "Error", f"File not found:\n{url}"
-                )
+                self.sig_show_messagebox.emit("error", "Error", f"File not found:\n{url}")
                 return
         else:
-            is_valid, message = self.validate_youtube_url(url)
+            is_valid, message = utils.validate_youtube_url(url)
             if not is_valid:
                 self.sig_show_messagebox.emit("error", "Invalid URL", message)
                 logger.warning(f"Invalid URL rejected for download: {url}")
                 return
 
-            if self.is_playlist_url(url) and not self.is_pure_playlist_url(url):
-                url = self.strip_playlist_params(url)
+            if utils.is_playlist_url(url) and not utils.is_pure_playlist_url(url):
+                url = utils.strip_playlist_params(url)
                 self.is_playlist = False
             else:
-                self.is_playlist = self.is_playlist_url(url)
+                self.is_playlist = utils.is_playlist_url(url)
 
         if not self.dependencies_ok:
             self.sig_show_messagebox.emit(
@@ -5555,12 +3612,14 @@ class YouTubeDownloader(QMainWindow):
 
         logger.info(f"Starting download for URL: {url}")
 
-        with self.download_lock:
-            self.is_downloading = True
-            self.download_start_time = time.time()
-            self.last_progress_time = time.time()
-            self._download_has_progress = False
-            self._trim_download_active = self.trim_enabled_check.isChecked()
+        with self.download_mgr.download_lock:
+            self.download_mgr.is_downloading = True
+            self.download_mgr.download_start_time = time.time()
+            self.download_mgr.last_progress_time = time.time()
+            self.download_mgr._download_has_progress = False
+            self.download_mgr._trim_download_active = self.trim_enabled_check.isChecked()
+            self.download_mgr.video_duration = self.video_duration
+            self.download_mgr.video_title = self.video_title
 
         self.download_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -5582,1927 +3641,8 @@ class YouTubeDownloader(QMainWindow):
         }
 
         # Submit download and timeout monitor to thread pool
-        self.thread_pool.submit(self.download, url, ui_state)
-        self.thread_pool.submit(self._monitor_download_timeout)
-
-    def _monitor_download_timeout(self):
-        """Monitor download for timeouts (absolute and progress-based)."""
-        while True:
-            time.sleep(TIMEOUT_CHECK_INTERVAL)
-
-            if self._shutting_down:
-                break
-
-            with self.download_lock:
-                is_still_downloading = self.is_downloading
-
-            if not is_still_downloading:
-                break
-
-            current_time = time.time()
-
-            # Show elapsed time while yt-dlp is preparing (no output yet)
-            if self.download_start_time and not self._download_has_progress:
-                elapsed = int(current_time - self.download_start_time)
-                self.update_status(
-                    f"Preparing download... ({elapsed}s elapsed)", "blue"
-                )
-
-            if self.download_start_time:
-                elapsed = current_time - self.download_start_time
-                if elapsed > DOWNLOAD_TIMEOUT:
-                    logger.error(
-                        f"Download exceeded absolute timeout ({DOWNLOAD_TIMEOUT}s)"
-                    )
-                    self._timeout_download("Download timeout (60 min limit exceeded)")
-                    break
-
-            if self.last_progress_time:
-                time_since_progress = current_time - self.last_progress_time
-                progress_timeout = (
-                    DOWNLOAD_PROGRESS_TIMEOUT_TRIM
-                    if self._trim_download_active
-                    else DOWNLOAD_PROGRESS_TIMEOUT
-                )
-                if time_since_progress > progress_timeout:
-                    timeout_min = progress_timeout // 60
-                    logger.error(
-                        f"Download stalled (no progress for {progress_timeout}s)"
-                    )
-                    self._timeout_download(
-                        f"Download stalled (no progress for {timeout_min} minutes)"
-                    )
-                    break
-
-    def _timeout_download(self, reason):
-        """Handle download timeout. Safe to call from any thread."""
-        with self.download_lock:
-            downloading = self.is_downloading
-            process = self.current_process
-        if downloading:
-            logger.warning(f"Timing out download: {reason}")
-            # Kill process directly (thread-safe, no GUI involved)
-            self.safe_process_cleanup(process)
-            with self.download_lock:
-                self.is_downloading = False
-                self.current_process = None
-            # Update UI via signals (thread-safe)
-            self.update_status(reason, "red")
-            self.sig_reset_buttons.emit()
-            self.sig_show_messagebox.emit(
-                "error",
-                "Download Timed Out",
-                f"{reason}\n\nPlease try again.",
-            )
-
-    def stop_download(self):
-        """Stop download gracefully, with forced termination as fallback."""
-        with self.download_lock:
-            process_to_cleanup = self.current_process
-            is_active = self.is_downloading
-
-        if process_to_cleanup and is_active:
-            self.safe_process_cleanup(process_to_cleanup)
-
-            with self.download_lock:
-                self.is_downloading = False
-            self.update_status("Download stopped", "orange")
-            self.download_btn.setEnabled(True)
-            self.stop_btn.setEnabled(False)
-            self.progress.setValue(0)
-            self.progress_label.setText("0%")
-
-    # ===================================================================
-    #  Main download logic
-    # ===================================================================
-
-    def download(self, url, ui_state=None):
-        """Download a YouTube video or process a local file.
-
-        Args:
-            url: The URL or local file path to download.
-            ui_state: Dict of widget values snapshot from the GUI thread.
-                      If None, falls back to reading widgets directly (for
-                      compatibility with callers like download_clipboard_url).
-        """
-        keep_below_10mb = False
-        temp_dir = None
-        cmd = []
-        start_hms_file = ""
-        end_hms_file = ""
-        try:
-            # Route to local file handler if needed
-            if self.is_local_file(url):
-                return self.download_local_file(url, ui_state)
-
-            is_playlist_url = self.is_playlist_url(url)
-
-            # Use pre-captured UI state (thread-safe) or fall back to direct read
-            if ui_state:
-                quality = ui_state["quality"]
-                trim_enabled = ui_state["trim_enabled"]
-            else:
-                quality = self.quality_combo.currentText()
-                trim_enabled = self.trim_enabled_check.isChecked()
-            audio_only = (
-                quality.startswith("none")
-                or quality == "none (Audio only)"
-                or (ui_state and ui_state.get("audio_only", False))
-            )
-
-            self.update_status("Starting download...", "blue")
-
-            # Validate trimming
-            if trim_enabled:
-                if self.video_duration <= 0:
-                    self.update_status("Please fetch video duration first", "red")
-                    self._reset_buttons()
-                    with self.download_lock:
-                        self.is_downloading = False
-                    return
-
-                start_time = (
-                    int(float(ui_state["start_time"]))
-                    if ui_state
-                    else int(float(self.start_slider.value()))
-                )
-                end_time = (
-                    int(float(ui_state["end_time"]))
-                    if ui_state
-                    else int(float(self.end_slider.value()))
-                )
-
-                if start_time >= end_time:
-                    self.update_status("Invalid time range", "red")
-                    self._reset_buttons()
-                    with self.download_lock:
-                        self.is_downloading = False
-                    return
-
-            if audio_only:
-                _fn = (
-                    ui_state["filename"]
-                    if ui_state
-                    else self.filename_entry.text().strip()
-                )
-                custom_name = self.sanitize_filename(_fn)
-                _vol = (
-                    (ui_state["volume_raw"] / 100.0)
-                    if ui_state
-                    else (self.volume_slider.value() / 100.0)
-                )
-                volume_multiplier = self.validate_volume(_vol)
-
-                if trim_enabled:
-                    # --- Audio-only trimmed: byte-range download + local ffmpeg ---
-                    start_hms_file = self.seconds_to_hms(start_time).replace(":", "-")
-                    end_hms_file = self.seconds_to_hms(end_time).replace(":", "-")
-                    if custom_name:
-                        final_base = custom_name
-                    else:
-                        title = self.video_title or "video"
-                        final_base = self.sanitize_filename(title) or title
-                    final_name = (
-                        f"{final_base}_[{start_hms_file}_to_{end_hms_file}].mp3"
-                    )
-                    _dp = ui_state["download_path"] if ui_state else self.download_path
-                    final_output = os.path.join(_dp, final_name)
-
-                    success = self._download_audio_trimmed(
-                        url,
-                        start_time,
-                        end_time,
-                        final_output,
-                        volume_multiplier=volume_multiplier,
-                    )
-
-                    if success and self.is_downloading:
-                        self.update_progress(100)
-                        self.update_status("Download complete!", "green")
-                        logger.info(f"Audio trim completed: {final_output}")
-                        self._enable_upload_button(final_output)
-                    elif self.is_downloading:
-                        self.update_status("Download failed", "red")
-
-                    with self.download_lock:
-                        self.is_downloading = False
-                    self._reset_buttons()
-                    return
-
-                # --- Audio-only, no trim: standard yt-dlp download ---
-                if custom_name:
-                    base_name = custom_name
-                else:
-                    base_name = "%(title)s"
-                output_template = f"{base_name}.%(ext)s"
-
-                cmd = [
-                    self.ytdlp_path,
-                    "--concurrent-fragments",
-                    CONCURRENT_FRAGMENTS,
-                    "--buffer-size",
-                    BUFFER_SIZE,
-                    "--http-chunk-size",
-                    CHUNK_SIZE,
-                    "-f",
-                    "bestaudio",
-                    "--extract-audio",
-                    "--audio-format",
-                    "mp3",
-                    "--audio-quality",
-                    AUDIO_BITRATE,
-                    "--newline",
-                    "--progress",
-                    "-o",
-                    os.path.join(
-                        ui_state["download_path"] if ui_state else self.download_path,
-                        output_template,
-                    ),
-                ]
-
-                ffmpeg_args = []
-                if volume_multiplier != 1.0:
-                    ffmpeg_args.extend(["-af", f"volume={volume_multiplier}"])
-
-                if ffmpeg_args:
-                    cmd.extend(
-                        ["--postprocessor-args", "ffmpeg:" + " ".join(ffmpeg_args)]
-                    )
-
-                _sl = ui_state["speed_limit"] if ui_state else None
-                cmd.extend(self._get_speed_limit_args(speed_limit_str=_sl))
-
-                if is_playlist_url:
-                    cmd.append("--no-playlist")
-
-                cmd.append(url)
-            else:
-                if quality.startswith("none") or quality == "none (Audio only)":
-                    self.update_status("Please select a video quality", "red")
-                    self._reset_buttons()
-                    with self.download_lock:
-                        self.is_downloading = False
-                    return
-
-                keep_below_10mb = (
-                    ui_state["keep_below_10mb"]
-                    if ui_state
-                    else self.keep_below_10mb_check.isChecked()
-                )
-
-                if keep_below_10mb:
-                    clip_duration = (
-                        (end_time - start_time) if trim_enabled else self.video_duration
-                    )
-                    height, target_bitrate = self._calculate_optimal_quality(
-                        clip_duration
-                    )
-                    height = str(height)
-                    logger.info(
-                        f"10MB encode: auto-selected {height}p at {target_bitrate}bps "
-                        f"for {clip_duration}s clip"
-                    )
-                else:
-                    height = quality
-
-                _vol = (
-                    (ui_state["volume_raw"] / 100.0)
-                    if ui_state
-                    else (self.volume_slider.value() / 100.0)
-                )
-                volume_multiplier = self.validate_volume(_vol)
-
-                _fn = (
-                    ui_state["filename"]
-                    if ui_state
-                    else self.filename_entry.text().strip()
-                )
-                custom_name = self.sanitize_filename(_fn)
-                if custom_name:
-                    base_name = custom_name
-                else:
-                    base_name = "%(title)s"
-
-                if trim_enabled:
-                    start_hms_file = self.seconds_to_hms(start_time).replace(":", "-")
-                    end_hms_file = self.seconds_to_hms(end_time).replace(":", "-")
-                    output_template = f"{base_name}_{height}p_[{start_hms_file}_to_{end_hms_file}].%(ext)s"
-                else:
-                    output_template = f"{base_name}_{height}p.%(ext)s"
-
-                if trim_enabled and keep_below_10mb:
-                    # --- Trimmed + 10MB: ffmpeg direct trim → temp, then encode ---
-                    format_spec = (
-                        f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
-                    )
-                    temp_dir = tempfile.mkdtemp(prefix="ytdl_10mb_")
-                    temp_file = os.path.join(temp_dir, "trimmed_segment.mp4")
-
-                    dl_ok = self._download_trimmed_via_ffmpeg(
-                        url,
-                        format_spec,
-                        start_time,
-                        end_time,
-                        temp_file,
-                        copy_codec=True,
-                    )
-
-                    if dl_ok and self.is_downloading:
-                        _dp = (
-                            ui_state["download_path"]
-                            if ui_state
-                            else self.download_path
-                        )
-                        title = self.video_title or "video"
-                        safe_title = self.sanitize_filename(title) or title
-                        if custom_name:
-                            safe_title = custom_name
-                        final_name = f"{safe_title}_{height}p_[{start_hms_file}_to_{end_hms_file}].mp4"
-                        final_output = os.path.join(_dp, final_name)
-
-                        clip_duration = end_time - start_time
-                        success = self._size_constrained_encode(
-                            temp_file,
-                            final_output,
-                            target_bitrate,
-                            clip_duration,
-                            volume_multiplier=volume_multiplier,
-                            scale_height=height,
-                        )
-                        if success and self.is_downloading:
-                            self.update_progress(100)
-                            self.update_status("Download complete!", "green")
-                            logger.info(
-                                f"Trimmed 10MB download completed: {final_output}"
-                            )
-                            self._enable_upload_button(final_output)
-                        elif self.is_downloading:
-                            self.update_status("Download failed", "red")
-                            self.sig_show_messagebox.emit(
-                                "error",
-                                "Download Failed",
-                                "Trimmed download failed.\n\nPlease try again.",
-                            )
-                    elif self.is_downloading:
-                        self.update_status("Download failed", "red")
-
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                    with self.download_lock:
-                        self.is_downloading = False
-                    self._reset_buttons()
-                    return
-
-                elif trim_enabled:
-                    # --- Direct ffmpeg trim (yt-dlp -g + ffmpeg -ss) ---
-                    # Much faster than --download-sections on long videos
-                    # because ffmpeg does HTTP byte-range seeking directly.
-                    format_spec = (
-                        f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
-                    )
-                    _dp = ui_state["download_path"] if ui_state else self.download_path
-                    if custom_name:
-                        final_base = custom_name
-                    else:
-                        title = self.video_title or "video"
-                        final_base = self.sanitize_filename(title) or title
-                    final_name = f"{final_base}_{height}p_[{start_hms_file}_to_{end_hms_file}].mp4"
-                    final_output = os.path.join(_dp, final_name)
-
-                    success = self._download_trimmed_via_ffmpeg(
-                        url,
-                        format_spec,
-                        start_time,
-                        end_time,
-                        final_output,
-                        volume_multiplier=volume_multiplier,
-                    )
-
-                    if success and self.is_downloading:
-                        self.update_progress(100)
-                        self.update_status("Download complete!", "green")
-                        logger.info(f"Trimmed download completed: {final_output}")
-                        self._enable_upload_button(final_output)
-                    elif self.is_downloading:
-                        self.update_status("Download failed", "red")
-
-                    with self.download_lock:
-                        self.is_downloading = False
-                    self._reset_buttons()
-                    return
-
-                elif keep_below_10mb:
-                    # --- Size-constrained path (no trim) ---
-                    temp_dir = tempfile.mkdtemp(prefix="ytdl_10mb_")
-                    temp_output_template = os.path.join(temp_dir, "%(title)s.%(ext)s")
-
-                    dl_bitrate_cap = max(target_bitrate * 2, 1000000)
-                    dl_bitrate_cap_k = int(dl_bitrate_cap / 1000)
-                    format_sel = (
-                        f"bestvideo[height<={height}][vbr<={dl_bitrate_cap_k}]"
-                        f"+bestaudio/bestvideo[height<={height}]+bestaudio"
-                        f"/best[height<={height}]"
-                    )
-
-                    cmd = [
-                        self.ytdlp_path,
-                        "--concurrent-fragments",
-                        CONCURRENT_FRAGMENTS,
-                        "--buffer-size",
-                        BUFFER_SIZE,
-                        "--http-chunk-size",
-                        CHUNK_SIZE,
-                        "-f",
-                        format_sel,
-                        "--merge-output-format",
-                        "mp4",
-                    ]
-
-                    _sl = ui_state["speed_limit"] if ui_state else None
-                    cmd.extend(self._get_speed_limit_args(speed_limit_str=_sl))
-                    if is_playlist_url:
-                        cmd.append("--no-playlist")
-                    cmd.extend(
-                        ["--newline", "--progress", "-o", temp_output_template, url]
-                    )
-                else:
-                    # --- Normal single-pass path (no trim) ---
-                    temp_dir = None
-
-                    cmd = [
-                        self.ytdlp_path,
-                        "--concurrent-fragments",
-                        CONCURRENT_FRAGMENTS,
-                        "--buffer-size",
-                        BUFFER_SIZE,
-                        "--http-chunk-size",
-                        CHUNK_SIZE,
-                        "-f",
-                        f"bestvideo[height<={height}]+bestaudio/best[height<={height}]",
-                        "--merge-output-format",
-                        "mp4",
-                    ]
-
-                    needs_processing = volume_multiplier != 1.0
-
-                    if needs_processing:
-                        ffmpeg_video_args = self._get_video_encoder_args(mode="crf") + [
-                            "-c:a",
-                            "aac",
-                            "-b:a",
-                            AUDIO_BITRATE,
-                        ]
-                        if volume_multiplier != 1.0:
-                            ffmpeg_video_args.extend(
-                                ["-af", f"volume={volume_multiplier}"]
-                            )
-                        cmd.extend(
-                            [
-                                "--postprocessor-args",
-                                "ffmpeg:" + " ".join(ffmpeg_video_args),
-                            ]
-                        )
-
-                    _sl2 = ui_state["speed_limit"] if ui_state else None
-                    cmd.extend(self._get_speed_limit_args(speed_limit_str=_sl2))
-                    if is_playlist_url:
-                        cmd.append("--no-playlist")
-                    _dp = ui_state["download_path"] if ui_state else self.download_path
-                    cmd.extend(
-                        [
-                            "--newline",
-                            "--progress",
-                            "-o",
-                            os.path.join(_dp, output_template),
-                            url,
-                        ]
-                    )
-
-            logger.info(f"Download command: {' '.join(cmd)}")
-
-            with self.download_lock:
-                self.current_process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    encoding="utf-8",
-                    errors="replace",
-                    bufsize=1,
-                    **_subprocess_kwargs,
-                )
-
-            # Parse output for progress
-            error_lines = []
-            try:
-                for line in self.current_process.stdout:
-                    if not self.is_downloading:
-                        break
-
-                    if "ERROR" in line or "error" in line.lower():
-                        if len(error_lines) < 100:
-                            error_lines.append(line.strip())
-                        logger.warning(f"yt-dlp: {line.strip()}")
-
-                    if "[download]" in line or "Downloading" in line:
-                        self._download_has_progress = True
-                        progress_match = PROGRESS_REGEX.search(line)
-                        if progress_match:
-                            progress = float(progress_match.group(1))
-                            self.update_progress(progress)
-
-                            speed_match = SPEED_REGEX.search(line)
-                            eta_match = ETA_REGEX.search(line)
-
-                            if speed_match and eta_match:
-                                status_msg = (
-                                    f"Downloading... {progress:.1f}% "
-                                    f"at {speed_match.group(1)} | "
-                                    f"ETA: {eta_match.group(1)}"
-                                )
-                            elif speed_match:
-                                status_msg = f"Downloading... {progress:.1f}% at {speed_match.group(1)}"
-                            else:
-                                status_msg = f"Downloading... {progress:.1f}%"
-
-                            self.update_status(status_msg, "blue")
-                            self.last_progress_time = time.time()
-                        elif "Destination" in line:
-                            self.update_status("Starting download...", "blue")
-                            self.last_progress_time = time.time()
-
-                    elif "[info]" in line and "Downloading" in line:
-                        self.update_status("Preparing download...", "blue")
-                        self.last_progress_time = time.time()
-                    elif "[ExtractAudio]" in line:
-                        self.update_status("Extracting audio...", "blue")
-                        self.last_progress_time = time.time()
-                    elif "[Merger]" in line or "Merging" in line:
-                        self.update_status("Merging video and audio...", "blue")
-                        self.last_progress_time = time.time()
-                    elif "[ffmpeg]" in line:
-                        self.update_status("Processing with ffmpeg...", "blue")
-                        self.last_progress_time = time.time()
-                    elif "Post-processing" in line or "Postprocessing" in line:
-                        self.update_status("Post-processing...", "blue")
-                        self.last_progress_time = time.time()
-                    elif "has already been downloaded" in line:
-                        self.update_status("File already exists, skipping...", "orange")
-                        self.last_progress_time = time.time()
-            except (BrokenPipeError, IOError) as e:
-                if self.is_downloading:
-                    logger.warning(f"Pipe error while reading process output: {e}")
-
-            self.current_process.wait()
-
-            if self.current_process.returncode == 0 and self.is_downloading:
-                if not audio_only and keep_below_10mb and temp_dir:
-                    temp_files = glob.glob(os.path.join(temp_dir, "*.mp4"))
-                    if not temp_files:
-                        self.update_status("Download failed", "red")
-                        logger.error(
-                            "Two-pass: no temp file found after yt-dlp download"
-                        )
-                    else:
-                        temp_file = temp_files[0]
-                        video_title = os.path.splitext(os.path.basename(temp_file))[0]
-                        if custom_name:
-                            final_base = custom_name
-                        else:
-                            final_base = (
-                                self.sanitize_filename(video_title) or video_title
-                            )
-
-                        if trim_enabled:
-                            final_name = f"{final_base}_{height}p_[{start_hms_file}_to_{end_hms_file}].mp4"
-                        else:
-                            final_name = f"{final_base}_{height}p.mp4"
-
-                        _dp2 = (
-                            ui_state["download_path"]
-                            if ui_state
-                            else self.download_path
-                        )
-                        final_output = os.path.join(_dp2, final_name)
-                        clip_duration = (
-                            (end_time - start_time)
-                            if trim_enabled
-                            else self.video_duration
-                        )
-
-                        success = self._size_constrained_encode(
-                            temp_file,
-                            final_output,
-                            target_bitrate,
-                            clip_duration,
-                            volume_multiplier=volume_multiplier,
-                            scale_height=height,
-                        )
-
-                        if success and self.is_downloading:
-                            self.update_progress(100)
-                            self.update_status("Download complete!", "green")
-                            logger.info(f"Two-pass download completed: {final_output}")
-                            self._enable_upload_button(final_output)
-                        elif self.is_downloading:
-                            self.update_status("Download failed", "red")
-                            logger.error("Two-pass encoding failed")
-
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                else:
-                    self.update_progress(100)
-                    self.update_status("Download complete!", "green")
-                    logger.info(f"Download completed successfully: {url}")
-                    latest_file = self._find_latest_file()
-                    self._enable_upload_button(latest_file)
-
-            elif self.is_downloading:
-                self.update_status("Download failed", "red")
-                logger.error(
-                    f"Download failed with return code {self.current_process.returncode}"
-                )
-                if error_lines:
-                    logger.error(f"yt-dlp errors: {'; '.join(error_lines)}")
-                error_detail = error_lines[-1] if error_lines else "Unknown error"
-                self.sig_show_messagebox.emit(
-                    "error",
-                    "Download Failed",
-                    f"Download failed.\n\n{error_detail}\n\nPlease try again.",
-                )
-                if temp_dir:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-
-        except FileNotFoundError as e:
-            if self.is_downloading:
-                error_msg = (
-                    "yt-dlp or ffmpeg is not installed.\n\nInstall with:\n"
-                    "pip install yt-dlp\n\nand install ffmpeg from your package manager"
-                )
-                self.update_status(error_msg, "red")
-                logger.error(f"Dependency not found: {e}")
-        except PermissionError as e:
-            if self.is_downloading:
-                error_msg = (
-                    "Permission denied. Check write permissions for download folder."
-                )
-                self.update_status(error_msg, "red")
-                logger.error(f"Permission error: {e}")
-        except OSError as e:
-            if self.is_downloading:
-                error_msg = f"OS error: {e}"
-                self.update_status(error_msg, "red")
-                logger.error(f"OS error during download: {e}")
-        except Exception as e:
-            if self.is_downloading:
-                self.update_status(f"Error: {e}", "red")
-                logger.exception(f"Unexpected error during download: {e}")
-
-        finally:
-            if temp_dir:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            with self.download_lock:
-                self.is_downloading = False
-                proc = self.current_process
-                self.current_process = None
-            if proc:
-                if proc.stdout:
-                    proc.stdout.close()
-                if proc.stderr:
-                    proc.stderr.close()
-            self._reset_buttons()
-
-    # ===================================================================
-    #  Local file processing
-    # ===================================================================
-
-    def download_local_file(self, filepath, ui_state=None):
-        """Process local video or audio file with trimming, quality adjustment, and volume control.
-
-        Args:
-            filepath: Path to the local file.
-            ui_state: Dict of widget values snapshot from the GUI thread.
-        """
-        try:
-            self._download_has_progress = True
-
-            # Local audio files are always processed as audio-only
-            audio_extensions = {".mp3", ".aac", ".m4a", ".wav"}
-            is_audio_file = Path(filepath).suffix.lower() in audio_extensions
-
-            if ui_state:
-                quality = ui_state["quality"]
-                trim_enabled = ui_state["trim_enabled"]
-            else:
-                quality = self.quality_combo.currentText()
-                trim_enabled = self.trim_enabled_check.isChecked()
-            audio_only = (
-                is_audio_file
-                or quality.startswith("none")
-                or quality == "none (Audio only)"
-                or (ui_state and ui_state.get("audio_only", False))
-            )
-
-            start_time = None
-            end_time = None
-
-            self.update_status("Processing local file...", "blue")
-
-            # Validate trimming
-            if trim_enabled:
-                if self.video_duration <= 0:
-                    self.update_status("Please fetch video duration first", "red")
-                    self._reset_buttons()
-                    with self.download_lock:
-                        self.is_downloading = False
-                    return
-
-                start_time = (
-                    int(float(ui_state["start_time"]))
-                    if ui_state
-                    else int(float(self.start_slider.value()))
-                )
-                end_time = (
-                    int(float(ui_state["end_time"]))
-                    if ui_state
-                    else int(float(self.end_slider.value()))
-                )
-
-                if start_time >= end_time:
-                    self.update_status("Invalid time range", "red")
-                    self._reset_buttons()
-                    with self.download_lock:
-                        self.is_downloading = False
-                    return
-
-            _fn = (
-                ui_state["filename"] if ui_state else self.filename_entry.text().strip()
-            )
-            custom_name = self.sanitize_filename(_fn)
-            if custom_name:
-                base_name = custom_name
-            else:
-                input_path = Path(filepath)
-                base_name = self.sanitize_filename(input_path.stem) or input_path.stem
-
-            if trim_enabled:
-                start_hms = self.seconds_to_hms(start_time).replace(":", "-")
-                end_hms = self.seconds_to_hms(end_time).replace(":", "-")
-                output_name = f"{base_name}_[{start_hms}_to_{end_hms}]"
-            else:
-                if custom_name:
-                    output_name = base_name
-                else:
-                    output_name = f"{base_name}_processed"
-
-            _vol = (
-                (ui_state["volume_raw"] / 100.0)
-                if ui_state
-                else (self.volume_slider.value() / 100.0)
-            )
-            volume_multiplier = self.validate_volume(_vol)
-            _dp = ui_state["download_path"] if ui_state else self.download_path
-
-            if audio_only:
-                output_file = os.path.join(_dp, f"{output_name}.mp3")
-                cmd = [self.ffmpeg_path, "-i", filepath]
-
-                if trim_enabled:
-                    cmd.extend(["-ss", str(start_time), "-to", str(end_time)])
-
-                cmd.extend(["-vn", "-c:a", "libmp3lame", "-b:a", AUDIO_BITRATE])
-
-                if volume_multiplier != 1.0:
-                    cmd.extend(["-af", f"volume={volume_multiplier}"])
-
-                cmd.extend(["-progress", "pipe:1", "-y", output_file])
-            else:
-                if quality.startswith("none") or quality == "none (Audio only)":
-                    self.update_status("Please select a video quality", "red")
-                    self._reset_buttons()
-                    with self.download_lock:
-                        self.is_downloading = False
-                    return
-
-                keep_below_10mb = (
-                    ui_state["keep_below_10mb"]
-                    if ui_state
-                    else self.keep_below_10mb_check.isChecked()
-                )
-
-                if keep_below_10mb:
-                    clip_duration = (
-                        (end_time - start_time) if trim_enabled else self.video_duration
-                    )
-                    if clip_duration <= 0:
-                        self.update_status("Please fetch video duration first", "red")
-                        self._reset_buttons()
-                        with self.download_lock:
-                            self.is_downloading = False
-                        return
-                    height, target_bitrate = self._calculate_optimal_quality(
-                        clip_duration
-                    )
-                    height = str(height)
-                    logger.info(
-                        f"10MB encode (local): auto-selected {height}p at "
-                        f"{target_bitrate}bps for {clip_duration}s clip"
-                    )
-                else:
-                    height = quality
-
-                output_file = os.path.join(_dp, f"{output_name}_{height}p.mp4")
-
-                if keep_below_10mb:
-                    clip_duration = (
-                        (end_time - start_time) if trim_enabled else self.video_duration
-                    )
-                    success = self._size_constrained_encode(
-                        filepath,
-                        output_file,
-                        target_bitrate,
-                        clip_duration,
-                        volume_multiplier=volume_multiplier,
-                        scale_height=height,
-                        start_time=start_time if trim_enabled else None,
-                        end_time=end_time if trim_enabled else None,
-                    )
-
-                    if success and self.is_downloading:
-                        self.update_progress(100)
-                        self.update_status("Processing complete!", "green")
-                        logger.info(
-                            f"Two-pass local file processing complete: {output_file}"
-                        )
-                        self._enable_upload_button(output_file)
-                    elif self.is_downloading:
-                        self.update_status("Processing failed", "red")
-                    return
-                else:
-                    cmd = [self.ffmpeg_path, "-i", filepath]
-
-                    if trim_enabled:
-                        cmd.extend(["-ss", str(start_time), "-to", str(end_time)])
-
-                    cmd.extend(
-                        ["-vf", f"scale=-2:{height}"]
-                        + self._get_video_encoder_args(mode="crf")
-                        + ["-c:a", "aac", "-b:a", AUDIO_BITRATE]
-                    )
-
-                    if volume_multiplier != 1.0:
-                        cmd.extend(["-af", f"volume={volume_multiplier}"])
-
-                    cmd.extend(["-progress", "pipe:1", "-y", output_file])
-
-            logger.info(f"Processing local file: {' '.join(cmd)}")
-
-            # Execute ffmpeg
-            with self.download_lock:
-                self.current_process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    encoding="utf-8",
-                    errors="replace",
-                    bufsize=1,
-                    **_subprocess_kwargs,
-                )
-
-            total_duration = (
-                self.video_duration if not trim_enabled else (end_time - start_time)
-            )
-
-            # Drain stderr in background to prevent pipe deadlock
-            stderr_lines = []
-
-            def _drain_stderr():
-                try:
-                    for line in self.current_process.stderr:
-                        stderr_lines.append(line)
-                        self.last_progress_time = time.time()
-                except (ValueError, OSError):
-                    pass
-
-            stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
-            stderr_thread.start()
-
-            for line in self.current_process.stdout:
-                if not self.is_downloading:
-                    break
-
-                if "out_time_ms=" in line:
-                    try:
-                        time_ms = int(line.split("=")[1].strip())
-                        current_time = time_ms / 1000000
-
-                        if total_duration > 0:
-                            progress = min(100, (current_time / total_duration) * 100)
-                            self.update_progress(progress)
-                            self.update_status(f"Processing... {progress:.1f}%", "blue")
-                            self.last_progress_time = time.time()
-                    except (ValueError, IndexError):
-                        pass
-
-            self.current_process.wait()
-            stderr_thread.join(timeout=5)
-
-            if self.current_process.returncode == 0 and self.is_downloading:
-                self.update_progress(100)
-                self.update_status("Processing complete!", "green")
-                logger.info(f"Local file processed: {output_file}")
-                self._enable_upload_button(output_file)
-
-            elif self.is_downloading:
-                stderr = "".join(stderr_lines)
-                self.update_status("Processing failed", "red")
-                logger.error(f"ffmpeg failed: {stderr}")
-
-        except FileNotFoundError as e:
-            if self.is_downloading:
-                self.update_status(
-                    "ffmpeg not found. Please ensure it is installed.", "red"
-                )
-                logger.error(f"ffmpeg not found: {e}")
-        except Exception as e:
-            if self.is_downloading:
-                self.update_status(f"Error: {e}", "red")
-                logger.exception(f"Error processing local file: {e}")
-        finally:
-            with self.download_lock:
-                self.is_downloading = False
-                proc = self.current_process
-                self.current_process = None
-            if proc:
-                if proc.stdout:
-                    proc.stdout.close()
-                if proc.stderr:
-                    proc.stderr.close()
-            self._reset_buttons()
-
-    # ===================================================================
-    #  Upload-button enable helper (thread-safe)
-    # ===================================================================
-
-    # --- from _port_updates.py ---
-
-    def _check_for_updates(self, silent=True):
-        """Check GitHub for new app version and yt-dlp updates.
-
-        Args:
-            silent: If True, don't show dialog when up-to-date or on error
-        """
-        import urllib.request
-        import urllib.error
-
-        ytdlp_update_available = False
-        ytdlp_current = None
-        ytdlp_latest = None
-
-        try:
-            logger.info("Checking for updates...")
-            if not silent:
-                self.update_status("Checking for updates...", "blue")
-
-            # Check app update from GitHub
-            try:
-                request = urllib.request.Request(
-                    GITHUB_API_LATEST,
-                    headers={"User-Agent": f"YoutubeDownloader/{APP_VERSION}"},
-                )
-                with urllib.request.urlopen(request, timeout=10) as response:
-                    data = json.loads(response.read().decode())
-
-                latest_version = data.get("tag_name", "").lstrip("v")
-
-                if latest_version and self._version_newer(latest_version, APP_VERSION):
-                    logger.info(
-                        f"App update available: {APP_VERSION} -> {latest_version}"
-                    )
-                    self.sig_show_update_dialog.emit(latest_version, data)
-                    return
-                else:
-                    logger.info(f"App is up to date: {APP_VERSION}")
-
-            except Exception as e:
-                logger.error(f"Error checking app updates: {e}")
-
-            # Check yt-dlp update (PyPI for source, GitHub releases for bundled)
-            try:
-                ytdlp_current = self._get_ytdlp_version()
-                if ytdlp_current:
-                    request = urllib.request.Request(
-                        "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest",
-                        headers={"User-Agent": f"YoutubeDownloader/{APP_VERSION}"},
-                    )
-                    with urllib.request.urlopen(request, timeout=10) as response:
-                        release_data = json.loads(response.read().decode())
-
-                    ytdlp_latest = release_data.get("tag_name", "").lstrip("v")
-
-                    if ytdlp_latest:
-                        current_parsed = self._parse_ytdlp_version(ytdlp_current)
-                        latest_parsed = self._parse_ytdlp_version(ytdlp_latest)
-
-                        if latest_parsed > current_parsed:
-                            logger.info(
-                                f"yt-dlp update available: {ytdlp_current} -> {ytdlp_latest}"
-                            )
-                            ytdlp_update_available = True
-                        else:
-                            logger.info(f"yt-dlp is up to date: {ytdlp_current}")
-
-            except Exception as e:
-                logger.error(f"Error checking yt-dlp updates: {e}")
-
-            # Show appropriate dialog based on what was found
-            if ytdlp_update_available:
-                # Must create dialog on GUI thread; use a signal
-                self.sig_show_ytdlp_update.emit(ytdlp_current, ytdlp_latest)
-            elif not silent:
-                self.sig_show_messagebox.emit(
-                    "info",
-                    "Up to Date",
-                    f"You are running the latest version (v{APP_VERSION}).",
-                )
-
-        except Exception as e:
-            logger.error(f"Error checking for updates: {e}")
-            if not silent:
-                self.sig_show_messagebox.emit(
-                    "error", "Update Error", f"Failed to check for updates:\n{e}"
-                )
-
-    def _check_for_updates_clicked(self):
-        """Handle Check for Updates button click."""
-        self.thread_pool.submit(self._check_for_updates, False)
-
-    def _show_update_dialog(self, latest_version, release_data):
-        """Show update available dialog with options.
-
-        Args:
-            latest_version: The latest version string
-            release_data: The GitHub release API response data
-        """
-        colors = THEMES[self.current_theme]
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Update Available")
-        dialog.setFixedSize(400, 200)
-        dialog.setStyleSheet(
-            f"background-color: {colors['bg']}; color: {colors['fg']};"
-        )
-
-        layout = QVBoxLayout(dialog)
-
-        msg = (
-            f"A new version is available!\n\n"
-            f"Current: v{APP_VERSION}\n"
-            f"Latest: v{latest_version}\n\n"
-            f"Would you like to update?"
-        )
-        label = QLabel(msg)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setWordWrap(True)
-        layout.addWidget(label)
-
-        btn_layout = QHBoxLayout()
-
-        update_btn = QPushButton("Update Now")
-        releases_btn = QPushButton("Open Releases Page")
-        later_btn = QPushButton("Later")
-
-        def update_now():
-            dialog.accept()
-            self.thread_pool.submit(self._apply_update, release_data)
-
-        def open_releases():
-            dialog.accept()
-            webbrowser.open(GITHUB_RELEASES_URL)
-
-        update_btn.clicked.connect(update_now)
-        releases_btn.clicked.connect(open_releases)
-        later_btn.clicked.connect(dialog.reject)
-
-        btn_layout.addWidget(update_btn)
-        btn_layout.addWidget(releases_btn)
-        btn_layout.addWidget(later_btn)
-        layout.addLayout(btn_layout)
-
-        dialog.exec()
-
-    def _version_newer(self, latest, current):
-        """Compare version strings to check if latest is newer than current.
-
-        Args:
-            latest: Latest version string (e.g., '3.1.3')
-            current: Current version string (e.g., '3.1.2')
-
-        Returns:
-            bool: True if latest is newer than current
-        """
-        try:
-            latest_parts = tuple(map(int, latest.split(".")))
-            current_parts = tuple(map(int, current.split(".")))
-            return latest_parts > current_parts
-        except (ValueError, AttributeError):
-            return False
-
-    def _compute_git_blob_sha(self, content):
-        """Compute the git blob SHA1 hash for content (same as git hash-object)."""
-        header = f"blob {len(content)}\0".encode()
-        return hashlib.sha1(header + content).hexdigest()
-
-    def _verify_file_against_github(self, tag_name, filename, content, headers):
-        """Verify downloaded file content matches GitHub's git tree SHA."""
-        import urllib.request
-
-        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}?ref={tag_name}"
-        request = urllib.request.Request(api_url, headers=headers)
-        with urllib.request.urlopen(request, timeout=30) as response:
-            file_info = json.loads(response.read().decode())
-
-        expected_sha = file_info.get("sha", "")
-        actual_sha = self._compute_git_blob_sha(content)
-
-        if actual_sha != expected_sha:
-            raise RuntimeError(
-                f"Integrity check failed for {filename}!\n"
-                f"Expected SHA: {expected_sha[:16]}...\n"
-                f"Got SHA: {actual_sha[:16]}...\n"
-                f"The file may have been tampered with."
-            )
-        logger.info(f"Integrity verified for {filename}: {actual_sha[:16]}...")
-
-    def _apply_update(self, release_data):
-        """Download and apply update, then restart the application.
-
-        Routes to the appropriate strategy based on how the app is running:
-        - Source (.py): replace modules, then restart via Python interpreter
-        - Frozen portable (onefile): download new exe, rename-dance, restart
-        - Frozen installed (onedir): direct user to GitHub releases page
-        """
-        self._updating = True
-        if getattr(sys, "frozen", False):
-            if self._is_onedir_frozen():
-                # Installed version -- can't self-update, point to installer
-                self.sig_show_messagebox.emit(
-                    "info",
-                    "Update Complete",
-                    "Your installed version cannot self-update.\n\n"
-                    "The releases page will open so you can download the latest installer.",
-                )
-                QTimer.singleShot(0, lambda: webbrowser.open(GITHUB_RELEASES_URL))
-            else:
-                self._apply_update_frozen(release_data)
-        else:
-            self._apply_update_source(release_data)
-
-    def _apply_update_source(self, release_data):
-        """Download, verify, and replace .py source files, then auto-restart."""
-        import urllib.request
-
-        progress_state = {"dialog": None, "label": None, "bar": None}
-
-        def _create_progress_dialog():
-            colors = THEMES[self.current_theme]
-            dlg = QDialog(self)
-            dlg.setWindowTitle("Downloading Update")
-            dlg.setFixedSize(350, 100)
-            dlg.setStyleSheet(
-                f"background-color: {colors['bg']}; color: {colors['fg']};"
-            )
-            dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
-            dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            dlg.setModal(True)
-            layout = QVBoxLayout(dlg)
-            lbl = QLabel("Downloading update...")
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(lbl)
-            bar = QProgressBar()
-            bar.setRange(0, 100)
-            bar.setValue(0)
-            layout.addWidget(bar)
-            progress_state["dialog"] = dlg
-            progress_state["label"] = lbl
-            progress_state["bar"] = bar
-            dlg.show()
-
-        def _update_progress_dialog(text, pct):
-            if progress_state["label"]:
-                progress_state["label"].setText(text)
-            if progress_state["bar"]:
-                progress_state["bar"].setValue(pct)
-
-        def _close_progress_dialog():
-            if progress_state["dialog"]:
-                progress_state["dialog"].close()
-                progress_state["dialog"] = None
-
-        try:
-            self.update_status("Downloading update...", "blue")
-            self._safe_after(0, _create_progress_dialog)
-
-            tag_name = release_data.get("tag_name", "main")
-            headers = {"User-Agent": f"YoutubeDownloader/{APP_VERSION}"}
-            current_script = Path(__file__).resolve()
-            script_dir = current_script.parent
-
-            modules = ["downloader_pyqt6.py", "constants.py"]
-            downloaded = {}
-
-            # Download and verify all modules before replacing any
-            for i, module_name in enumerate(modules):
-                download_url = f"{GITHUB_RAW_URL}/{tag_name}/{module_name}"
-                logger.info(f"Downloading: {download_url}")
-                request = urllib.request.Request(download_url, headers=headers)
-
-                with urllib.request.urlopen(request, timeout=60) as response:
-                    total = int(response.headers.get("Content-Length", 0))
-                    chunks = []
-                    received = 0
-                    while True:
-                        chunk = response.read(64 * 1024)
-                        if not chunk:
-                            break
-                        chunks.append(chunk)
-                        received += len(chunk)
-                        if total > 0:
-                            pct = int(received / total * 100)
-                            text = f"Downloading {module_name} ({i + 1}/{len(modules)})... {pct}%"
-                        else:
-                            pct = 0
-                            text = (
-                                f"Downloading {module_name} ({i + 1}/{len(modules)})..."
-                            )
-                        self._safe_after(
-                            0, lambda t=text, p=pct: _update_progress_dialog(t, p)
-                        )
-                    content = b"".join(chunks)
-
-                self._verify_file_against_github(
-                    tag_name, module_name, content, headers
-                )
-
-                try:
-                    compile(content, module_name, "exec")
-                except SyntaxError as e:
-                    raise RuntimeError(f"{module_name} has syntax errors: {e}")
-
-                downloaded[module_name] = content
-
-            self._safe_after(0, _close_progress_dialog)
-
-            # All verified -- backup and replace
-            for module_name, content in downloaded.items():
-                module_path = script_dir / module_name
-                backup_path = module_path.with_suffix(".py.backup")
-                if module_path.exists():
-                    shutil.copy2(module_path, backup_path)
-                    logger.info(f"Created backup: {backup_path}")
-
-                tmp_path = None
-                try:
-                    with tempfile.NamedTemporaryFile(
-                        mode="wb", suffix=".py", delete=False, dir=str(script_dir)
-                    ) as tmp_file:
-                        tmp_file.write(content)
-                        tmp_path = tmp_file.name
-                    shutil.move(tmp_path, module_path)
-                    logger.info(f"Updated: {module_path}")
-                except Exception:
-                    if tmp_path and os.path.exists(tmp_path):
-                        os.unlink(tmp_path)
-                    raise
-
-            # Auto-restart: spawn new process, then shut down
-            self.update_status("Update complete — restarting...", "green")
-            logger.info("Restarting after source update...")
-
-            def _do_restart():
-                subprocess.Popen([sys.executable] + sys.argv)
-                self._updating = False
-                self.close()
-
-            self._safe_after(500, _do_restart)
-
-        except Exception as e:
-            self._updating = False
-            self._safe_after(0, _close_progress_dialog)
-            logger.error(f"Error applying update: {e}")
-            self.sig_show_messagebox.emit(
-                "error", "Update Failed", f"Failed to download update:\n{e}"
-            )
-
-    def _get_expected_sha256(self, release_data, asset_name, headers):
-        """Fetch SHA256SUMS from release and return expected hash for asset_name."""
-        import urllib.request
-
-        tag_name = release_data.get("tag_name", "")
-        sha_url = (
-            f"https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/SHA256SUMS"
-        )
-        try:
-            req = urllib.request.Request(sha_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=30) as response:
-                sha256sums = response.read().decode("utf-8")
-            for line in sha256sums.strip().splitlines():
-                parts = line.split()
-                if len(parts) >= 2 and parts[1] == asset_name:
-                    return parts[0].lower()
-        except Exception as e:
-            logger.warning(f"Could not fetch SHA256SUMS: {e}")
-        return None
-
-    def _apply_update_frozen(self, release_data):
-        """Self-update a frozen portable exe via download + rename-and-replace."""
-        import urllib.request
-
-        try:
-            self.update_status("Downloading update...", "blue")
-
-            download_url = self._get_update_asset_url(release_data)
-            if not download_url:
-                raise RuntimeError(
-                    "Could not find a download for this platform in the release."
-                )
-
-            headers = {"User-Agent": f"YoutubeDownloader/{APP_VERSION}"}
-            exe_path = Path(sys.executable).resolve()
-
-            if sys.platform == "win32":
-                self._apply_update_frozen_windows(
-                    download_url, headers, exe_path, release_data
-                )
-            else:
-                self._apply_update_frozen_linux(
-                    download_url, headers, exe_path, release_data
-                )
-
-        except Exception as e:
-            self._updating = False
-            logger.error(f"Error applying frozen update: {e}")
-            self.sig_show_messagebox.emit(
-                "error", "Update Failed", f"Failed to download update:\n{e}"
-            )
-
-    def _apply_update_frozen_windows(
-        self, download_url, headers, exe_path, release_data=None
-    ):
-        """Windows portable exe update: rename-dance with .bat trampoline fallback."""
-        import urllib.request
-
-        new_exe = exe_path.with_suffix(".exe.new")
-        old_exe = exe_path.with_name(exe_path.stem + ".old")
-
-        logger.info(f"Downloading update: {download_url}")
-
-        # Create progress dialog on GUI thread via signal
-        progress_state = {"dialog": None, "label": None, "bar": None}
-
-        def _create_progress_dialog():
-            colors = THEMES[self.current_theme]
-            dlg = QDialog(self)
-            dlg.setWindowTitle("Downloading Update")
-            dlg.setFixedSize(350, 100)
-            dlg.setStyleSheet(
-                f"background-color: {colors['bg']}; color: {colors['fg']};"
-            )
-            # Prevent user from closing the dialog
-            dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
-            dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            dlg.setModal(True)
-
-            layout = QVBoxLayout(dlg)
-            lbl = QLabel("Downloading update...")
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(lbl)
-
-            bar = QProgressBar()
-            bar.setRange(0, 100)
-            bar.setValue(0)
-            layout.addWidget(bar)
-
-            progress_state["dialog"] = dlg
-            progress_state["label"] = lbl
-            progress_state["bar"] = bar
-            dlg.show()
-
-        def _update_progress_dialog(pct, mb, total_mb):
-            if progress_state["label"]:
-                progress_state["label"].setText(
-                    f"Downloading update... {mb:.1f}/{total_mb:.1f} MB ({pct}%)"
-                )
-            if progress_state["bar"]:
-                progress_state["bar"].setValue(pct)
-
-        def _close_progress_dialog():
-            if progress_state["dialog"]:
-                progress_state["dialog"].close()
-                progress_state["dialog"] = None
-
-        self._safe_after(0, _create_progress_dialog)
-
-        request = urllib.request.Request(download_url, headers=headers)
-        with urllib.request.urlopen(request, timeout=300) as response:
-            total = int(response.headers.get("Content-Length", 0))
-            downloaded = 0
-            with open(new_exe, "wb") as f:
-                while True:
-                    chunk = response.read(256 * 1024)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total > 0:
-                        pct = int(downloaded / total * 100)
-                        mb = downloaded / (1024 * 1024)
-                        total_mb = total / (1024 * 1024)
-                        self._safe_after(
-                            0,
-                            lambda p=pct, m=mb, t=total_mb: _update_progress_dialog(
-                                p, m, t
-                            ),
-                        )
-
-        self._safe_after(0, _close_progress_dialog)
-
-        if downloaded < 1024:
-            new_exe.unlink(missing_ok=True)
-            raise RuntimeError("Downloaded file is too small — likely corrupted.")
-
-        logger.info(f"Downloaded new exe: {new_exe} ({downloaded:,} bytes)")
-
-        # Verify SHA-256 if SHA256SUMS is available in the release
-        if release_data:
-            expected_hash = self._get_expected_sha256(
-                release_data, "YTDownloader.exe", headers
-            )
-            if expected_hash:
-                with open(new_exe, "rb") as f:
-                    actual_hash = hashlib.sha256(f.read()).hexdigest().lower()
-                if actual_hash != expected_hash:
-                    new_exe.unlink(missing_ok=True)
-                    raise RuntimeError(
-                        f"SHA-256 verification failed for YTDownloader.exe!\n"
-                        f"Expected: {expected_hash[:16]}...\n"
-                        f"Got: {actual_hash[:16]}..."
-                    )
-                logger.info("SHA-256 verification passed for YTDownloader.exe")
-
-        # Rename dance: running.exe -> .old, .new -> running.exe
-        try:
-            if old_exe.exists():
-                old_exe.unlink()
-            exe_path.rename(old_exe)
-            logger.info(f"Renamed running exe aside: {exe_path} -> {old_exe}")
-
-            try:
-                new_exe.rename(exe_path)
-                logger.info(f"Moved new exe into place: {new_exe} -> {exe_path}")
-            except Exception:
-                # Restore if moving new exe into place fails
-                if old_exe.exists() and not exe_path.exists():
-                    old_exe.rename(exe_path)
-                raise
-
-            # Success -- tell user to reopen
-            logger.info(f"Update applied: {exe_path}")
-            self.update_status("Update installed!", "green")
-            self._updating = False
-            self.sig_show_messagebox.emit(
-                "info",
-                "Update Installed",
-                "Updated to the latest version.\n\nPlease close and reopen the app to use it.",
-            )
-
-        except OSError as rename_err:
-            # Rename failed -- use bat to move file after we exit
-            logger.warning(
-                f"Rename failed ({rename_err}), falling back to bat trampoline"
-            )
-            import time as _time
-
-            bat_path = exe_path.parent / f"_update_{int(_time.time())}.bat"
-            pid = os.getpid()
-            bat_content = (
-                "@echo off\r\n"
-                f":wait\r\n"
-                f'tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul && '
-                f"(timeout /t 1 /nobreak >nul & goto wait)\r\n"
-                "timeout /t 3 /nobreak >nul\r\n"
-                f'move /y "{new_exe}" "{exe_path}"\r\n'
-                'del "%~f0"\r\n'
-            )
-            bat_path.write_text(bat_content)
-            logger.info(f"Wrote update trampoline: {bat_path}")
-            subprocess.Popen(
-                ["cmd", "/c", str(bat_path)],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                close_fds=True,
-            )
-            self._updating = False
-            self.sig_show_messagebox.emit(
-                "info",
-                "Update Installed",
-                "Updated to the latest version.\n\nPlease close and reopen the app to use it.",
-            )
-
-    def _apply_update_frozen_linux(
-        self, download_url, headers, exe_path, release_data=None
-    ):
-        """Linux portable binary update: download tar.gz, extract, replace in place."""
-        import urllib.request
-
-        logger.info(f"Downloading update: {download_url}")
-
-        progress_state = {"dialog": None, "label": None, "bar": None}
-
-        def _create_progress_dialog():
-            dlg = QDialog(self)
-            dlg.setWindowTitle("Downloading Update")
-            dlg.setFixedSize(350, 100)
-            dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
-            dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            dlg.setModal(True)
-            layout = QVBoxLayout(dlg)
-            lbl = QLabel("Downloading update...")
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(lbl)
-            bar = QProgressBar()
-            bar.setRange(0, 100)
-            bar.setValue(0)
-            layout.addWidget(bar)
-            progress_state["dialog"] = dlg
-            progress_state["label"] = lbl
-            progress_state["bar"] = bar
-            dlg.show()
-
-        def _update_progress_dialog(pct, mb, total_mb):
-            if progress_state["label"]:
-                progress_state["label"].setText(
-                    f"Downloading update... {mb:.1f}/{total_mb:.1f} MB ({pct}%)"
-                )
-            if progress_state["bar"]:
-                progress_state["bar"].setValue(pct)
-
-        def _close_progress_dialog():
-            if progress_state["dialog"]:
-                progress_state["dialog"].close()
-                progress_state["dialog"] = None
-
-        self._safe_after(0, _create_progress_dialog)
-
-        tar_tmp = tempfile.NamedTemporaryFile(
-            delete=False, suffix=".tar.gz", dir=str(exe_path.parent)
-        )
-        tar_tmp_path = tar_tmp.name
-        tar_tmp.close()
-
-        request = urllib.request.Request(download_url, headers=headers)
-        with urllib.request.urlopen(request, timeout=300) as response:
-            total = int(response.headers.get("Content-Length", 0))
-            downloaded = 0
-            with open(tar_tmp_path, "wb") as f:
-                while True:
-                    chunk = response.read(256 * 1024)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total > 0:
-                        pct = int(downloaded / total * 100)
-                        mb = downloaded / (1024 * 1024)
-                        total_mb = total / (1024 * 1024)
-                        self._safe_after(
-                            0,
-                            lambda p=pct, m=mb, t=total_mb: _update_progress_dialog(
-                                p, m, t
-                            ),
-                        )
-
-        self._safe_after(0, _close_progress_dialog)
-
-        if downloaded < 1024:
-            os.unlink(tar_tmp_path)
-            raise RuntimeError("Downloaded file is too small — likely corrupted.")
-
-        logger.info(f"Downloaded tar.gz ({downloaded:,} bytes), extracting...")
-
-        # Verify SHA-256 if SHA256SUMS is available in the release
-        if release_data:
-            expected_hash = self._get_expected_sha256(
-                release_data, "YTDownloader-Linux.tar.gz", headers
-            )
-            if expected_hash:
-                with open(tar_tmp_path, "rb") as f:
-                    actual_hash = hashlib.sha256(f.read()).hexdigest().lower()
-                if actual_hash != expected_hash:
-                    os.unlink(tar_tmp_path)
-                    raise RuntimeError(
-                        f"SHA-256 verification failed for YTDownloader-Linux.tar.gz!\n"
-                        f"Expected: {expected_hash[:16]}...\n"
-                        f"Got: {actual_hash[:16]}..."
-                    )
-                logger.info("SHA-256 verification passed for Linux tar.gz")
-
-        with tarfile.open(tar_tmp_path, mode="r:gz") as tar:
-            # Find the binary inside the archive
-            binary_member = None
-            for member in tar.getmembers():
-                if member.isfile() and "YTDownloader" in member.name:
-                    binary_member = member
-                    break
-
-            if not binary_member:
-                raise RuntimeError("Could not find YTDownloader binary in archive.")
-
-            # Extract just the binary content (safe -- no path traversal)
-            f = tar.extractfile(binary_member)
-            if not f:
-                raise RuntimeError("Could not read binary from archive.")
-            binary_content = f.read()
-
-        # Write to temp file next to exe, then atomically move into place
-        with tempfile.NamedTemporaryFile(delete=False, dir=str(exe_path.parent)) as tmp:
-            tmp.write(binary_content)
-            tmp_path = Path(tmp.name)
-
-        shutil.move(str(tmp_path), str(exe_path))
-        os.chmod(str(exe_path), 0o755)
-        os.unlink(tar_tmp_path)
-        logger.info(f"Replaced binary: {exe_path}")
-
-        # Spawn new binary and shut down
-        self.update_status("Update complete — restarting...", "green")
-
-        def _do_restart():
-            logger.info(f"Launching updated binary: {exe_path}")
-            subprocess.Popen([str(exe_path)])
-            self._updating = False
-            self.close()
-
-        self._safe_after(500, _do_restart)
-
-    def _is_onedir_frozen(self):
-        """Check if running as PyInstaller --onedir (installed) vs --onefile (portable).
-
-        In onedir mode, sys._MEIPASS points to the app directory (same as exe parent).
-        In onefile mode, sys._MEIPASS is a temp extraction directory.
-        """
-        if not getattr(sys, "frozen", False):
-            return False
-        meipass = Path(getattr(sys, "_MEIPASS", ""))
-        return meipass == Path(sys.executable).parent
-
-    def _get_update_asset_url(self, release_data):
-        """Find the download URL for the right release asset for this platform.
-
-        Returns:
-            str or None: The browser_download_url for the matching asset
-        """
-        if sys.platform == "win32":
-            target = "YTDownloader.exe"
-        else:
-            target = "YTDownloader-Linux.tar.gz"
-
-        for asset in release_data.get("assets", []):
-            if asset.get("name") == target:
-                return asset["browser_download_url"]
-        return None
-
-    # ======================================================================
-    #  yt-dlp updates
-    # ======================================================================
-
-    def _get_ytdlp_version(self):
-        """Get the current yt-dlp version.
-
-        Returns:
-            str: Version string (e.g., '2025.12.08') or None if failed
-        """
-        try:
-            result = subprocess.run(
-                [self.ytdlp_path, "--version"],
-                capture_output=True,
-                timeout=10,
-                **_subprocess_kwargs,
-            )
-            if result.returncode == 0:
-                return result.stdout.decode("utf-8", errors="replace").strip()
-        except Exception as e:
-            logger.error(f"Error getting yt-dlp version: {e}")
-        return None
-
-    def _get_pip_path(self):
-        """Get the pip path for the venv.
-
-        Returns:
-            str: Path to pip executable or None
-        """
-        script_dir = Path(__file__).parent
-        if sys.platform == "win32":
-            pip_path = script_dir / "venv" / "Scripts" / "pip.exe"
-        else:
-            pip_path = script_dir / "venv" / "bin" / "pip"
-
-        if pip_path.exists():
-            return str(pip_path)
-
-        # Try current Python's pip
-        python_bin = Path(sys.executable).parent
-        if sys.platform == "win32":
-            pip_path = python_bin / "pip.exe"
-        else:
-            pip_path = python_bin / "pip"
-
-        if pip_path.exists():
-            return str(pip_path)
-
-        return None
-
-    def _parse_ytdlp_version(self, version_str):
-        """Parse yt-dlp version string into comparable tuple.
-
-        Args:
-            version_str: Version string (e.g., '2026.02.04')
-
-        Returns:
-            tuple: Version as tuple of integers (e.g., (2026, 2, 4))
-        """
-        try:
-            return tuple(int(part) for part in version_str.split("."))
-        except (ValueError, AttributeError):
-            return (0,)
-
-    def _apply_ytdlp_update_pip(self, pip_path):
-        """Apply yt-dlp update using pip (when running from source)."""
-        try:
-            logger.info("Updating yt-dlp via pip...")
-            self.update_status("Updating yt-dlp...", "blue")
-
-            result = subprocess.run(
-                [pip_path, "install", "--upgrade", "yt-dlp"],
-                capture_output=True,
-                timeout=120,
-                **_subprocess_kwargs,
-            )
-
-            if result.returncode == 0:
-                new_version = self._get_ytdlp_version() or "unknown"
-                logger.info(f"yt-dlp updated successfully to {new_version}")
-
-                self.update_status(f"Current yt-dlp: {new_version}", "green")
-                self.sig_show_messagebox.emit(
-                    "info",
-                    "yt-dlp Updated",
-                    f"yt-dlp has been updated to version {new_version}.",
-                )
-            else:
-                error_msg = (
-                    result.stderr.decode("utf-8", errors="replace").strip()
-                    or result.stdout.decode("utf-8", errors="replace").strip()
-                )
-                raise RuntimeError(error_msg or "pip returned non-zero exit code")
-
-        except subprocess.TimeoutExpired:
-            logger.error("yt-dlp update timed out")
-            self.sig_show_messagebox.emit(
-                "error",
-                "yt-dlp Update Failed",
-                "Failed to update yt-dlp:\n\nUpdate timed out",
-            )
-        except Exception as e:
-            logger.error(f"Error updating yt-dlp: {e}")
-            self.sig_show_messagebox.emit(
-                "error", "yt-dlp Update Failed", f"Failed to update yt-dlp:\n\n{e}"
-            )
-
-    def _apply_ytdlp_update_binary(self, latest_version):
-        """Download latest yt-dlp binary from GitHub releases with SHA256 verification."""
-        import urllib.request
-
-        tmp_path = None
-        try:
-            logger.info("Downloading latest yt-dlp binary...")
-            self.update_status("Updating yt-dlp...", "blue")
-
-            headers = {"User-Agent": f"YoutubeDownloader/{APP_VERSION}"}
-            exe_dir = os.path.dirname(sys.executable)
-
-            if sys.platform == "win32":
-                binary_name = "yt-dlp.exe"
-                download_url = f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{binary_name}"
-                target_path = os.path.join(exe_dir, binary_name)
-            else:
-                binary_name = "yt-dlp"
-                download_url = f"https://github.com/yt-dlp/yt-dlp/releases/latest/download/{binary_name}"
-                target_path = os.path.join(exe_dir, binary_name)
-
-            # Download SHA256SUMS from yt-dlp releases
-            sha256sums_url = (
-                "https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS"
-            )
-            sha_request = urllib.request.Request(sha256sums_url, headers=headers)
-            with urllib.request.urlopen(sha_request, timeout=30) as response:
-                sha256sums = response.read().decode("utf-8")
-
-            # Find expected hash for our binary
-            expected_hash = None
-            for line in sha256sums.strip().splitlines():
-                parts = line.split()
-                if len(parts) >= 2 and parts[1] == binary_name:
-                    expected_hash = parts[0].lower()
-                    break
-
-            if not expected_hash:
-                raise RuntimeError(
-                    f"Could not find SHA256 for {binary_name} in SHA2-256SUMS"
-                )
-            logger.info(f"Expected SHA256 for {binary_name}: {expected_hash[:16]}...")
-
-            # Download the binary
-            tmp_fd = tempfile.NamedTemporaryFile(
-                dir=exe_dir, delete=False, suffix=".tmp"
-            )
-            tmp_path = tmp_fd.name
-            tmp_fd.close()
-
-            request = urllib.request.Request(download_url, headers=headers)
-            with urllib.request.urlopen(request, timeout=120) as response:
-                with open(tmp_path, "wb") as f:
-                    shutil.copyfileobj(response, f)
-
-            # Verify SHA256
-            with open(tmp_path, "rb") as f:
-                actual_hash = hashlib.sha256(f.read()).hexdigest().lower()
-
-            if actual_hash != expected_hash:
-                os.remove(tmp_path)
-                raise RuntimeError(
-                    f"SHA256 verification failed for {binary_name}!\n"
-                    f"Expected: {expected_hash[:32]}...\n"
-                    f"Got: {actual_hash[:32]}...\n"
-                    f"The file may have been tampered with."
-                )
-            logger.info(f"SHA256 verified for {binary_name}: {actual_hash[:16]}...")
-
-            # Replace the old binary
-            if os.path.exists(target_path):
-                os.remove(target_path)
-            os.rename(tmp_path, target_path)
-
-            # Make executable on Linux
-            if sys.platform != "win32":
-                os.chmod(target_path, 0o755)
-
-            # Update the path so the app uses the new binary immediately
-            self.ytdlp_path = target_path
-
-            new_version = self._get_ytdlp_version() or latest_version
-            logger.info(f"yt-dlp binary updated successfully to {new_version}")
-
-            self.update_status(f"Current yt-dlp: {new_version}", "green")
-            self.sig_show_messagebox.emit(
-                "info",
-                "yt-dlp Updated",
-                f"yt-dlp has been updated to version {new_version}.",
-            )
-
-        except Exception as e:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
-            logger.error(f"Error downloading yt-dlp binary: {e}")
-            self.sig_show_messagebox.emit(
-                "error", "yt-dlp Update Failed", f"Failed to update yt-dlp:\n\n{e}"
-            )
-
-    def _show_ytdlp_update_dialog(self, current_version, latest_version):
-        """Show yt-dlp update available dialog."""
-        result = QMessageBox.question(
-            self,
-            "yt-dlp Update Available",
-            f"A new version of yt-dlp is available!\n\n"
-            f"Current: {current_version}\n"
-            f"Latest: {latest_version}\n\n"
-            f"This may fix download issues.\n"
-            f"Update now?",
-        )
-
-        if result == QMessageBox.StandardButton.Yes:
-            if getattr(sys, "frozen", False):
-                self.thread_pool.submit(self._apply_ytdlp_update_binary, latest_version)
-            else:
-                pip_path = self._get_pip_path()
-                if pip_path:
-                    self.thread_pool.submit(self._apply_ytdlp_update_pip, pip_path)
-                else:
-                    QMessageBox.warning(
-                        self,
-                        "Update Not Supported",
-                        "Cannot auto-update yt-dlp in this mode.\n\n"
-                        "Please update yt-dlp manually or download the latest app release.",
-                    )
+        self.thread_pool.submit(self.download_mgr.download, url, ui_state)
+        self.thread_pool.submit(self.download_mgr._monitor_download_timeout)
 
     # ======================================================================
     #  Persistence
@@ -7515,9 +3655,7 @@ class YouTubeDownloader(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Upload Link History")
         dialog.resize(800, 500)
-        dialog.setStyleSheet(
-            f"background-color: {colors['bg']}; color: {colors['fg']};"
-        )
+        dialog.setStyleSheet(f"background-color: {colors['bg']}; color: {colors['fg']};")
 
         layout = QVBoxLayout(dialog)
 
@@ -7571,9 +3709,7 @@ class YouTubeDownloader(QMainWindow):
                     text_edit.setPlainText("No upload history yet.")
                     text_edit.setReadOnly(True)
                 except Exception as e:
-                    QMessageBox.critical(
-                        dialog, "Error", f"Failed to clear history: {e}"
-                    )
+                    QMessageBox.critical(dialog, "Error", f"Failed to clear history: {e}")
 
         copy_btn.clicked.connect(copy_all)
         clear_btn.clicked.connect(clear_history)

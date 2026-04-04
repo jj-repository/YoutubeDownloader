@@ -1,0 +1,11 @@
+target-version = "py311"
+line-length = 100
+
+[lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E501",  # line too long — handled by formatter
+]
+
+[lint.per-file-ignores]
+"test_*.py" = ["F811"]  # allow redefined names in tests
