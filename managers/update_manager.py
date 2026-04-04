@@ -16,7 +16,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QDialog, QLabel, QProgressBar, QVBoxLayout
 
 from constants import (
@@ -58,8 +58,8 @@ class UpdateManager(QObject):
         Args:
             silent: If True, don't show dialog when up-to-date or on error
         """
-        import urllib.request
         import urllib.error
+        import urllib.request
 
         ytdlp_update_available = False
         ytdlp_current = None
@@ -137,7 +137,8 @@ class UpdateManager(QObject):
                     "error", "Update Error", f"Failed to check for updates:\n{e}"
                 )
 
-    def _version_newer(self, latest, current):
+    @staticmethod
+    def _version_newer(latest, current):
         """Compare version strings to check if latest is newer than current.
 
         Args:
@@ -200,13 +201,13 @@ class UpdateManager(QObject):
                 )
                 return
             else:
-                logger.warning(
-                    f"SHA256SUMS missing for {filename} — falling back to git blob SHA-1 only"
+                raise RuntimeError(
+                    f"SHA256SUMS missing for {filename} — cannot verify integrity. Aborting update."
                 )
 
         logger.info(
             f"Integrity verified for {filename}: "
-            f"git-sha1={actual_sha[:16]}... sha256={actual_sha256[:16]}... (logged)"
+            f"git-sha1={actual_sha[:16]}... sha256={actual_sha256[:16]}..."
         )
 
     def _apply_update(self, release_data):
@@ -279,7 +280,18 @@ class UpdateManager(QObject):
             current_script = Path(__file__).resolve()
             script_dir = current_script.parent.parent  # managers/ -> project root
 
-            modules = ["downloader_pyqt6.py", "constants.py"]
+            modules = [
+                "downloader_pyqt6.py",
+                "constants.py",
+                "managers/__init__.py",
+                "managers/clipboard_manager.py",
+                "managers/download_manager.py",
+                "managers/encoding.py",
+                "managers/trimming_manager.py",
+                "managers/update_manager.py",
+                "managers/upload_manager.py",
+                "managers/utils.py",
+            ]
             downloaded = {}
 
             # Download and verify all modules before replacing any
@@ -333,7 +345,7 @@ class UpdateManager(QObject):
                 tmp_path = None
                 try:
                     with tempfile.NamedTemporaryFile(
-                        mode="wb", suffix=".py", delete=False, dir=str(script_dir)
+                        mode="wb", suffix=".py", delete=False, dir=str(module_path.parent)
                     ) as tmp_file:
                         tmp_file.write(content)
                         tmp_path = tmp_file.name
@@ -668,6 +680,8 @@ class UpdateManager(QObject):
             # Find the binary inside the archive
             binary_member = None
             for member in tar.getmembers():
+                if ".." in member.name or member.name.startswith("/"):
+                    continue
                 if member.isfile() and "YTDownloader" in member.name:
                     binary_member = member
                     break

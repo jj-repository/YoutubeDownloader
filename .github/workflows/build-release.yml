@@ -7,7 +7,35 @@ on:
   workflow_dispatch:
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+        cache-dependency-path: 'requirements.txt'
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install pytest
+    - name: Install optional dependencies
+      continue-on-error: true
+      run: pip install dbus-python
+    - name: Run tests
+      env:
+        QT_QPA_PLATFORM: offscreen
+      run: pytest test_unit.py -v
+    - name: Lint
+      run: |
+        pip install ruff
+        ruff check .
+
   build:
+    needs: test
     permissions:
       contents: read
     strategy:
@@ -37,7 +65,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pyinstaller
+        pip install pyinstaller==6.13.0
         pip install -r requirements.txt
 
     - name: Install optional dependencies (Linux)
@@ -75,7 +103,7 @@ jobs:
     - name: Build executable (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: |
-        pyinstaller --onefile --name YTDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --add-data "icon.png:." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets --collect-submodules=PIL downloader_pyqt6.py
+        pyinstaller --onefile --name YTDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --add-data "icon.png:." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets downloader_pyqt6.py
 
     - name: Download and bundle ffmpeg (Windows)
       if: matrix.os == 'windows-latest'
@@ -106,7 +134,7 @@ jobs:
     - name: Build executable (Windows)
       if: matrix.os == 'windows-latest'
       run: |
-        pyinstaller --onefile --name YTDownloader --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets --collect-submodules=PIL downloader_pyqt6.py
+        pyinstaller --onefile --name YTDownloader --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets downloader_pyqt6.py
 
     - name: Create release package (Linux)
       if: matrix.os == 'ubuntu-latest'
@@ -152,7 +180,7 @@ jobs:
         # Binary artifacts
         sha256sum linux-build/YTDownloader-Linux.tar.gz windows-build/YTDownloader.exe | sed 's|.*/||' > SHA256SUMS
         # Source files (for source-mode self-update verification)
-        sha256sum downloader_pyqt6.py constants.py >> SHA256SUMS
+        sha256sum downloader_pyqt6.py constants.py managers/*.py >> SHA256SUMS
 
     - name: Sign SHA256SUMS with cosign (keyless)
       uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3

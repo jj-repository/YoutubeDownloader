@@ -3,12 +3,15 @@
 Last updated: 2026-04-04
 
 ## Summary
-**Total Issues**: 55 | **Fixed: 53** | Remaining: 2 (accepted tradeoffs)
+**Audit 1**: 55 found, 53 fixed, 2 accepted
+**Audit 2**: 48 found, 47 fixed, 1 remaining
 
-## Remaining Issues (accepted)
+## Remaining Issues
 
-- **Unpinned ffmpeg download URLs** — BtbN/FFmpeg-Builds uses rolling `latest`. Size validation added but builds are non-reproducible. Accepted tradeoff: pinning is impractical for BtbN rolling releases. [small]
-- **Widget reads from worker in `_fetch_file_size`** — Safe (captured on GUI thread via closure before thread pool submit). Clarified with comment. [informational]
+- **DO-5**: ffmpeg downloaded from rolling `latest` URL with no SHA gate. Accepted — BtbN rolling releases make pinning impractical. [medium]
+
+### Accepted tradeoffs (from audit 1)
+- **Widget reads from worker in `_fetch_file_size`** — Safe via closure. [informational]
 
 ## Fixed Issues (this audit — 53 total)
 

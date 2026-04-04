@@ -19,14 +19,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
-          python-version: '3.12'
+          python-version: '3.11'
           cache: 'pip'
           cache-dependency-path: 'requirements.txt'
 
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pytest
+          pip install pytest pytest-cov
 
       - name: Install optional dependencies
         continue-on-error: true
@@ -35,7 +35,7 @@ jobs:
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest test_unit.py -v
+        run: pytest test_unit.py -v --cov=constants --cov=managers --cov-report=term-missing
 
   lint:
     runs-on: ubuntu-latest
@@ -49,7 +49,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
       - name: Install ruff
         run: pip install ruff

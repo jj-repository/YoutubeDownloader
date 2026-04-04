@@ -9,13 +9,12 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import sys
 import threading
 from collections import OrderedDict
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QFont, QImage, QPainter
 
 from constants import (
     FFPROBE_TIMEOUT,
@@ -64,7 +63,7 @@ class TrimmingManager(QObject):
         self._stream_url_cache: tuple[str, str] | None = None  # (video_url, stream_url)
 
         # Preview cache (LRU)
-        self.preview_cache: OrderedDict = OrderedDict()
+        self.preview_cache: OrderedDict[int, str] = OrderedDict()
 
         # Thread safety
         self.preview_lock = threading.Lock()
@@ -442,14 +441,18 @@ class TrimmingManager(QObject):
             Qt.TransformationMode.SmoothTransformation,
         )
 
-    @staticmethod
-    def _error_image() -> QImage:
-        """Create a simple error placeholder ``QImage`` (thread-safe)."""
-        img = QImage(PREVIEW_WIDTH, PREVIEW_HEIGHT, QImage.Format.Format_ARGB32)
-        img.fill(QColor("#2d2d2d"))
-        painter = QPainter(img)
-        painter.setPen(QColor("#ffffff"))
-        painter.setFont(QFont("Arial", 10))
-        painter.drawText(img.rect(), Qt.AlignmentFlag.AlignCenter, "Error")
-        painter.end()
-        return img
+    _cached_error_image: QImage | None = None
+
+    @classmethod
+    def _error_image(cls) -> QImage:
+        """Return a cached error placeholder ``QImage`` (thread-safe)."""
+        if cls._cached_error_image is None:
+            img = QImage(PREVIEW_WIDTH, PREVIEW_HEIGHT, QImage.Format.Format_ARGB32)
+            img.fill(QColor("#2d2d2d"))
+            painter = QPainter(img)
+            painter.setPen(QColor("#ffffff"))
+            painter.setFont(QFont("Arial", 10))
+            painter.drawText(img.rect(), Qt.AlignmentFlag.AlignCenter, "Error")
+            painter.end()
+            cls._cached_error_image = img
+        return cls._cached_error_image

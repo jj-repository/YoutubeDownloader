@@ -1,33 +1,26 @@
 #!/usr/bin/env python3
 """YoutubeDownloader — PyQt6 rewrite (Part 1: GUI construction)"""
 
-import os
-import sys
-import subprocess
-
-from managers.utils import _subprocess_kwargs
-
-import threading
-import re
+import glob
+import json
 import logging
 import logging.handlers
-import json
-import webbrowser
-from pathlib import Path
-from PIL import Image
-import tempfile
-import time
-from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+import os
+import re
 import shutil
 import signal
-import glob
-from collections import OrderedDict
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import webbrowser
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
-    QDesktopServices,
     QFont,
     QIcon,
     QPainter,
@@ -51,7 +44,6 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QSlider,
     QSpinBox,
     QTabWidget,
@@ -59,69 +51,42 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-# Import from modular components
-from managers import utils
-from managers.encoding import EncodeCallbacks, EncodingService
-from managers.update_manager import UpdateManager
-from managers.clipboard_manager import ClipboardManager
-from managers.download_manager import DownloadManager
-from managers.trimming_manager import TrimmingManager
-from managers.upload_manager import UploadManager
-
 from constants import (
-    PREVIEW_WIDTH,
-    PREVIEW_HEIGHT,
-    SLIDER_LENGTH,
-    PREVIEW_DEBOUNCE_MS,
-    PROCESS_TERMINATE_TIMEOUT,
-    TEMP_DIR_MAX_AGE,
-    DOWNLOAD_TIMEOUT,
-    DOWNLOAD_PROGRESS_TIMEOUT,
-    DOWNLOAD_PROGRESS_TIMEOUT_TRIM,
-    VOLUME_CHANGE_THRESHOLD,
-    PREVIEW_CACHE_SIZE,
-    MAX_WORKER_THREADS,
-    MAX_RETRY_ATTEMPTS,
-    RETRY_DELAY,
-    CLIPBOARD_POLL_INTERVAL_MS,
-    VIDEO_CRF,
-    AUDIO_BITRATE,
-    BUFFER_SIZE,
-    CHUNK_SIZE,
-    CONCURRENT_FRAGMENTS,
-    UI_UPDATE_DELAY_MS,
-    PROGRESS_COMPLETE,
-    CLIPBOARD_TIMEOUT,
-    METADATA_FETCH_TIMEOUT,
-    STREAM_FETCH_TIMEOUT,
-    FFPROBE_TIMEOUT,
-    DEPENDENCY_CHECK_TIMEOUT,
-    TIMEOUT_CHECK_INTERVAL,
-    MAX_VOLUME,
-    MIN_VOLUME,
-    MAX_VIDEO_DURATION,
+    APP_DATA_DIR,
+    APP_VERSION,
+    AUTO_UPLOAD_DELAY_MS,
     BYTES_PER_MB,
     CATBOX_MAX_SIZE_MB,
-    MAX_FILENAME_LENGTH,
+    CLIPBOARD_POLL_INTERVAL_MS,
     CLIPBOARD_URL_LIST_HEIGHT,
-    UI_INITIAL_DELAY_MS,
-    AUTO_UPLOAD_DELAY_MS,
-    TARGET_MAX_SIZE_BYTES,
-    TARGET_AUDIO_BITRATE_BPS,
-    SIZE_CONSTRAINED_RESOLUTIONS,
-    SIZE_CONSTRAINED_MIN_BITRATES,
-    APP_VERSION,
-    GITHUB_REPO,
-    GITHUB_RELEASES_URL,
-    GITHUB_API_LATEST,
-    GITHUB_RAW_URL,
-    APP_DATA_DIR,
-    UPLOAD_HISTORY_FILE,
     CLIPBOARD_URLS_FILE,
     CONFIG_FILE,
+    DEPENDENCY_CHECK_TIMEOUT,
+    GITHUB_REPO,
     LOG_FILE,
+    MAX_VIDEO_DURATION,
+    MAX_WORKER_THREADS,
+    PREVIEW_DEBOUNCE_MS,
+    PREVIEW_HEIGHT,
+    PREVIEW_WIDTH,
+    PROGRESS_COMPLETE,
+    SLIDER_LENGTH,
+    STREAM_FETCH_TIMEOUT,
+    TEMP_DIR_MAX_AGE,
     THEMES,
+    UI_INITIAL_DELAY_MS,
+    UPLOAD_HISTORY_FILE,
 )
+
+# Import from modular components
+from managers import utils
+from managers.clipboard_manager import ClipboardManager
+from managers.download_manager import PROGRESS_REGEX, DownloadManager
+from managers.encoding import EncodingService
+from managers.trimming_manager import TrimmingManager
+from managers.update_manager import UpdateManager
+from managers.upload_manager import UploadManager
+from managers.utils import _subprocess_kwargs
 
 # Try to import dbus for KDE Klipper integration
 try:
@@ -131,18 +96,11 @@ try:
 except ImportError:
     DBUS_AVAILABLE = False
 
-# Additional imports needed by ported business logic
-import hashlib
-import socket
-import tarfile
-import urllib.error
-import urllib.request
 from PyQt6.QtGui import QImage
 from PyQt6.QtWidgets import (
     QDialog,
     QTextEdit,
 )
-
 
 # Try to import pyperclip for cross-platform clipboard support
 try:
@@ -173,9 +131,6 @@ def _excepthook(exc_type, exc_value, exc_tb):
 
 
 sys.excepthook = _excepthook
-
-# Compiled regex pattern for clipboard-mode progress parsing
-PROGRESS_REGEX = re.compile(r"(\d+\.?\d*)%")
 
 # ── Color constants (template convention) ──────────────────────────────
 GREEN = ("#2e7d32", "#388e3c")  # (normal, hover) — primary action
@@ -1407,21 +1362,20 @@ class YouTubeDownloader(QMainWindow):
         try:
             img_path = self._get_resource_path("takodachi.webp")
             if os.path.exists(img_path):
-                with Image.open(img_path) as pil_img:
-                    pil_img.thumbnail((120, 120), Image.Resampling.LANCZOS)
-                    pil_img = pil_img.convert("RGBA")
-                    data = pil_img.tobytes("raw", "RGBA")
-                    qimg = QImage(
-                        data,
-                        pil_img.width,
-                        pil_img.height,
-                        QImage.Format.Format_RGBA8888,
+                qimg = QImage(img_path)
+                if not qimg.isNull():
+                    pix = QPixmap.fromImage(
+                        qimg.scaled(
+                            120,
+                            120,
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
                     )
-                    pix = QPixmap.fromImage(qimg)
-                takodachi_label = QLabel()
-                takodachi_label.setPixmap(pix)
-                takodachi_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                layout.addWidget(takodachi_label)
+                    takodachi_label = QLabel()
+                    takodachi_label.setPixmap(pix)
+                    takodachi_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    layout.addWidget(takodachi_label)
         except Exception as e:
             logger.error(f"Error loading settings image: {e}")
 
@@ -1585,6 +1539,9 @@ class YouTubeDownloader(QMainWindow):
             self._preview_debounce_timer.stop()
 
         self._shutting_down = True
+        self.download_mgr._shutting_down = True
+        self.clipboard_mgr._shutting_down = True
+        self.update_mgr._shutting_down = True
 
         # Stop clipboard timer
         if hasattr(self, "_clipboard_timer"):
@@ -1639,15 +1596,7 @@ class YouTubeDownloader(QMainWindow):
 
         # Save window geometry
         try:
-            with self.config_lock:
-                try:
-                    with open(CONFIG_FILE) as f:
-                        _cfg = json.load(f)
-                except Exception:
-                    _cfg = {}
-                _cfg["window_geometry"] = self.saveGeometry().toHex().data().decode()
-                with open(CONFIG_FILE, "w") as f:
-                    json.dump(_cfg, f, indent=2)
+            self._save_config_key("window_geometry", self.saveGeometry().toHex().data().decode())
         except Exception as e:
             logger.error(f"Error saving window geometry: {e}")
 
@@ -1763,10 +1712,6 @@ class YouTubeDownloader(QMainWindow):
     # ------------------------------------------------------------------
     #  Thread-safe helper (replaces _safe_after)
     # ------------------------------------------------------------------
-    def _reset_buttons(self):
-        """Reset download/stop buttons (thread-safe)."""
-        self.sig_reset_buttons.emit()
-
     # -- Trimming manager signal slots --
     def _on_duration_fetched(self, duration, video_title):
         """Handle successful duration fetch from TrimmingManager."""
@@ -1938,21 +1883,20 @@ class YouTubeDownloader(QMainWindow):
         """Load auto-check updates setting from config."""
         return self._config.get("auto_check_updates", True)
 
-    def _save_auto_check_updates_setting(self):
-        """Save auto-check updates setting to config."""
+    def _save_config_key(self, key, value):
+        """Update a single key in the config file using the in-memory config."""
         with self.config_lock:
             try:
-                CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-                config = {}
-                if CONFIG_FILE.exists():
-                    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                        config = json.load(f)
-                config["auto_check_updates"] = self.auto_check_updates_check.isChecked()
+                self._config[key] = value
                 with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                    json.dump(config, f, indent=2)
-                logger.info(f"Saved auto_check_updates: {config['auto_check_updates']}")
+                    json.dump(self._config, f, indent=2)
+                logger.info(f"Saved {key}: {value}")
             except Exception as e:
-                logger.error(f"Error saving auto_check_updates setting: {e}")
+                logger.error(f"Error saving {key}: {e}")
+
+    def _save_auto_check_updates_setting(self):
+        """Save auto-check updates setting to config."""
+        self._save_config_key("auto_check_updates", self.auto_check_updates_check.isChecked())
 
     def _load(self):
         """Load all persisted settings (template hook).
@@ -1970,19 +1914,7 @@ class YouTubeDownloader(QMainWindow):
 
     def _save_theme_preference(self):
         """Save theme preference to config."""
-        with self.config_lock:
-            try:
-                CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-                config = {}
-                if CONFIG_FILE.exists():
-                    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                        config = json.load(f)
-                config["theme"] = self.current_theme
-                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                    json.dump(config, f, indent=2)
-                logger.info(f"Saved theme preference: {self.current_theme}")
-            except Exception as e:
-                logger.error(f"Error saving theme preference: {e}")
+        self._save_config_key("theme", self.current_theme)
 
     # ------------------------------------------------------------------
     #  Dependency / init methods (carried over, needed by __init__)
@@ -2234,10 +2166,8 @@ class YouTubeDownloader(QMainWindow):
                     clipboard_content = None
 
             # Try pyperclip (works on Windows even when Firefox has focus)
-            if not clipboard_content:
+            if not clipboard_content and PYPERCLIP_AVAILABLE:
                 try:
-                    import pyperclip
-
                     clipboard_content = pyperclip.paste()
                 except Exception:
                     clipboard_content = None
@@ -2557,9 +2487,11 @@ class YouTubeDownloader(QMainWindow):
 
             # Build yt-dlp command
             if audio_only:
-                cmd = self.build_audio_ytdlp_command(url, output_path, volume=1.0)
+                cmd = self.download_mgr.build_audio_ytdlp_command(url, output_path, volume=1.0)
             else:
-                cmd = self.build_video_ytdlp_command(url, output_path, quality, volume=1.0)
+                cmd = self.download_mgr.build_video_ytdlp_command(
+                    url, output_path, quality, volume=1.0
+                )
 
             if is_playlist_url and not full_playlist_enabled:
                 cmd.insert(1, "--no-playlist")
@@ -2818,18 +2750,18 @@ class YouTubeDownloader(QMainWindow):
                 for item in self.clipboard_mgr.clipboard_url_list
                 if item["status"] in ["completed", "failed"]
             )
-        self.sig_clipboard_total.emit(f"Completed: {completed}/{total} videos")
+        self.clipboard_mgr.sig_clipboard_total.emit(f"Completed: {completed}/{total} videos")
 
     def update_clipboard_progress(self, value):
         """Update clipboard mode progress bar (thread-safe via signal)."""
         try:
-            self.sig_clipboard_progress.emit(max(0.0, min(100.0, float(value))))
+            self.clipboard_mgr.sig_clipboard_progress.emit(max(0.0, min(100.0, float(value))))
         except (ValueError, TypeError) as e:
             logger.warning(f"Invalid progress value: {value} - {e}")
 
     def update_clipboard_status(self, message, color):
         """Update clipboard mode status label (thread-safe via signal)."""
-        self.sig_clipboard_status.emit(str(message), str(color))
+        self.clipboard_mgr.sig_clipboard_status.emit(str(message), str(color))
 
     def _pick_directory(self, current_path, title="Select Download Folder"):
         """Show a directory picker dialog and validate the selection.
@@ -3480,10 +3412,13 @@ class YouTubeDownloader(QMainWindow):
         start_time = self.start_slider.value()
         end_time = self.end_slider.value()
 
-        # Show loading indicators
-        loading_pix = self.create_placeholder_pixmap(PREVIEW_WIDTH, PREVIEW_HEIGHT, "Loading...")
-        self.start_preview_label.setPixmap(loading_pix)
-        self.end_preview_label.setPixmap(loading_pix)
+        # Show loading indicators (reuse cached pixmap)
+        if not hasattr(self, "_loading_placeholder"):
+            self._loading_placeholder = self.create_placeholder_pixmap(
+                PREVIEW_WIDTH, PREVIEW_HEIGHT, "Loading..."
+            )
+        self.start_preview_label.setPixmap(self._loading_placeholder)
+        self.end_preview_label.setPixmap(self._loading_placeholder)
 
         try:
             self.thread_pool.submit(self.trimming_mgr.update_previews_thread, start_time, end_time)
@@ -3640,9 +3575,10 @@ class YouTubeDownloader(QMainWindow):
             "download_path": self.download_path,
         }
 
-        # Submit download and timeout monitor to thread pool
+        # Submit download to thread pool; timeout monitor as daemon thread (no pool slot)
         self.thread_pool.submit(self.download_mgr.download, url, ui_state)
-        self.thread_pool.submit(self.download_mgr._monitor_download_timeout)
+        monitor = threading.Thread(target=self.download_mgr._monitor_download_timeout, daemon=True)
+        monitor.start()
 
     # ======================================================================
     #  Persistence
