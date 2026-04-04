@@ -18,5 +18,9 @@ updates:
     schedule:
       interval: "weekly"
     groups:
-      all-actions:
+      major-actions:
         patterns: ["*"]
+        update-types: ["major"]
+      minor-patch-actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

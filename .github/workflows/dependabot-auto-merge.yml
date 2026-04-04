@@ -23,7 +23,8 @@ jobs:
 
       - name: Wait for CI checks to pass
         if: steps.metadata.outputs.update-type != 'version-update:semver-major'
-        run: gh pr checks "$PR_URL" --watch --fail-interval 30
+        timeout-minutes: 30
+        run: gh pr checks "$PR_URL" --watch --fail-interval 10
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

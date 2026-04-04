@@ -962,7 +962,7 @@ class TestClipboardManager:
     def test_initial_state(self, mgr):
         assert mgr.clipboard_monitoring is False
         assert mgr.clipboard_stop_event.is_set()  # initially stopped
-        assert mgr.clipboard_url_list == []
+        assert len(mgr.clipboard_url_list) == 0
         assert mgr.clipboard_last_content == ""
 
     def test_lock_acquisition(self, mgr):
@@ -3110,6 +3110,180 @@ class TestEncodeCommands:
         # Pass 2 should have volume filter
         pass2_str = " ".join(captured_cmds[1])
         assert "volume=0.5" in pass2_str
+
+
+# ─── Audit 4: _download_stream_segment_inner error paths ─────────────────
+
+
+class TestDownloadStreamSegmentInnerErrors:
+    """Error-path tests for _download_stream_segment_inner (TQ-1)."""
+
+    def _make_url(self, clen=1000000, dur=60.0):
+        return f"https://rr.google.com/videoplayback?clen={clen}&dur={dur}"
+
+    def test_network_timeout_propagates(self, download_mgr, tmp_path):
+        """urllib timeout during header fetch should propagate as-is."""
+        from unittest.mock import patch
+        from urllib.error import URLError
+
+        download_mgr.is_downloading = True
+        download_mgr.last_progress_time = 0
+        url = self._make_url()
+
+        with patch(
+            "managers.download_manager.urllib.request.urlopen",
+            side_effect=URLError("timed out"),
+        ):
+            with pytest.raises(URLError):
+                download_mgr._download_stream_segment_inner(
+                    url, 10.0, 20.0, str(tmp_path / "out.mp4"), "video"
+                )
+
+    def test_cancellation_during_data_download(self, download_mgr, tmp_path):
+        """Setting is_downloading=False mid-download should return early."""
+        from unittest.mock import MagicMock, patch
+
+        download_mgr.is_downloading = True
+        download_mgr.last_progress_time = 0
+
+        call_count = [0]
+
+        def mock_urlopen(req, timeout=None):
+            call_count[0] += 1
+            resp = MagicMock()
+            if call_count[0] == 1:
+                resp.read = MagicMock(side_effect=[b"\x00" * 1024, b""])
+            else:
+                # Cancel during data download
+                download_mgr.is_downloading = False
+                resp.read = MagicMock(side_effect=[b"x" * 1024, b""])
+            resp.__enter__ = MagicMock(return_value=resp)
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        url = self._make_url(clen=1000000, dur=60.0)
+        out = str(tmp_path / "out.mp4")
+        with patch("managers.download_manager.urllib.request.urlopen", side_effect=mock_urlopen):
+            result = download_mgr._download_stream_segment_inner(url, 10.0, 20.0, out, "video")
+
+        # Should return the actual_start value (cancellation returns early, not exception)
+        assert isinstance(result, float)
+
+
+# ─── Audit 4: _download_audio_trimmed error handling ─────────────────────
+
+
+class TestDownloadAudioTrimmedErrors:
+    """Error-path tests for _download_audio_trimmed (TQ-2)."""
+
+    def test_stream_urls_failure_raises(self, download_mgr):
+        """When _get_stream_urls fails, exception should propagate."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+
+        with patch.object(download_mgr, "_get_stream_urls", side_effect=RuntimeError("no streams")):
+            with pytest.raises(RuntimeError, match="no streams"):
+                download_mgr._download_audio_trimmed(
+                    "https://www.youtube.com/watch?v=test", 0, 10, "/tmp/out.mp3"
+                )
+
+    def test_cancellation_after_segment_download(self, download_mgr, tmp_path):
+        """If cancelled after segment download, should return False."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+
+        def fake_segment(*args, **kwargs):
+            download_mgr.is_downloading = False
+            return 0.0
+
+        with (
+            patch.object(
+                download_mgr,
+                "_get_stream_urls",
+                return_value=("https://example.com/audio.m4a", None),
+            ),
+            patch.object(download_mgr, "_download_stream_segment", side_effect=fake_segment),
+        ):
+            result = download_mgr._download_audio_trimmed(
+                "https://www.youtube.com/watch?v=test",
+                0,
+                10,
+                str(tmp_path / "out.mp3"),
+            )
+
+        assert result is False
+
+    def test_ffmpeg_failure_returns_false(self, download_mgr, tmp_path):
+        """When ffmpeg encoding fails, should return False."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+
+        with (
+            patch.object(
+                download_mgr,
+                "_get_stream_urls",
+                return_value=("https://example.com/audio.m4a", None),
+            ),
+            patch.object(download_mgr, "_download_stream_segment", return_value=0.0),
+            patch.object(download_mgr.encoding, "run_ffmpeg_with_progress", return_value=False),
+        ):
+            result = download_mgr._download_audio_trimmed(
+                "https://www.youtube.com/watch?v=test",
+                0,
+                10,
+                str(tmp_path / "out.mp3"),
+            )
+
+        assert result is False
+
+
+# ─── Audit 4: Strengthen weak test assertions (TQ-11) ───────────────────
+
+
+class TestUploaderQueueAssertions:
+    """Strengthened assertions for upload queue tests (TQ-11)."""
+
+    @pytest.fixture
+    def upload_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.upload_manager import UploadManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        m = UploadManager(thread_pool=pool)
+        yield m
+        pool.shutdown(wait=False)
+
+    def test_processes_items_with_correct_paths(self, upload_mgr):
+        """process_uploader_queue should call upload_single_file with correct paths."""
+        from unittest.mock import MagicMock, patch
+
+        upload_mgr.add_to_queue("/tmp/a.mp4")
+        upload_mgr.add_to_queue("/tmp/b.mp4")
+        upload_mgr.uploader_is_uploading = True
+
+        done_spy = MagicMock()
+        upload_mgr.sig_uploader_queue_done.connect(done_spy)
+
+        with patch.object(upload_mgr, "upload_single_file", return_value=True) as mock_upload:
+            upload_mgr.process_uploader_queue()
+
+        assert mock_upload.call_count == 2
+        paths = [call[0][0] for call in mock_upload.call_args_list]
+        assert "/tmp/a.mp4" in paths
+        assert "/tmp/b.mp4" in paths
+        done_spy.assert_called_once_with(2)
+
+    def test_start_queue_upload_sets_flag_and_submits(self, upload_mgr):
+        """start_queue_upload should set flag to True and submit to thread pool."""
+        upload_mgr.add_to_queue("/tmp/test.mp4")
+        ok, msg = upload_mgr.start_queue_upload()
+        assert ok is True
+        assert upload_mgr.uploader_is_uploading is True
+        assert len(upload_mgr.uploader_file_queue) == 1
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -41,7 +42,7 @@ class ClipboardManager(QObject):
         self.auto_download_lock = threading.Lock()
         self.clipboard_monitoring = False
         self.clipboard_last_content = ""
-        self.clipboard_url_list: list[dict] = []  # [{"url": str, "status": str}]
+        self.clipboard_url_list: deque[dict] = deque()  # [{"url": str, "status": str}]
         self.clipboard_download_path = str(Path.home() / "Downloads")
         self.clipboard_stop_event = threading.Event()  # set = stopped
         self.clipboard_stop_event.set()  # initially stopped

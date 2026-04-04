@@ -1,6 +1,6 @@
 # Overview
 
-v5.01 — Downloads video/audio from YouTube and supported sites.
+v5.17 — Downloads video/audio from YouTube and supported sites.
 
 ## Features
 - Quality selection with file size preview
@@ -11,6 +11,8 @@ v5.01 — Downloads video/audio from YouTube and supported sites.
 - Dark/light QSS theme, dark title bar on Windows (DWM/ctypes)
 
 ## Files
-- `downloader_pyqt6.py` — main app (PyQt6, ~6000 lines)
+- `downloader_pyqt6.py` — main app (PyQt6, ~4000 lines UI shell)
 - `constants.py` — all config constants
-- `requirements.txt`
+- `managers/` — 7 manager modules (download, encoding, trimming, clipboard, upload, update, utils)
+- `requirements.txt` — dependency ranges for development
+- `requirements.lock` — pinned versions for reproducible CI builds

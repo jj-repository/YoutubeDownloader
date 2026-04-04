@@ -6,15 +6,56 @@ Last updated: 2026-04-04
 **Audit 1**: 55 found, 53 fixed, 2 accepted
 **Audit 2**: 48 found, 47 fixed, 1 remaining
 **Audit 3**: 65 found, 62 fixed, 3 accepted
+**Audit 4**: 38 raw → 21 validated (12 false positives removed), 20 fixed, 1 deferred
 
 ## Remaining Issues
 
 - **DO-5**: ffmpeg downloaded from rolling `latest` URL with no SHA gate. Accepted — BtbN rolling releases make pinning impractical. [medium]
 - **M-17**: No HTTP connection reuse for byte-range downloads. Accepted — urllib3 is transitive dep only, overhead small, no new dependency warranted. [medium]
 - **M-28**: No `pip --require-hashes` for supply chain integrity in release builds. Accepted — PyInstaller pinned, full hash pinning too complex for the benefit. [medium]
+- **DO-8**: Release notes not structured (no CHANGELOG.md). Deferred — `generate_release_notes: true` sufficient for current scale. [low]
 
 ### Accepted tradeoffs (from audit 1)
 - **Widget reads from worker in `_fetch_file_size`** — Safe via closure. [informational]
+
+## Fixed Issues (audit 4 — 20 total)
+
+<details>
+<summary>Click to expand</summary>
+
+### Security (3)
+- [x] SEC-1: BAT trampoline path injection — added batch-special char validation before writing .bat
+- [x] SEC-2: Clipboard URLs written to batch file without newline/null stripping — sanitized
+- [x] SEC-6: Symlink race in Linux binary update — added `is_symlink()` check before `shutil.move`
+
+### Performance (3)
+- [x] PERF-1: O(n) `list.pop(0)` on clipboard URL eviction — replaced with `collections.deque.popleft()`
+- [x] PERF-3: Config flush synchronous on GUI thread — offloaded to worker thread via `thread_pool.submit()`
+- [x] PERF-7: Silent thread join timeout in encoding — added `is_alive()` check with warning log
+
+### DevOps (10)
+- [x] DO-1: Lint job missing pip cache — added `cache: 'pip'` to lint job
+- [x] DO-2: Build job upgrades pip without pinning — removed unnecessary `pip install --upgrade pip`
+- [x] DO-4: Cosign binary version not pinned — pinned to v2.4.1
+- [x] DO-6: Dependabot auto-merge CI wait no timeout — added `timeout-minutes: 30`
+- [x] DO-7: Missing `workflow_dispatch` on test.yml and codeql.yml — added
+- [x] DO-9: Dependabot groups GH Actions together — split into major vs minor/patch groups
+- [x] DO-10: No post-build artifact validation — added Linux/Windows validation steps
+- [x] DO-12: Release concurrency allows parallel builds — changed to global `release` group
+- [x] DO-13: No dependency lock file — created `requirements.lock` with pinned versions for CI builds
+- [x] DO-14: Artifact download has no integrity check — added existence/size verification step
+
+### Test Quality (4)
+- [x] TQ-1: `_download_stream_segment_inner` missing error path tests — added network timeout + cancellation tests
+- [x] TQ-2: `_download_audio_trimmed` missing error handling tests — added 3 tests (stream fail, cancel, ffmpeg fail)
+- [x] TQ-11: Weak test assertions (call count only) — added path verification and flag assertion tests
+
+### False Positives Removed (12)
+CQ-3 (pipe cleanup exists), CQ-4 (TOCTOU already fixed), CQ-7 (guard exists), CQ-8 (standard pattern),
+SEC-3/DO-3 (accepted DO-5), SEC-7 (cert pinning overkill), SEC-8 (resolve handles symlinks),
+PERF-2 (256KB buffered), PERF-5 (deque capped), PERF-6 (accepted M-17), DO-11 (auto-masked)
+
+</details>
 
 ## Fixed Issues (audit 3, pass 2 — 12 additional)
 

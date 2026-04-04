@@ -8,8 +8,9 @@ pip install -r requirements.txt
 `run.sh` launches tkinter legacy — do not use.
 
 ## Dependencies
-- `PyQt6`, `PIL/Pillow`, `yt-dlp`, `catboxpy`
+- `PyQt6`, `yt-dlp`, `catboxpy`
 - Optional: `pyperclip` (clipboard), `dbus` (Linux KDE)
+- `requirements.txt` — ranges for development; `requirements.lock` — pinned for CI builds
 
 ## Common Tasks
 **Download behavior:** quality → `_on_quality_change()`; progress → parses yt-dlp output → `sig_update_progress`

@@ -583,6 +583,11 @@ class UpdateManager(QObject):
             bat_path = Path(bat_fd.name)
             bat_fd.close()
             pid = os.getpid()
+            # Escape batch-special characters in paths to prevent injection
+            _bad_batch_chars = set('"&|^<>%')
+            for p in (new_exe, exe_path):
+                if _bad_batch_chars & set(str(p)):
+                    raise RuntimeError(f"Update path contains unsafe batch characters: {p}")
             bat_content = (
                 "@echo off\r\n"
                 f":wait\r\n"
@@ -725,6 +730,8 @@ class UpdateManager(QObject):
                 shutil.copyfileobj(f, tmp)
                 tmp_path = Path(tmp.name)
 
+        if exe_path.is_symlink():
+            raise RuntimeError(f"Refusing to overwrite symlink: {exe_path}")
         shutil.move(str(tmp_path), str(exe_path))
         os.chmod(str(exe_path), 0o755)
         os.unlink(tar_tmp_path)

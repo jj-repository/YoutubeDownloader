@@ -200,6 +200,8 @@ class EncodingService:
 
         proc.wait()
         stderr_thread.join(timeout=5)
+        if stderr_thread.is_alive():
+            logger.warning(f"{status_prefix}: stderr reader thread did not exit in 5s")
 
         if proc.returncode != 0:
             stderr_text = "".join(stderr_lines)

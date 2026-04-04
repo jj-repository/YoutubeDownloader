@@ -20,3 +20,5 @@ API: `https://api.github.com/repos/jj-repository/YoutubeDownloader/releases/late
 - `.py.backup` created before replacing each module
 - All files verified before any replaced (atomic)
 - All network ops have timeouts
+- BAT trampoline rejects paths with batch-special characters (`"&|^<>%`)
+- Linux update rejects symlink targets before overwriting binary

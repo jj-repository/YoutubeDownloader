@@ -1911,13 +1911,19 @@ class YouTubeDownloader(QMainWindow):
         self._config_save_timer.start()
 
     def _flush_config(self):
-        """Write the in-memory config dict to disk."""
+        """Write the in-memory config dict to disk (off GUI thread)."""
         with self.config_lock:
-            try:
-                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                    json.dump(self._config, f, indent=2)
-            except Exception as e:
-                logger.error(f"Error saving config: {e}")
+            snapshot = dict(self._config)
+        self.thread_pool.submit(self._write_config_to_disk, snapshot)
+
+    @staticmethod
+    def _write_config_to_disk(data: dict):
+        """Write config dict to disk. Called from worker thread."""
+        try:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.error(f"Error saving config: {e}")
 
     def _save_auto_check_updates_setting(self):
         """Save auto-check updates setting to config."""
@@ -2317,7 +2323,7 @@ class YouTubeDownloader(QMainWindow):
         with self.clipboard_mgr.clipboard_lock:
             # Cap the list to prevent unbounded memory growth
             if len(self.clipboard_mgr.clipboard_url_list) >= 500:
-                oldest = self.clipboard_mgr.clipboard_url_list.pop(0)
+                oldest = self.clipboard_mgr.clipboard_url_list.popleft()
                 self.clipboard_url_widgets.pop(oldest["url"], None)
                 if oldest.get("widget"):
                     oldest["widget"].deleteLater()
@@ -2342,7 +2348,7 @@ class YouTubeDownloader(QMainWindow):
             for i, item in enumerate(self.clipboard_mgr.clipboard_url_list):
                 if item["url"] == url:
                     widget_to_destroy = item["widget"]
-                    self.clipboard_mgr.clipboard_url_list.pop(i)
+                    del self.clipboard_mgr.clipboard_url_list[i]
                     if url in self.clipboard_url_widgets:
                         del self.clipboard_url_widgets[url]
                     list_is_empty = len(self.clipboard_mgr.clipboard_url_list) == 0
@@ -2523,7 +2529,8 @@ class YouTubeDownloader(QMainWindow):
             fd, batch_file_path = tempfile.mkstemp(prefix="ytdl_batch_", suffix=".txt")
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 for url in pending_urls:
-                    f.write(url + "\n")
+                    sanitized = url.replace("\r", "").replace("\n", "").replace("\x00", "")
+                    f.write(sanitized + "\n")
 
             # Build command
             quality = clip_state["quality"] if clip_state else "1080"
