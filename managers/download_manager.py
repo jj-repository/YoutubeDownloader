@@ -146,12 +146,14 @@ class DownloadManager(QObject):
             if not download_dir.exists():
                 return None
 
-            files = [f for f in download_dir.iterdir() if f.is_file()]
-            if not files:
-                return None
-
-            latest_file = max(files, key=lambda f: f.stat().st_ctime)
-            return str(latest_file)
+            latest = None
+            with os.scandir(download_dir) as entries:
+                latest = max(
+                    (e for e in entries if e.is_file()),
+                    key=lambda e: e.stat().st_ctime,
+                    default=None,
+                )
+            return str(latest.path) if latest else None
 
         except Exception as e:
             logger.error(f"Error finding latest file: {e}")
@@ -270,6 +272,52 @@ class DownloadManager(QObject):
         cmd.extend(["-o", output_path, "--", url])
         return cmd
 
+    def build_batch_audio_ytdlp_command(
+        self, batch_file_path: str, output_path: str, volume: float = 1.0
+    ) -> list[str]:
+        """Build yt-dlp command for batch audio download via --batch-file."""
+        cmd = self.build_base_ytdlp_command()
+        cmd.extend(
+            [
+                "-f",
+                "bestaudio",
+                "--extract-audio",
+                "--audio-format",
+                "mp3",
+                "--audio-quality",
+                AUDIO_BITRATE,
+            ]
+        )
+        if volume != 1.0:
+            cmd.extend(["--postprocessor-args", f"ffmpeg:-af volume={volume}"])
+        cmd.extend(["-o", output_path, "--batch-file", batch_file_path])
+        return cmd
+
+    def build_batch_video_ytdlp_command(
+        self, batch_file_path: str, output_path: str, quality: str, volume: float = 1.0
+    ) -> list[str]:
+        """Build yt-dlp command for batch video download via --batch-file."""
+        cmd = self.build_base_ytdlp_command()
+        cmd.extend(
+            [
+                "-f",
+                f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]",
+                "--merge-output-format",
+                "mp4",
+            ]
+        )
+        if volume != 1.0:
+            ffmpeg_args = self.encoding.get_video_encoder_args(mode="crf") + [
+                "-c:a",
+                "aac",
+                "-b:a",
+                AUDIO_BITRATE,
+            ]
+            ffmpeg_args.extend(["-af", f"volume={volume}"])
+            cmd.extend(["--postprocessor-args", "ffmpeg:" + " ".join(ffmpeg_args)])
+        cmd.extend(["-o", output_path, "--batch-file", batch_file_path])
+        return cmd
+
     # ------------------------------------------------------------------
     #  Trimmed download via byte-range seeking + local ffmpeg trim
     # ------------------------------------------------------------------
@@ -328,7 +376,7 @@ class DownloadManager(QObject):
 
     def _get_stream_urls(self, url: str, format_spec: str) -> tuple[str, str | None]:
         """Get direct video and audio stream URLs using yt-dlp -g."""
-        cmd = [self.ytdlp_path, "-g", "-f", format_spec, url]
+        cmd = [self.ytdlp_path, "-g", "-f", format_spec, "--", url]
         logger.info(f"Fetching stream URLs: {' '.join(cmd)}")
         self.update_status("Fetching stream URLs...", "blue")
         result = subprocess.run(
@@ -355,7 +403,7 @@ class DownloadManager(QObject):
         chunks = []
         expected_size = end - start + 1
         total_read = 0
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=DOWNLOAD_PROGRESS_TIMEOUT_TRIM // 10) as resp:
             while True:
                 if not self.is_downloading:
                     return b"".join(chunks)
@@ -473,8 +521,8 @@ class DownloadManager(QObject):
         self.update_status(f"Downloading {label}...", "blue")
         req = urllib.request.Request(stream_url)
         req.add_header("Range", f"bytes={data_start}-{data_end}")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            with open(output_path, "wb") as f:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            with open(output_path, "wb", buffering=256 * 1024) as f:
                 f.write(init_data)
                 downloaded = 0
                 while True:
@@ -505,7 +553,6 @@ class DownloadManager(QObject):
         end_time: float,
         output_path: str,
         volume_multiplier: float = 1.0,
-        encode_args: list[str] | None = None,
         copy_codec: bool = False,
     ) -> bool:
         """Download a trimmed segment by fetching only the relevant byte ranges.
@@ -525,7 +572,6 @@ class DownloadManager(QObject):
                 end_time,
                 output_path,
                 volume_multiplier,
-                encode_args,
                 copy_codec,
                 temp_dir,
             )
@@ -540,7 +586,6 @@ class DownloadManager(QObject):
         end_time: float,
         output_path: str,
         volume_multiplier: float,
-        encode_args: list[str] | None,
         copy_codec: bool,
         temp_dir: str,
     ) -> bool:
@@ -608,17 +653,11 @@ class DownloadManager(QObject):
         # Data starts at ~v_start seconds; we want start_time..end_time
         ss_offset = start_time - v_start
         volume_changed = abs(volume_multiplier - 1.0) >= VOLUME_CHANGE_THRESHOLD
-        needs_video_encode = not copy_codec and bool(encode_args)
-        needs_audio_encode = not copy_codec and (bool(encode_args) or volume_changed)
+        needs_audio_encode = not copy_codec and volume_changed
         ffmpeg_cmd = [self.ffmpeg_path, "-y", "-i", source_file]
         ffmpeg_cmd.extend(["-ss", str(max(0, ss_offset)), "-t", str(duration)])
 
-        if needs_video_encode:
-            # Full re-encode (encode_args includes both video + audio args)
-            ffmpeg_cmd.extend(encode_args)
-            if volume_changed:
-                ffmpeg_cmd.extend(["-af", f"volume={volume_multiplier}"])
-        elif needs_audio_encode:
+        if needs_audio_encode:
             # Volume-only change: copy video stream, re-encode audio only
             ffmpeg_cmd.extend(["-c:v", "copy"])
             ffmpeg_cmd.extend(["-c:a", "aac", "-b:a", AUDIO_BITRATE])
@@ -767,6 +806,7 @@ class DownloadManager(QObject):
 
             with self.download_lock:
                 self.is_downloading = False
+                self.current_process = None
             self.update_status("Download stopped", "orange")
             self.sig_reset_buttons.emit()
 
@@ -1249,7 +1289,7 @@ class DownloadManager(QObject):
                     cmd.extend(get_speed_limit_args(_sl))
                     if is_playlist:
                         cmd.append("--no-playlist")
-                    cmd.extend(["--newline", "--progress", "-o", temp_output_template, url])
+                    cmd.extend(["--newline", "--progress", "-o", temp_output_template, "--", url])
                 else:
                     # --- Normal single-pass path (no trim) ---
                     temp_dir = None
@@ -1297,6 +1337,7 @@ class DownloadManager(QObject):
                             "--progress",
                             "-o",
                             os.path.join(_dp, output_template),
+                            "--",
                             url,
                         ]
                     )
@@ -1509,7 +1550,6 @@ class DownloadManager(QObject):
                 output_file = os.path.join(_dp, f"{output_name}_{height}p.mp4")
 
                 if keep_below_10mb:
-                    clip_duration = (end_time - start_time) if trim_enabled else self.video_duration
                     success = self.encoding.size_constrained_encode(
                         filepath,
                         output_file,

@@ -442,17 +442,20 @@ class TrimmingManager(QObject):
         )
 
     _cached_error_image: QImage | None = None
+    _error_image_lock = threading.Lock()
 
     @classmethod
     def _error_image(cls) -> QImage:
         """Return a cached error placeholder ``QImage`` (thread-safe)."""
         if cls._cached_error_image is None:
-            img = QImage(PREVIEW_WIDTH, PREVIEW_HEIGHT, QImage.Format.Format_ARGB32)
-            img.fill(QColor("#2d2d2d"))
-            painter = QPainter(img)
-            painter.setPen(QColor("#ffffff"))
-            painter.setFont(QFont("Arial", 10))
-            painter.drawText(img.rect(), Qt.AlignmentFlag.AlignCenter, "Error")
-            painter.end()
-            cls._cached_error_image = img
+            with cls._error_image_lock:
+                if cls._cached_error_image is None:
+                    img = QImage(PREVIEW_WIDTH, PREVIEW_HEIGHT, QImage.Format.Format_ARGB32)
+                    img.fill(QColor("#2d2d2d"))
+                    painter = QPainter(img)
+                    painter.setPen(QColor("#ffffff"))
+                    painter.setFont(QFont("Arial", 10))
+                    painter.drawText(img.rect(), Qt.AlignmentFlag.AlignCenter, "Error")
+                    painter.end()
+                    cls._cached_error_image = img
         return cls._cached_error_image

@@ -9,3 +9,4 @@ ignore = [
 
 [lint.per-file-ignores]
 "test_*.py" = ["F811"]  # allow redefined names in tests
+"downloader_pyqt6.py" = ["E402"]  # imports after conditional dbus/pyperclip try-except blocks

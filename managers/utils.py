@@ -81,6 +81,10 @@ def sanitize_filename(filename: str) -> str:
 def validate_download_path(path: str) -> tuple[bool, str | None, str | None]:
     """Validate download path to prevent path traversal attacks.
 
+    On Linux: must be under home directory or /tmp.
+    On Windows: any absolute path on a real drive is allowed, except
+    system-protected directories (Windows, System32, Program Files).
+
     Returns:
         tuple: (is_valid, normalized_path, error_message)
     """
@@ -91,31 +95,57 @@ def validate_download_path(path: str) -> tuple[bool, str | None, str | None]:
         if ".." in path or ".." in normalized:
             return (False, None, "Path contains directory traversal sequences")
 
-        home_dir = Path.home()
-        safe_dirs = [
-            home_dir,
-            Path("/tmp"),
-            Path(os.environ.get("TEMP", "/tmp")) if sys.platform == "win32" else Path("/tmp"),
-        ]
+        resolved = str(normalized_path.resolve())
 
-        is_safe = False
-        for safe_dir in safe_dirs:
-            try:
-                safe_resolved = safe_dir.resolve()
-                normalized_path.resolve().relative_to(safe_resolved)
-                is_safe = True
-                break
-            except ValueError:
-                continue
+        if sys.platform == "win32":
+            # Block system-critical directories
+            _lower = resolved.lower().replace("/", "\\")
+            blocked = [
+                os.environ.get("SystemRoot", r"C:\Windows").lower(),
+                os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32").lower(),
+            ]
+            for prog_var in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+                val = os.environ.get(prog_var)
+                if val:
+                    blocked.append(val.lower())
 
-        if not is_safe:
-            return (
-                False,
-                None,
-                "Download path must be within home directory or temp folder",
-            )
+            for b in blocked:
+                b_norm = b.replace("/", "\\")
+                if _lower == b_norm or _lower.startswith(b_norm + "\\"):
+                    return (
+                        False,
+                        None,
+                        "Download path must not be inside a system directory",
+                    )
 
-        return (True, str(normalized_path.resolve()), None)
+            # Must be an absolute path with a drive letter
+            if not os.path.isabs(resolved):
+                return (False, None, "Download path must be absolute")
+
+            return (True, resolved, None)
+        else:
+            # Linux / macOS: restrict to home or /tmp
+            home_dir = Path.home()
+            safe_dirs = [home_dir, Path("/tmp")]
+
+            is_safe = False
+            for safe_dir in safe_dirs:
+                try:
+                    safe_resolved = safe_dir.resolve()
+                    normalized_path.resolve().relative_to(safe_resolved)
+                    is_safe = True
+                    break
+                except ValueError:
+                    continue
+
+            if not is_safe:
+                return (
+                    False,
+                    None,
+                    "Download path must be within home directory or temp folder",
+                )
+
+            return (True, resolved, None)
     except Exception as e:
         return (False, None, f"Path validation error: {str(e)}")
 
@@ -221,6 +251,7 @@ def hms_to_seconds(hms_str: str) -> int | None:
 
 def seconds_to_hms(seconds: float | int) -> str:
     """Convert seconds to HH:MM:SS format."""
+    seconds = max(0, seconds)
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)

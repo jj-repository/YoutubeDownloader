@@ -155,6 +155,15 @@ class UpdateManager(QObject):
         except (ValueError, AttributeError):
             return False
 
+    @staticmethod
+    def _sha256_file(filepath) -> str:
+        """Compute SHA-256 of a file using chunked reads to limit memory."""
+        h = hashlib.sha256()
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(256 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest().lower()
+
     def _compute_git_blob_sha(self, content):
         """Compute the git blob SHA1 hash for content (same as git hash-object)."""
         header = f"blob {len(content)}\0".encode()
@@ -370,27 +379,48 @@ class UpdateManager(QObject):
         except Exception as e:
             self._updating = False
             self.sig_run_on_gui.emit(_close_progress_dialog)
+            # Rollback any modules already replaced from backups
+            for module_name in downloaded:
+                backup_path = (script_dir / module_name).with_suffix(".py.backup")
+                module_path = script_dir / module_name
+                if backup_path.exists():
+                    try:
+                        shutil.copy2(backup_path, module_path)
+                        logger.info(f"Rolled back: {module_path}")
+                    except Exception as rb_err:
+                        logger.error(f"Rollback failed for {module_path}: {rb_err}")
             logger.error(f"Error applying update: {e}")
             self.sig_show_messagebox.emit(
                 "error", "Update Failed", f"Failed to download update:\n{e}"
             )
 
     def _get_expected_sha256(self, release_data, asset_name, headers):
-        """Fetch SHA256SUMS from release and return expected hash for asset_name."""
+        """Fetch SHA256SUMS from release and return expected hash for asset_name.
+
+        Caches the SHA256SUMS content per tag to avoid redundant HTTP requests
+        when verifying multiple source modules in a single update.
+        """
         import urllib.request
 
         tag_name = release_data.get("tag_name", "")
-        sha_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/SHA256SUMS"
-        try:
-            req = urllib.request.Request(sha_url, headers=headers)
-            with urllib.request.urlopen(req, timeout=30) as response:
-                sha256sums = response.read().decode("utf-8")
-            for line in sha256sums.strip().splitlines():
-                parts = line.split()
-                if len(parts) >= 2 and parts[1] == asset_name:
-                    return parts[0].lower()
-        except Exception as e:
-            logger.warning(f"Could not fetch SHA256SUMS: {e}")
+        cache = getattr(self, "_sha256sums_cache", {})
+
+        if tag_name not in cache:
+            sha_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/SHA256SUMS"
+            try:
+                req = urllib.request.Request(sha_url, headers=headers)
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    cache[tag_name] = response.read().decode("utf-8")
+                self._sha256sums_cache = cache
+            except Exception as e:
+                logger.warning(f"Could not fetch SHA256SUMS: {e}")
+                return None
+
+        sha256sums = cache.get(tag_name, "")
+        for line in sha256sums.strip().splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == asset_name:
+                return parts[0].lower()
         return None
 
     def _apply_update_frozen(self, release_data):
@@ -506,8 +536,7 @@ class UpdateManager(QObject):
                 "SHA-256 verification unavailable — SHA256SUMS missing from release. "
                 "Update aborted for security."
             )
-        with open(new_exe, "rb") as f:
-            actual_hash = hashlib.sha256(f.read()).hexdigest().lower()
+        actual_hash = self._sha256_file(new_exe)
         if actual_hash != expected_hash:
             new_exe.unlink(missing_ok=True)
             raise RuntimeError(
@@ -665,8 +694,7 @@ class UpdateManager(QObject):
                 "SHA-256 verification unavailable — SHA256SUMS missing from release. "
                 "Update aborted for security."
             )
-        with open(tar_tmp_path, "rb") as f:
-            actual_hash = hashlib.sha256(f.read()).hexdigest().lower()
+        actual_hash = self._sha256_file(tar_tmp_path)
         if actual_hash != expected_hash:
             os.unlink(tar_tmp_path)
             raise RuntimeError(
@@ -689,16 +717,13 @@ class UpdateManager(QObject):
             if not binary_member:
                 raise RuntimeError("Could not find YTDownloader binary in archive.")
 
-            # Extract just the binary content (safe -- no path traversal)
+            # Extract binary via streaming (avoids loading entire binary into memory)
             f = tar.extractfile(binary_member)
             if not f:
                 raise RuntimeError("Could not read binary from archive.")
-            binary_content = f.read()
-
-        # Write to temp file next to exe, then atomically move into place
-        with tempfile.NamedTemporaryFile(delete=False, dir=str(exe_path.parent)) as tmp:
-            tmp.write(binary_content)
-            tmp_path = Path(tmp.name)
+            with tempfile.NamedTemporaryFile(delete=False, dir=str(exe_path.parent)) as tmp:
+                shutil.copyfileobj(f, tmp)
+                tmp_path = Path(tmp.name)
 
         shutil.move(str(tmp_path), str(exe_path))
         os.chmod(str(exe_path), 0o755)
@@ -906,8 +931,7 @@ class UpdateManager(QObject):
                     shutil.copyfileobj(response, f)
 
             # Verify SHA256
-            with open(tmp_path, "rb") as f:
-                actual_hash = hashlib.sha256(f.read()).hexdigest().lower()
+            actual_hash = self._sha256_file(tmp_path)
 
             if actual_hash != expected_hash:
                 os.remove(tmp_path)

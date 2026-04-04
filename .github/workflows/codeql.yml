@@ -8,10 +8,13 @@ on:
   schedule:
     - cron: '0 6 * * 1'  # Weekly on Monday at 6am UTC
 
+permissions: {}
+
 jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read

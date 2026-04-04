@@ -57,6 +57,23 @@ class UploadManager(QObject):
         self.uploader_file_queue: list[dict] = []  # [{"path": str, "widget": QWidget|None}]
         self._upload_save_count = 0
 
+        # Trim upload history at startup to prevent unbounded growth
+        self._trim_history_on_startup()
+
+    def _trim_history_on_startup(self):
+        """Cap upload history file at 500 lines on startup."""
+        try:
+            if not UPLOAD_HISTORY_FILE.exists():
+                return
+            with open(UPLOAD_HISTORY_FILE, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            if len(lines) > 500:
+                with open(UPLOAD_HISTORY_FILE, "w", encoding="utf-8") as f:
+                    f.writelines(lines[-500:])
+                logger.info(f"Trimmed upload history from {len(lines)} to 500 entries at startup")
+        except Exception as e:
+            logger.error(f"Error trimming upload history at startup: {e}")
+
     def _get_catbox_client(self):
         """Lazy-initialize and return the CatboxClient."""
         if self.catbox_client is None:
@@ -72,13 +89,14 @@ class UploadManager(QObject):
     def upload_to_catbox(self):
         """Background worker. Uploads last_output_file to Catbox.moe."""
         try:
+            filepath = self.last_output_file
+            if not filepath:
+                return
             with self.upload_lock:
                 self.is_uploading = True
-            logger.info(f"Starting upload to Catbox.moe: {self.last_output_file}")
-            file_url = self._get_catbox_client().upload(self.last_output_file)
-            filename = (
-                os.path.basename(self.last_output_file) if self.last_output_file else "unknown"
-            )
+            logger.info(f"Starting upload to Catbox.moe: {filepath}")
+            file_url = self._get_catbox_client().upload(filepath)
+            filename = os.path.basename(filepath)
             self.save_upload_link(file_url, filename)
             self.sig_upload_complete.emit(file_url, filename)
             logger.info(f"Upload successful: {file_url}")
@@ -127,6 +145,7 @@ class UploadManager(QObject):
         with self.uploader_lock:
             queue_snapshot = list(self.uploader_file_queue)
         total_count = len(queue_snapshot)
+        uploaded_count = 0
 
         for index, item in enumerate(queue_snapshot):
             with self.uploader_lock:
@@ -140,11 +159,10 @@ class UploadManager(QObject):
                 f"Uploading {index + 1}/{total_count}: {filename}...", "blue"
             )
 
-            self.upload_single_file(file_path)
+            if self.upload_single_file(file_path):
+                uploaded_count += 1
 
-        with self.uploader_lock:
-            count = len(self.uploader_file_queue)
-        self.sig_uploader_queue_done.emit(count)
+        self.sig_uploader_queue_done.emit(uploaded_count)
 
     def upload_single_file(self, file_path: str) -> bool:
         """Upload a single file to Catbox. Returns True on success."""

@@ -43,6 +43,7 @@ class ClipboardManager(QObject):
         self.clipboard_last_content = ""
         self.clipboard_url_list: list[dict] = []  # [{"url": str, "status": str}]
         self.clipboard_download_path = str(Path.home() / "Downloads")
-        self.clipboard_downloading = False
+        self.clipboard_stop_event = threading.Event()  # set = stopped
+        self.clipboard_stop_event.set()  # initially stopped
         self.clipboard_auto_downloading = False
         self._shutting_down = False

@@ -57,6 +57,8 @@ class EncodingService:
             mode: 'crf' for quality-based, 'bitrate' for target bitrate
             target_bitrate: Required when mode='bitrate'
         """
+        if mode == "bitrate" and target_bitrate is None:
+            raise ValueError("target_bitrate required when mode='bitrate'")
         if self.hw_encoder:
             if mode == "crf":
                 if self.hw_encoder == "h264_amf":
@@ -204,6 +206,7 @@ class EncodingService:
             logger.error(f"{status_prefix} failed (rc {proc.returncode}): {stderr_text}")
             safe_process_cleanup(proc)
             return False
+        safe_process_cleanup(proc)
         return True
 
     def encode_single_pass(

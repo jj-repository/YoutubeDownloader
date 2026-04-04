@@ -5,37 +5,29 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run tests only (skip build and release)'
+        required: false
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/test.yml
     permissions:
       contents: read
-    steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-      with:
-        python-version: '3.11'
-        cache: 'pip'
-        cache-dependency-path: 'requirements.txt'
-    - name: Install dependencies
-      run: |
-        pip install -r requirements.txt
-        pip install pytest
-    - name: Install optional dependencies
-      continue-on-error: true
-      run: pip install dbus-python
-    - name: Run tests
-      env:
-        QT_QPA_PLATFORM: offscreen
-      run: pytest test_unit.py -v
-    - name: Lint
-      run: |
-        pip install ruff
-        ruff check .
 
   build:
     needs: test
+    if: ${{ !inputs.dry_run }}
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
