@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -30,6 +31,8 @@ from managers.utils import _subprocess_kwargs
 
 logger = logging.getLogger(__name__)
 
+_TAG_RE = re.compile(r"^v?\d+\.\d+(\.\d+)?$")
+
 
 class UpdateManager(QObject):
     """Handles app self-update and yt-dlp update logic."""
@@ -48,6 +51,32 @@ class UpdateManager(QObject):
         self._updating = False
         self._shutting_down = False
         self._sha256sums_cache = {}
+
+    @staticmethod
+    def _validate_tag_name(tag_name: str) -> bool:
+        """Validate release tag format to prevent URL manipulation."""
+        return bool(_TAG_RE.match(tag_name))
+
+    @staticmethod
+    def _validate_download_url(url: str) -> bool:
+        """Verify download URL points to our GitHub repo."""
+        return url.startswith(f"https://github.com/{GITHUB_REPO}/")
+
+    @staticmethod
+    def cleanup_old_updates():
+        """Remove leftover files from previous self-updates."""
+        try:
+            if getattr(sys, "frozen", False):
+                exe_dir = Path(sys.executable).parent
+                for pattern in ("*.old", "_update_*.bat", "_update_*.sh"):
+                    for stale in exe_dir.glob(pattern):
+                        try:
+                            stale.unlink()
+                            logger.info(f"Cleaned up old update file: {stale}")
+                        except OSError:
+                            pass
+        except Exception as e:
+            logger.error(f"Error cleaning old update files: {e}")
 
     # ------------------------------------------------------------------
     #  App update
@@ -290,7 +319,9 @@ class UpdateManager(QObject):
             self.sig_update_status.emit("Downloading update...", "blue")
             self.sig_run_on_gui.emit(_create_progress_dialog)
 
-            tag_name = release_data.get("tag_name", "main")
+            tag_name = release_data.get("tag_name", "")
+            if not self._validate_tag_name(tag_name):
+                raise RuntimeError(f"Invalid release tag format: {tag_name!r}")
             headers = {"User-Agent": f"YoutubeDownloader/{APP_VERSION}"}
             current_script = Path(__file__).resolve()
             script_dir = current_script.parent.parent  # managers/ -> project root
@@ -364,7 +395,7 @@ class UpdateManager(QObject):
                     ) as tmp_file:
                         tmp_file.write(content)
                         tmp_path = tmp_file.name
-                    shutil.move(tmp_path, module_path)
+                    os.replace(tmp_path, str(module_path))
                     logger.info(f"Updated: {module_path}")
                 except Exception:
                     if tmp_path and os.path.exists(tmp_path):
@@ -738,8 +769,8 @@ class UpdateManager(QObject):
             raise RuntimeError("Extracted binary is too small — archive may be corrupt")
         if exe_path.is_symlink():
             raise RuntimeError(f"Refusing to overwrite symlink: {exe_path}")
-        shutil.move(str(tmp_path), str(exe_path))
-        os.chmod(str(exe_path), 0o755)
+        os.chmod(str(tmp_path), 0o755)
+        os.replace(str(tmp_path), str(exe_path))
         os.unlink(tar_tmp_path)
         logger.info(f"Replaced binary: {exe_path}")
 
@@ -778,7 +809,11 @@ class UpdateManager(QObject):
 
         for asset in release_data.get("assets", []):
             if asset.get("name") == target:
-                return asset["browser_download_url"]
+                url = asset["browser_download_url"]
+                if not self._validate_download_url(url):
+                    logger.error(f"Rejecting download URL outside our repo: {url}")
+                    return None
+                return url
         return None
 
     # ------------------------------------------------------------------

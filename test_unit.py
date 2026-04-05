@@ -1050,18 +1050,20 @@ class TestRetryNetworkOperation:
 
     def test_retries_on_timeout(self):
         import subprocess
-        from unittest.mock import MagicMock
+        from unittest.mock import MagicMock, patch
 
         from managers.utils import retry_network_operation
 
         op = MagicMock(side_effect=[subprocess.TimeoutExpired("cmd", 5), "ok"])
-        result = retry_network_operation(op, "test_op")
+        with patch("managers.utils.time.sleep") as mock_sleep:
+            result = retry_network_operation(op, "test_op")
         assert result == "ok"
         assert op.call_count == 2
+        mock_sleep.assert_called_once_with(2)  # RETRY_DELAY * attempt(1)
 
     def test_retries_on_called_process_error(self):
         import subprocess
-        from unittest.mock import MagicMock
+        from unittest.mock import MagicMock, patch
 
         from managers.utils import retry_network_operation
 
@@ -1071,8 +1073,10 @@ class TestRetryNetworkOperation:
                 "ok",
             ]
         )
-        result = retry_network_operation(op, "test_op")
+        with patch("managers.utils.time.sleep") as mock_sleep:
+            result = retry_network_operation(op, "test_op")
         assert result == "ok"
+        mock_sleep.assert_called_once_with(2)  # RETRY_DELAY * attempt(1)
 
     def test_raises_on_unexpected_error(self):
         from managers.utils import retry_network_operation
@@ -1173,12 +1177,15 @@ class TestTrimmingManagerCache:
         assert mgr._get_cached_frame(999) is None
 
     def test_cache_eviction(self, mgr, tmp_path):
-        # Fill beyond PREVIEW_CACHE_SIZE (default 50)
-        for i in range(55):
+        # Fill beyond PREVIEW_CACHE_SIZE (20)
+        from constants import PREVIEW_CACHE_SIZE
+
+        for i in range(PREVIEW_CACHE_SIZE + 5):
             mgr._cache_preview_frame(i, str(tmp_path / f"frame_{i}.png"))
         # Earliest entries should be evicted
         assert mgr._get_cached_frame(0) is None
-        assert mgr._get_cached_frame(54) is not None
+        assert mgr._get_cached_frame(PREVIEW_CACHE_SIZE + 4) is not None
+        assert len(mgr.preview_cache) == PREVIEW_CACHE_SIZE
 
     def test_clear_cache(self, mgr, tmp_path):
         path = str(tmp_path / "frame_1.png")
@@ -3840,10 +3847,16 @@ class TestEncodingStderrThreadTimeout:
 
         mock_proc.stderr = blocking_stderr()
 
-        callbacks = MagicMock()
-        callbacks.on_progress = MagicMock()
-        callbacks.on_status = MagicMock()
-        callbacks.on_heartbeat = MagicMock()
+        from managers.encoding import EncodeCallbacks
+
+        callbacks = EncodeCallbacks(
+            on_progress=MagicMock(),
+            on_status=MagicMock(),
+            is_cancelled=lambda: False,
+            process_lock=threading.Lock(),
+            set_process=MagicMock(),
+            on_heartbeat=MagicMock(),
+        )
 
         with (
             patch("managers.encoding.subprocess.Popen", return_value=mock_proc),
@@ -3990,34 +4003,46 @@ class TestGetUpdateAssetUrl:
 
         release = {
             "assets": [
-                {"name": "YTDownloader.exe", "browser_download_url": "http://dl/win.exe"},
+                {
+                    "name": "YTDownloader.exe",
+                    "browser_download_url": "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader.exe",
+                },
                 {
                     "name": "YTDownloader-Linux.tar.gz",
-                    "browser_download_url": "http://dl/linux.tar.gz",
+                    "browser_download_url": "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader-Linux.tar.gz",
                 },
             ]
         }
         with patch("managers.update_manager.sys") as mock_sys:
             mock_sys.platform = "win32"
             result = update_mgr._get_update_asset_url(release)
-        assert result == "http://dl/win.exe"
+        assert (
+            result
+            == "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader.exe"
+        )
 
     def test_finds_linux_asset(self, update_mgr):
         from unittest.mock import patch
 
         release = {
             "assets": [
-                {"name": "YTDownloader.exe", "browser_download_url": "http://dl/win.exe"},
+                {
+                    "name": "YTDownloader.exe",
+                    "browser_download_url": "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader.exe",
+                },
                 {
                     "name": "YTDownloader-Linux.tar.gz",
-                    "browser_download_url": "http://dl/linux.tar.gz",
+                    "browser_download_url": "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader-Linux.tar.gz",
                 },
             ]
         }
         with patch("managers.update_manager.sys") as mock_sys:
             mock_sys.platform = "linux"
             result = update_mgr._get_update_asset_url(release)
-        assert result == "http://dl/linux.tar.gz"
+        assert (
+            result
+            == "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader-Linux.tar.gz"
+        )
 
     def test_missing_asset_returns_none(self, update_mgr):
         release = {"assets": [{"name": "README.md", "browser_download_url": "http://dl/readme"}]}
@@ -4229,6 +4254,391 @@ class TestFetchLocalFileDurationErrors:
             mock_show.emit.call_args
         )
         assert trim_mgr.is_fetching_duration is False
+
+
+# ─── Audit 7: New tests ──────────────────────────────────────────────────────
+
+
+class TestIsLocalFileUrlSchemeGuard:
+    """Test that URLs with media extensions are NOT treated as local files (CQ-14 regression guard)."""
+
+    def test_http_url_with_mp4_extension(self):
+        assert is_local_file("https://example.com/video.mp4") is False
+
+    def test_ftp_url_with_mkv_extension(self):
+        assert is_local_file("ftp://server/file.mkv") is False
+
+    def test_http_url_with_mp3_extension(self):
+        assert is_local_file("http://cdn.example.com/audio.mp3") is False
+
+
+class TestValidateYoutubeUrlUnrecognizedPaths:
+    """Test that YouTube domain with non-video paths returns False."""
+
+    def test_channel_url(self):
+        is_valid, _ = validate_youtube_url("https://www.youtube.com/channel/UCxyz123")
+        assert is_valid is False
+
+    def test_feed_trending(self):
+        is_valid, _ = validate_youtube_url("https://www.youtube.com/feed/trending")
+        assert is_valid is False
+
+    def test_about_page(self):
+        is_valid, _ = validate_youtube_url("https://www.youtube.com/about")
+        assert is_valid is False
+
+
+class TestUpdateManagerTagValidation:
+    """Test _validate_tag_name and _validate_download_url."""
+
+    def test_valid_tags(self):
+        from managers.update_manager import UpdateManager
+
+        assert UpdateManager._validate_tag_name("5.19") is True
+        assert UpdateManager._validate_tag_name("v5.19") is True
+        assert UpdateManager._validate_tag_name("v1.2.3") is True
+
+    def test_invalid_tags(self):
+        from managers.update_manager import UpdateManager
+
+        assert UpdateManager._validate_tag_name("main") is False
+        assert UpdateManager._validate_tag_name("../../evil/repo/main") is False
+        assert UpdateManager._validate_tag_name("v5.19; rm -rf /") is False
+        assert UpdateManager._validate_tag_name("") is False
+
+    def test_valid_download_url(self):
+        from managers.update_manager import UpdateManager
+
+        url = "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader.exe"
+        assert UpdateManager._validate_download_url(url) is True
+
+    def test_invalid_download_url(self):
+        from managers.update_manager import UpdateManager
+
+        assert UpdateManager._validate_download_url("https://evil.com/malware.exe") is False
+        assert UpdateManager._validate_download_url("http://github.com/other/repo/file") is False
+
+
+class TestGetYtdlpVersion:
+    """Test _get_ytdlp_version with mocked subprocess."""
+
+    @pytest.fixture
+    def update_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.update_manager import UpdateManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        mgr = UpdateManager(ytdlp_path="yt-dlp", thread_pool=pool)
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_success_returns_version(self, update_mgr):
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"2026.03.17\n"
+        with patch("managers.update_manager.subprocess.run", return_value=mock_result):
+            result = update_mgr._get_ytdlp_version()
+        assert result == "2026.03.17"
+
+    def test_nonzero_returncode_returns_none(self, update_mgr):
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        with patch("managers.update_manager.subprocess.run", return_value=mock_result):
+            result = update_mgr._get_ytdlp_version()
+        assert result is None
+
+    def test_exception_returns_none(self, update_mgr):
+        from unittest.mock import patch
+
+        with patch(
+            "managers.update_manager.subprocess.run", side_effect=FileNotFoundError("not found")
+        ):
+            result = update_mgr._get_ytdlp_version()
+        assert result is None
+
+
+class TestCheckForUpdatesSilentFalse:
+    """Test _check_for_updates with silent=False."""
+
+    @pytest.fixture
+    def update_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.update_manager import UpdateManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        mgr = UpdateManager(ytdlp_path="yt-dlp", thread_pool=pool)
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_same_version_non_silent_shows_up_to_date(self, update_mgr):
+        import json
+        import urllib.request
+        from unittest.mock import MagicMock, patch
+
+        from constants import APP_VERSION
+
+        response_data = json.dumps({"tag_name": f"v{APP_VERSION}"}).encode()
+        mock_response = MagicMock()
+        mock_response.read.return_value = response_data
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch.object(urllib.request, "urlopen", return_value=mock_response),
+            patch.object(type(update_mgr), "sig_show_messagebox", create=True) as msgbox_spy,
+            patch.object(type(update_mgr), "sig_update_status", create=True),
+        ):
+            update_mgr._check_for_updates(silent=False)
+            msgbox_spy.emit.assert_called_once()
+            args = msgbox_spy.emit.call_args[0]
+            assert args[0] == "info"
+
+
+class TestDownloadAudioTrimmedSuccess:
+    """Test _download_audio_trimmed success path."""
+
+    @pytest.fixture
+    def download_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder=None)
+        mgr = DownloadManager(
+            ytdlp_path="yt-dlp",
+            ffmpeg_path="ffmpeg",
+            ffprobe_path="ffprobe",
+            encoding=enc,
+            thread_pool=pool,
+        )
+        mgr.is_downloading = True
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_success_returns_true_with_correct_args(self, download_mgr, tmp_path):
+        from unittest.mock import patch
+
+        output_path = str(tmp_path / "audio.mp3")
+        captured_cmds = []
+
+        def mock_run_ffmpeg(cmd, duration, label, callbacks, **kwargs):
+            captured_cmds.append(cmd)
+            Path(output_path).touch()
+            return True
+
+        with (
+            patch.object(
+                download_mgr,
+                "_get_stream_urls",
+                return_value=("http://audio.url", None),
+            ),
+            patch.object(
+                download_mgr,
+                "_download_stream_segment",
+                return_value=0,
+            ),
+            patch.object(
+                download_mgr.encoding, "run_ffmpeg_with_progress", side_effect=mock_run_ffmpeg
+            ),
+        ):
+            result = download_mgr._download_audio_trimmed(
+                "https://www.youtube.com/watch?v=test",
+                0,
+                60,
+                output_path,
+                volume_multiplier=1.0,
+            )
+
+        assert result is True
+        assert len(captured_cmds) >= 1
+        cmd = captured_cmds[0]
+        assert "-vn" in cmd  # audio only flag
+
+
+class TestUpdateApplySourceRollbackVerifiesError:
+    """Test _apply_update_source rollback reports error to user (TQ-L1)."""
+
+    @pytest.fixture
+    def update_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.update_manager import UpdateManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        mgr = UpdateManager(ytdlp_path="yt-dlp", thread_pool=pool)
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_rollback_emits_error_messagebox(self, update_mgr, tmp_path):
+        import urllib.request
+        from unittest.mock import patch
+
+        release_data = {"tag_name": "v5.20", "assets": []}
+
+        with (
+            patch.object(type(update_mgr), "sig_show_messagebox", create=True) as msgbox_spy,
+            patch.object(type(update_mgr), "sig_update_status", create=True),
+            patch.object(type(update_mgr), "sig_run_on_gui", create=True),
+            patch.object(urllib.request, "urlopen", side_effect=ConnectionError("network down")),
+        ):
+            update_mgr._apply_update_source(release_data)
+            msgbox_spy.emit.assert_called_once()
+            args = msgbox_spy.emit.call_args[0]
+            assert args[0] == "error"
+
+
+class TestGetUpdateAssetUrlRejectsExternalUrl:
+    """Test _get_update_asset_url rejects URLs outside our repo."""
+
+    @pytest.fixture
+    def update_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.update_manager import UpdateManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        mgr = UpdateManager(ytdlp_path="yt-dlp", thread_pool=pool)
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_rejects_external_url(self, update_mgr):
+        from unittest.mock import patch
+
+        release = {
+            "assets": [
+                {
+                    "name": "YTDownloader.exe",
+                    "browser_download_url": "https://evil.com/malware.exe",
+                },
+            ]
+        }
+        with patch("managers.update_manager.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            result = update_mgr._get_update_asset_url(release)
+        assert result is None
+
+
+class TestDownloadTrimmedViaFfmpegWrapper:
+    """Test _download_trimmed_via_ffmpeg cleans up temp dir (TQ-M3)."""
+
+    @pytest.fixture
+    def download_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder=None)
+        mgr = DownloadManager(
+            ytdlp_path="yt-dlp",
+            ffmpeg_path="ffmpeg",
+            ffprobe_path="ffprobe",
+            encoding=enc,
+            thread_pool=pool,
+        )
+        mgr.is_downloading = True
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_temp_dir_cleaned_on_success(self, download_mgr, tmp_path):
+        import tempfile
+        from unittest.mock import patch
+
+        created_dirs = []
+        orig_mkdtemp = tempfile.mkdtemp
+
+        def tracking_mkdtemp(**kwargs):
+            d = orig_mkdtemp(**kwargs)
+            created_dirs.append(d)
+            return d
+
+        with (
+            patch("managers.download_manager.tempfile.mkdtemp", side_effect=tracking_mkdtemp),
+            patch.object(download_mgr, "_do_trimmed_download", return_value=True),
+        ):
+            result = download_mgr._download_trimmed_via_ffmpeg(
+                "https://www.youtube.com/watch?v=test",
+                "bestvideo+bestaudio",
+                0,
+                60,
+                str(tmp_path / "output.mp4"),
+            )
+
+        assert result is True
+        assert len(created_dirs) == 1
+        assert not Path(created_dirs[0]).exists()  # cleaned up
+
+    def test_temp_dir_cleaned_on_failure(self, download_mgr, tmp_path):
+        import tempfile
+        from unittest.mock import patch
+
+        created_dirs = []
+        orig_mkdtemp = tempfile.mkdtemp
+
+        def tracking_mkdtemp(**kwargs):
+            d = orig_mkdtemp(**kwargs)
+            created_dirs.append(d)
+            return d
+
+        with (
+            patch("managers.download_manager.tempfile.mkdtemp", side_effect=tracking_mkdtemp),
+            patch.object(download_mgr, "_do_trimmed_download", side_effect=RuntimeError("fail")),
+            pytest.raises(RuntimeError, match="fail"),
+        ):
+            download_mgr._download_trimmed_via_ffmpeg(
+                "https://www.youtube.com/watch?v=test",
+                "bestvideo+bestaudio",
+                0,
+                60,
+                str(tmp_path / "output.mp4"),
+            )
+        assert len(created_dirs) == 1
+        assert not Path(created_dirs[0]).exists()  # cleaned up
+
+
+class TestUploadToCarboxIsUploading:
+    """Test upload_to_catbox sets is_uploading during upload (TQ-L5)."""
+
+    @pytest.fixture
+    def upload_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.upload_manager import UploadManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        mgr = UploadManager(thread_pool=pool)
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_is_uploading_true_during_upload(self, upload_mgr, tmp_path):
+        from unittest.mock import MagicMock, patch
+
+        test_file = tmp_path / "video.mp4"
+        test_file.write_bytes(b"fake video data")
+        upload_mgr.last_output_file = str(test_file)
+
+        was_uploading = []
+
+        def capture_uploading(filepath):
+            was_uploading.append(upload_mgr.is_uploading)
+            return "https://files.catbox.moe/abc123.mp4"
+
+        mock_client = MagicMock()
+        mock_client.upload = capture_uploading
+
+        with (
+            patch.object(upload_mgr, "_get_catbox_client", return_value=mock_client),
+            patch.object(type(upload_mgr), "sig_upload_complete", create=True),
+            patch.object(type(upload_mgr), "sig_run_on_gui", create=True),
+        ):
+            upload_mgr.upload_to_catbox()
+
+        assert len(was_uploading) == 1
+        assert was_uploading[0] is True
+        assert upload_mgr.is_uploading is False
 
 
 if __name__ == "__main__":

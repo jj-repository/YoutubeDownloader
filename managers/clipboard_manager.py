@@ -38,13 +38,69 @@ class ClipboardManager(QObject):
         self.thread_pool = thread_pool
 
         # State
+        # Lock ordering: auto_download_lock -> clipboard_lock (never reverse)
         self.clipboard_lock = threading.Lock()
         self.auto_download_lock = threading.Lock()
         self.clipboard_monitoring = False
         self.clipboard_last_content = ""
         self.clipboard_url_list: deque[dict] = deque()  # [{"url": str, "status": str}]
+        self.completed_count = 0
+        self.failed_count = 0
         self.clipboard_download_path = str(Path.home() / "Downloads")
         self.clipboard_stop_event = threading.Event()  # set = stopped
         self.clipboard_stop_event.set()  # initially stopped
         self.clipboard_auto_downloading = False
         self._shutting_down = False
+        self._clipboard_backend: str | None = None
+        self.klipper_interface = None  # set by main window if dbus available
+
+    def set_klipper_interface(self, interface):
+        """Set the KDE Klipper D-Bus interface (called by main window after init)."""
+        self.klipper_interface = interface
+
+    def _detect_clipboard_backend(self) -> str:
+        """Probe clipboard backends and return the name of the first working one."""
+        if self.klipper_interface:
+            try:
+                self.klipper_interface.getClipboardContents()
+                logger.info("Clipboard backend: klipper")
+                return "klipper"
+            except Exception:
+                pass
+        try:
+            import pyperclip
+
+            pyperclip.paste()
+            logger.info("Clipboard backend: pyperclip")
+            return "pyperclip"
+        except Exception:
+            pass
+        try:
+            from PyQt6.QtWidgets import QApplication
+
+            QApplication.clipboard().text()
+            logger.info("Clipboard backend: qt")
+            return "qt"
+        except Exception:
+            pass
+        logger.warning("No clipboard backend available")
+        return "qt"
+
+    def read_clipboard_content(self) -> str | None:
+        """Read clipboard using the detected backend."""
+        if self._clipboard_backend is None:
+            self._clipboard_backend = self._detect_clipboard_backend()
+
+        try:
+            if self._clipboard_backend == "klipper" and self.klipper_interface:
+                return str(self.klipper_interface.getClipboardContents())
+            elif self._clipboard_backend == "pyperclip":
+                import pyperclip
+
+                return pyperclip.paste()
+            else:
+                from PyQt6.QtWidgets import QApplication
+
+                return QApplication.clipboard().text()
+        except Exception:
+            return None

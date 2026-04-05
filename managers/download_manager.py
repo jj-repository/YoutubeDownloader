@@ -102,6 +102,7 @@ class DownloadManager(QObject):
         self._download_has_progress = False
         self._trim_download_active = False
         self._shutting_down = False
+        self._last_status_update: float = 0
 
         # Video metadata (set by main window before download)
         self.video_duration: float = 0
@@ -537,12 +538,15 @@ class DownloadManager(QObject):
                     f.write(chunk)
                     downloaded += len(chunk)
                     pct = min(100, downloaded * 100 / total_data)
-                    self.update_progress(progress_base + pct * 0.45)
-                    self.update_status(
-                        f"Downloading {label}... {downloaded / 1024 / 1024:.1f} MB",
-                        "blue",
-                    )
-                    self.last_progress_time = time.time()
+                    now = time.time()
+                    if now - self._last_status_update > 0.25:
+                        self.update_progress(progress_base + pct * 0.45)
+                        self.update_status(
+                            f"Downloading {label}... {downloaded / 1024 / 1024:.1f} MB",
+                            "blue",
+                        )
+                        self._last_status_update = now
+                    self.last_progress_time = now
 
         file_size = len(init_data) + downloaded
         logger.info(f"{label} downloaded: {file_size / 1024 / 1024:.1f} MB")
@@ -773,6 +777,36 @@ class DownloadManager(QObject):
                     )
                     break
 
+    def _monitor_download_timeout_tick(self) -> None:
+        """Single timeout check (called by GUI QTimer each interval)."""
+        if not self.is_downloading:
+            return
+
+        current_time = time.time()
+
+        if self.download_start_time and not self._download_has_progress:
+            elapsed = int(current_time - self.download_start_time)
+            self.update_status(f"Preparing download... ({elapsed}s elapsed)", "blue")
+
+        if self.download_start_time:
+            elapsed = current_time - self.download_start_time
+            if elapsed > DOWNLOAD_TIMEOUT:
+                logger.error(f"Download exceeded absolute timeout ({DOWNLOAD_TIMEOUT}s)")
+                self._timeout_download("Download timeout (60 min limit exceeded)")
+                return
+
+        if self.last_progress_time:
+            time_since_progress = current_time - self.last_progress_time
+            progress_timeout = (
+                DOWNLOAD_PROGRESS_TIMEOUT_TRIM
+                if self._trim_download_active
+                else DOWNLOAD_PROGRESS_TIMEOUT
+            )
+            if time_since_progress > progress_timeout:
+                timeout_min = progress_timeout // 60
+                logger.error(f"Download stalled (no progress for {progress_timeout}s)")
+                self._timeout_download(f"Download stalled (no progress for {timeout_min} minutes)")
+
     def _timeout_download(self, reason: str) -> None:
         """Handle download timeout. Safe to call from any thread."""
         with self.download_lock:
@@ -933,8 +967,6 @@ class DownloadManager(QObject):
         elif self.is_downloading:
             self.update_status("Download failed", "red")
 
-        self._finish_download()
-
     def _download_video_trimmed_10mb_path(
         self,
         url: str,
@@ -1002,8 +1034,6 @@ class DownloadManager(QObject):
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-        self._finish_download()
-
     def _download_video_trimmed_path(
         self,
         url: str,
@@ -1046,8 +1076,6 @@ class DownloadManager(QObject):
             self.sig_enable_upload.emit(final_output)
         elif self.is_downloading:
             self.update_status("Download failed", "red")
-
-        self._finish_download()
 
     def _post_ytdlp_10mb_encode(
         self,

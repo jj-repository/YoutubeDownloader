@@ -23,6 +23,7 @@ from constants import (
     PREVIEW_HEIGHT,
     PREVIEW_WIDTH,
     STREAM_FETCH_TIMEOUT,
+    TEMP_DIR_MAX_AGE,
 )
 from managers.utils import _subprocess_kwargs, is_local_file, retry_network_operation
 
@@ -70,6 +71,25 @@ class TrimmingManager(QObject):
         self.fetch_lock = threading.Lock()
         self.is_fetching_duration = False
         self.preview_thread_running = False
+
+    def cleanup_old_temp_dirs(self):
+        """Remove orphaned temp directories from previous crashes."""
+        import glob
+        import shutil
+        import tempfile
+        import time
+
+        temp_base = tempfile.gettempdir()
+        old_dirs = glob.glob(os.path.join(temp_base, "ytdl_preview_*"))
+        for old_dir in old_dirs:
+            if old_dir == self.temp_dir:
+                continue
+            try:
+                dir_age = time.time() - os.path.getmtime(old_dir)
+                if dir_age > TEMP_DIR_MAX_AGE:
+                    shutil.rmtree(old_dir, ignore_errors=True)
+            except OSError:
+                pass
 
     # ------------------------------------------------------------------
     #  Duration fetching

@@ -36,40 +36,19 @@ if sys.platform == "win32":
 # ===================================================================
 
 
+_SANITIZE_TABLE = str.maketrans("", "", "/\\\x00$`|;&<>(){}[]!*?~^\x7f")
+
+
 def sanitize_filename(filename: str) -> str:
     """Sanitize filename to prevent path traversal and command injection."""
     if not filename:
         return ""
 
-    for char in ["/", "\\", "\x00"]:
-        filename = filename.replace(char, "")
+    filename = filename.translate(_SANITIZE_TABLE)
     while ".." in filename:
         filename = filename.replace("..", "")
 
-    shell_chars = [
-        "$",
-        "`",
-        "|",
-        ";",
-        "&",
-        "<",
-        ">",
-        "(",
-        ")",
-        "{",
-        "}",
-        "[",
-        "]",
-        "!",
-        "*",
-        "?",
-        "~",
-        "^",
-    ]
-    for char in shell_chars:
-        filename = filename.replace(char, "")
-
-    filename = "".join(c for c in filename if ord(c) >= 32 and ord(c) != 127)
+    filename = "".join(c for c in filename if ord(c) >= 32)
     filename = filename.strip(". ")
 
     if len(filename) > MAX_FILENAME_LENGTH:

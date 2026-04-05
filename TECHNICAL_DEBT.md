@@ -1,6 +1,6 @@
 # Technical Debt
 
-Last updated: 2026-04-05 (audit 6)
+Last updated: 2026-04-05 (audit 7)
 
 ## Summary
 **Audit 1**: 55 found, 53 fixed, 2 accepted
@@ -9,6 +9,7 @@ Last updated: 2026-04-05 (audit 6)
 **Audit 4**: 38 raw → 21 validated (12 false positives removed), 20 fixed, 1 deferred
 **Audit 5**: 39 raw (5 agents) → 18 unique after dedup, 17 fixed (incl. 2 formerly deferred), 0 remaining
 **Audit 6**: 65 raw (5 agents) → 48 unique after dedup, 16 fixed, 12 deferred (refactors/medium effort), 20 test gap findings documented
+**Audit 7**: 50 raw (5 agents) → 44 unique after dedup, 39 fixed (2 iterations), 5 deferred
 
 ## Remaining Issues
 
@@ -17,11 +18,18 @@ Last updated: 2026-04-05 (audit 6)
 - **M-28**: No `pip --require-hashes` for supply chain integrity in release builds. Accepted — PyInstaller pinned, full hash pinning too complex for the benefit. [medium]
 - **DO-8**: Release notes not structured (no CHANGELOG.md). Deferred — `generate_release_notes: true` sufficient for current scale. [low]
 
+### Deferred (audit 7 — remaining)
+- **CQ-M5**: Clipboard download subprocess creation duplicated in main window — should delegate to DownloadManager. [medium]
+- **P-M1**: O(n) indexed deletion on deque in _remove_url_from_list — bounded at 500, acceptable for user-triggered action. [low]
+- **CQ-L11**: check_dependencies and _detect_hw_encoder on main window, belong on DownloadManager. [low]
+- **TQ-L7**: download_local_file 10MB cancellation path (is_downloading=False during encoding) untested. [low]
+- **P-L3**: _http_range_read has no max_size guard (currently capped at 512KB by caller). [low]
+
 ### Deferred (audit 6 — refactors, medium effort)
 - **CQ-3**: Duplicated UI state snapshot pattern across 6 call sites. Deferred — works correctly, refactor is cosmetic. [medium]
 - **CQ-6**: Progress dialog code duplicated 3× in update_manager.py. Deferred — refactor, ~150 lines. [medium]
 - **P-08**: Multiple setStyleSheet passes during theme toggle. Deferred — needs QSS object-name refactor. [medium]
-- **P-12**: Nested locks + O(n) scans in auto-download on GUI thread. Deferred — needs status counter refactor. [medium]
+- **P-12**: Nested locks in auto-download on GUI thread. Deferred — O(n) scan in `_finish_clipboard_downloads` fixed via counters in audit 7, but `_auto_download_single_url` still scans. [medium]
 - **DO-6**: Test workflow runs only on ubuntu-latest, no Windows. Deferred — needs matrix + conditional steps. [medium]
 - **DO-9**: Ruff select rules minimal (E, F, W, I only). Deferred — enable B, UP, S incrementally. [medium]
 
@@ -39,6 +47,70 @@ Last updated: 2026-04-05 (audit 6)
 
 ### Accepted tradeoffs (from audit 1)
 - **Widget reads from worker in `_fetch_file_size`** — Safe via closure. [informational]
+
+## Fixed Issues (audit 7 — 32 total)
+
+<details>
+<summary>Click to expand</summary>
+
+### High (1 — functional bug)
+- [x] CQ-H1: `closeEvent` saves window geometry after `thread_pool.shutdown()` — geometry lost on every close. Moved geometry save before pool shutdown with synchronous write.
+
+### Medium (13)
+- [x] CQ-M1: Duplicate/inconsistent URL status methods (`_do_update_url_status` dead code with different colors). Removed dead method.
+- [x] CQ-M2: Batch clipboard status race — worker deferred status via `_safe_after` while persist could fire in between. Now updates data model immediately under lock.
+- [x] CQ-M3: Nested lock acquisition (auto_download_lock → clipboard_lock) without documented ordering. Added ordering comment.
+- [x] SEC-M1: Unsanitized `tag_name` from GitHub API interpolated into download URLs. Added regex validation.
+- [x] SEC-M2: `browser_download_url` from GitHub API used without domain pinning. Added `startswith(github.com/REPO)` check.
+- [x] P-M2: Per-chunk signal emission floods Qt event queue (~3200 events for 200MB download). Added 250ms throttle.
+- [x] TQ-M1: Cache eviction test used wrong `PREVIEW_CACHE_SIZE` (comment said 50, constant is 20). Now imports constant.
+- [x] TQ-M2: `TestEncodingStderrThreadTimeout` used bare MagicMock instead of proper `EncodeCallbacks`.
+- [x] TQ-M4: `_get_ytdlp_version` zero tests — added 3 tests (success, failure, exception).
+- [x] TQ-M5: `_download_audio_trimmed` success path untested — added test verifying correct ffmpeg args.
+- [x] TQ-M3: `_download_trimmed_via_ffmpeg` wrapper temp cleanup untested — added 2 tests (success+failure).
+- [x] CQ-M4: Clipboard backend methods on main window — moved `_detect_clipboard_backend`, `read_clipboard_content` to ClipboardManager.
+- [x] DO-M1: `create-release` job missing `timeout-minutes` — added 15min.
+- [x] DO-M2: External binary downloads (ffmpeg, yt-dlp) had no retry logic — added retry for wget and PowerShell.
+- [x] DO-M3: Test coverage not measured for `downloader_pyqt6.py` — added `--cov=downloader_pyqt6`.
+
+### Low (18)
+- [x] CQ-L1: Dead method `_add_tab` (template artifact) — removed.
+- [x] CQ-L2: Empty `_load` method (no-op template hook) — removed method and call.
+- [x] CQ-L3: Split PyQt6 imports (QImage, QDialog, QTextEdit separate from main block) — consolidated.
+- [x] CQ-L4: Unnecessary `getattr(self, ..., default)` for guaranteed attributes — replaced with direct access.
+- [x] CQ-L5: `_config_save_timer` lazily created via `hasattr` — initialized in `__init__`.
+- [x] CQ-L6: Magic number 500 for clipboard URL cap — added `MAX_CLIPBOARD_URLS` constant.
+- [x] CQ-L9: `on_start/end_slider_change` ignored `value` parameter — renamed to `_value`.
+- [x] CQ-L10: Redundant `_finish_download()` calls in trimmed download sub-paths (already handled by `download()` finally block).
+- [x] SEC-L1: Source update used non-atomic `shutil.move` — replaced with `os.replace`.
+- [x] SEC-L2: Persisted clipboard URLs restored without re-validation — added `validate_youtube_url()` check.
+- [x] SEC-L3: Linux frozen update `os.chmod` after `shutil.move` — chmod before move for atomic permission.
+- [x] P-L1: `sanitize_filename` performed 21 sequential `str.replace()` calls — replaced with single `str.translate()`.
+- [x] P-L2: `_save_clipboard_urls` synchronous file I/O on GUI thread — offloaded to thread pool.
+- [x] DO-L1: `generate_release_notes: true` silently overridden by `body:` — removed misleading config.
+- [x] DO-L2: CodeQL workflow missing concurrency group — added.
+- [x] DO-L3: `dependabot-auto-merge` job missing job-level timeout — added 45min.
+- [x] DO-L4: `requirements.lock` missing `dbus-python` platform marker — added with `sys_platform == 'linux'`.
+- [x] TQ-L6: `_check_for_updates` silent=False paths untested — added test for non-silent up-to-date.
+- [x] CQ-L7: `_cleanup_old_updates` on main window — moved to `UpdateManager.cleanup_old_updates()` static method.
+- [x] CQ-L8: `_cleanup_old_temp_dirs` on main window — moved to `TrimmingManager.cleanup_old_temp_dirs()`.
+- [x] P-L4: `_finish_clipboard_downloads` O(n) scans — added `completed_count`/`failed_count` counters to ClipboardManager.
+- [x] P-L5: Per-download daemon thread for timeout — replaced with persistent `_download_timeout_timer` QTimer.
+- [x] TQ-L5: `upload_to_catbox` didn't verify `is_uploading=True` during upload — added test.
+
+### Tests (19 new — 312 total, was 293)
+- [x] `is_local_file` URL scheme guard regression tests (3): http+mp4, ftp+mkv, http+mp3
+- [x] `validate_youtube_url` unrecognized YouTube paths (3): /channel, /feed, /about
+- [x] `_validate_tag_name` and `_validate_download_url` (4): valid/invalid tags and URLs
+- [x] `_get_ytdlp_version` (3): success, nonzero returncode, exception
+- [x] `_check_for_updates` silent=False (1): non-silent shows "up to date" messagebox
+- [x] `_download_audio_trimmed` success path (1): verifies correct ffmpeg args including `-vn`
+- [x] `_apply_update_source` rollback (1): verifies error messagebox emitted
+- [x] `_get_update_asset_url` external URL rejection (1): verifies None for non-GitHub URLs
+- [x] `_download_trimmed_via_ffmpeg` wrapper (2): temp dir cleaned on success and failure
+- [x] `upload_to_catbox` (1): verifies is_uploading=True during upload
+
+</details>
 
 ## Fixed Issues (audit 6 — 16 total)
 
