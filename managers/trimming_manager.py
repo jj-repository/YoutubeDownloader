@@ -93,6 +93,7 @@ class TrimmingManager(QObject):
                     self.ytdlp_path,
                     "--print",
                     "%(duration_string)s\n%(title)s",
+                    "--",
                     url,
                 ]
                 return subprocess.run(
@@ -261,6 +262,7 @@ class TrimmingManager(QObject):
                             "best[height<=480]/best",
                             "--no-playlist",
                             "-g",
+                            "--",
                             self.current_video_url,
                         ]
                         return subprocess.run(

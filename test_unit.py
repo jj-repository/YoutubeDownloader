@@ -3286,5 +3286,945 @@ class TestUploaderQueueAssertions:
         assert len(upload_mgr.uploader_file_queue) == 1
 
 
+class TestProgressStallDetection:
+    """Test _monitor_download_timeout progress stall (not just absolute timeout)."""
+
+    def test_progress_stall_normal_mode(self, download_mgr):
+        """Stall detection fires at DOWNLOAD_PROGRESS_TIMEOUT (600s) in normal mode."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+        download_mgr._shutting_down = False
+        download_mgr._download_has_progress = True
+        download_mgr._trim_download_active = False
+        download_mgr.download_start_time = 1000.0
+        # Progress was 601 seconds ago (exceeds 600s threshold)
+        download_mgr.last_progress_time = 1000.0
+
+        def fake_time():
+            return 1000.0 + 601
+
+        with (
+            patch("managers.download_manager.time.sleep"),
+            patch("managers.download_manager.time.time", side_effect=fake_time),
+            patch.object(download_mgr, "_timeout_download") as mock_timeout,
+        ):
+            download_mgr._monitor_download_timeout()
+
+        mock_timeout.assert_called_once()
+        assert "stall" in mock_timeout.call_args[0][0].lower()
+
+    def test_progress_stall_trim_uses_longer_timeout(self, download_mgr):
+        """Trim mode uses DOWNLOAD_PROGRESS_TIMEOUT_TRIM (1200s), not 600s."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+        download_mgr._shutting_down = False
+        download_mgr._download_has_progress = True
+        download_mgr._trim_download_active = True
+        download_mgr.download_start_time = 1000.0
+        # 800s since progress — exceeds normal (600s) but NOT trim (1200s)
+        download_mgr.last_progress_time = 1000.0
+
+        call_count = 0
+
+        def fake_time():
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                return 1000.0 + 800  # within trim timeout
+            # On 3rd call, exceed absolute timeout to break loop
+            return 1000.0 + 3601
+
+        with (
+            patch("managers.download_manager.time.sleep"),
+            patch("managers.download_manager.time.time", side_effect=fake_time),
+            patch.object(download_mgr, "_timeout_download") as mock_timeout,
+        ):
+            download_mgr._monitor_download_timeout()
+
+        # Should have been called for absolute timeout, NOT stall
+        mock_timeout.assert_called_once()
+        assert "60 min" in mock_timeout.call_args[0][0].lower()
+
+
+class TestDoTrimmedDownload:
+    """Test _do_trimmed_download merge failure and cancellation paths."""
+
+    def test_cancel_after_video_download(self, download_mgr):
+        """Cancellation after video segment returns False without downloading audio."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = False  # cancelled
+
+        with (
+            patch.object(download_mgr, "_get_stream_urls", return_value=("http://v", "http://a")),
+            patch.object(download_mgr, "_download_stream_segment", return_value=0.0),
+        ):
+            result = download_mgr._do_trimmed_download(
+                "http://yt", "best", 10.0, 20.0, "/tmp/out.mp4", 1.0, True, "/tmp/td"
+            )
+
+        assert result is False
+
+    def test_cancel_after_audio_download(self, download_mgr):
+        """Cancellation after audio segment returns False without merging."""
+        from unittest.mock import patch
+
+        call_count = 0
+
+        def fake_download_segment(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                download_mgr.is_downloading = False
+            return 0.0
+
+        download_mgr.is_downloading = True
+
+        with (
+            patch.object(download_mgr, "_get_stream_urls", return_value=("http://v", "http://a")),
+            patch.object(
+                download_mgr, "_download_stream_segment", side_effect=fake_download_segment
+            ),
+            patch.object(download_mgr, "update_status"),
+        ):
+            result = download_mgr._do_trimmed_download(
+                "http://yt", "best", 10.0, 20.0, "/tmp/out.mp4", 1.0, True, "/tmp/td"
+            )
+
+        assert result is False
+        assert call_count == 2
+
+    def test_merge_failure_returns_false(self, download_mgr):
+        """Merge command returning non-zero should return False."""
+        from unittest.mock import MagicMock, patch
+
+        download_mgr.is_downloading = True
+        mock_merge = MagicMock()
+        mock_merge.returncode = 1
+        mock_merge.stderr = "merge error"
+
+        with (
+            patch.object(download_mgr, "_get_stream_urls", return_value=("http://v", "http://a")),
+            patch.object(download_mgr, "_download_stream_segment", return_value=5.0),
+            patch.object(download_mgr, "update_status"),
+            patch("managers.download_manager.subprocess.run", return_value=mock_merge),
+        ):
+            result = download_mgr._do_trimmed_download(
+                "http://yt", "best", 10.0, 20.0, "/tmp/out.mp4", 1.0, True, "/tmp/td"
+            )
+
+        assert result is False
+
+    def test_volume_changed_triggers_audio_reencode(self, download_mgr):
+        """Volume multiplier != 1.0 with copy_codec=False should add volume filter."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+
+        captured_cmd = []
+
+        def fake_ffmpeg(cmd, *args, **kwargs):
+            captured_cmd.extend(cmd)
+            return True
+
+        with (
+            patch.object(download_mgr, "_get_stream_urls", return_value=("http://v", None)),
+            patch.object(download_mgr, "_download_stream_segment", return_value=5.0),
+            patch.object(download_mgr, "update_status"),
+            patch.object(
+                download_mgr.encoding, "run_ffmpeg_with_progress", side_effect=fake_ffmpeg
+            ),
+            patch.object(download_mgr, "_make_encode_callbacks", return_value={}),
+        ):
+            download_mgr._do_trimmed_download(
+                "http://yt", "best", 10.0, 20.0, "/tmp/out.mp4", 2.0, False, "/tmp/td"
+            )
+
+        assert "-af" in captured_cmd
+        assert "volume=2.0" in captured_cmd
+        assert "-c:v" in captured_cmd
+        assert "copy" in captured_cmd
+
+    def test_copy_codec_path(self, download_mgr):
+        """copy_codec=True should use -c copy without audio filter."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+
+        captured_cmd = []
+
+        def fake_ffmpeg(cmd, *args, **kwargs):
+            captured_cmd.extend(cmd)
+            return True
+
+        with (
+            patch.object(download_mgr, "_get_stream_urls", return_value=("http://v", None)),
+            patch.object(download_mgr, "_download_stream_segment", return_value=5.0),
+            patch.object(download_mgr, "update_status"),
+            patch.object(
+                download_mgr.encoding, "run_ffmpeg_with_progress", side_effect=fake_ffmpeg
+            ),
+            patch.object(download_mgr, "_make_encode_callbacks", return_value={}),
+        ):
+            download_mgr._do_trimmed_download(
+                "http://yt", "best", 10.0, 20.0, "/tmp/out.mp4", 1.0, True, "/tmp/td"
+            )
+
+        assert "-c" in captured_cmd
+        assert "-af" not in captured_cmd
+
+
+class TestApplyUpdateSourceRollback:
+    """Test _apply_update_source rollback on partial failure."""
+
+    @pytest.fixture
+    def update_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.update_manager import UpdateManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        mgr = UpdateManager(ytdlp_path="yt-dlp", thread_pool=pool)
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_rollback_on_write_failure(self, update_mgr, tmp_path):
+        """If a module write fails mid-update, all replaced modules are rolled back."""
+        import hashlib
+        import json
+        from unittest.mock import MagicMock, patch
+
+        # Create fake module files
+        modules_dir = tmp_path
+        managers_dir = modules_dir / "managers"
+        managers_dir.mkdir()
+
+        original_content = b"# original code\n"
+        new_content = b"# updated code\n"
+        git_sha = update_mgr._compute_git_blob_sha(new_content)
+        sha256 = hashlib.sha256(new_content).hexdigest()
+
+        # Create the first two files
+        (modules_dir / "downloader_pyqt6.py").write_bytes(original_content)
+        (modules_dir / "constants.py").write_bytes(original_content)
+        (managers_dir / "__init__.py").write_bytes(original_content)
+
+        # Mock __file__ to point to managers dir
+        write_count = 0
+        original_move = __import__("shutil").move
+
+        def fail_on_third_move(src, dst):
+            nonlocal write_count
+            write_count += 1
+            if write_count >= 3:
+                raise OSError("disk full")
+            return original_move(src, dst)
+
+        sha_sums = "\n".join(
+            f"{sha256}  {m}"
+            for m in [
+                "downloader_pyqt6.py",
+                "constants.py",
+                "managers/__init__.py",
+            ]
+        )
+
+        api_resp = MagicMock()
+        api_resp.read.return_value = json.dumps({"sha": git_sha}).encode()
+        api_resp.__enter__ = MagicMock(return_value=api_resp)
+        api_resp.__exit__ = MagicMock(return_value=False)
+
+        sha_resp = MagicMock()
+        sha_resp.read.return_value = sha_sums.encode()
+        sha_resp.__enter__ = MagicMock(return_value=sha_resp)
+        sha_resp.__exit__ = MagicMock(return_value=False)
+
+        dl_resp = MagicMock()
+        dl_resp.read.side_effect = [new_content, b""]
+        dl_resp.headers = {"Content-Length": str(len(new_content))}
+        dl_resp.__enter__ = MagicMock(return_value=dl_resp)
+        dl_resp.__exit__ = MagicMock(return_value=False)
+
+        def mock_urlopen(req, **kwargs):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            if "SHA256SUMS" in url:
+                return sha_resp
+            if "/contents/" in url:
+                return api_resp
+            # Reset read for each download call
+            fresh = MagicMock()
+            fresh.read.side_effect = [new_content, b""]
+            fresh.headers = {"Content-Length": str(len(new_content))}
+            fresh.__enter__ = MagicMock(return_value=fresh)
+            fresh.__exit__ = MagicMock(return_value=False)
+            return fresh
+
+        release_data = {"tag_name": "v1.0"}
+
+        with (
+            patch("managers.update_manager.Path.__file__", str(managers_dir / "update_manager.py")),
+            patch(
+                "managers.update_manager.Path.resolve",
+                return_value=managers_dir / "update_manager.py",
+            ),
+            patch.object(type(update_mgr), "sig_run_on_gui", create=True),
+            patch.object(type(update_mgr), "sig_update_status", create=True),
+            patch.object(type(update_mgr), "sig_show_messagebox", create=True),
+            patch("urllib.request.urlopen", side_effect=mock_urlopen),
+            patch("shutil.move", side_effect=fail_on_third_move),
+        ):
+            # The method should catch the error and rollback
+            update_mgr._apply_update_source(release_data)
+
+        # First two files should have been rolled back to original
+        assert (modules_dir / "downloader_pyqt6.py").read_bytes() == original_content
+        assert (modules_dir / "constants.py").read_bytes() == original_content
+
+
+class TestFrozenLinuxSecurityGuards:
+    """Test symlink and tar traversal defenses in _apply_update_frozen_linux."""
+
+    @pytest.fixture
+    def update_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.update_manager import UpdateManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        mgr = UpdateManager(ytdlp_path="yt-dlp", thread_pool=pool)
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_symlink_exe_raises_error(self, update_mgr, tmp_path):
+        """Should raise RuntimeError if exe_path is a symlink."""
+        from unittest.mock import MagicMock, patch
+
+        real_file = tmp_path / "real_binary"
+        real_file.write_bytes(b"binary")
+        symlink = tmp_path / "YTDownloader"
+        symlink.symlink_to(real_file)
+
+        headers = {"User-Agent": "test"}
+        release_data = {"tag_name": "v1.0"}
+
+        # We need to get past the download and SHA verification to reach the symlink check.
+        # The symlink check is at line 731, after tar extraction.
+        # Easiest: mock everything up to the symlink check.
+        import hashlib
+        import io
+        import tarfile
+
+        # Create a real tar with a YTDownloader binary
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
+            info = tarfile.TarInfo(name="YTDownloader")
+            info.size = 7
+            tar.addfile(info, io.BytesIO(b"binary2"))
+        tar_bytes = tar_buffer.getvalue()
+        real_sha = hashlib.sha256(tar_bytes).hexdigest()
+
+        dl_resp = MagicMock()
+        dl_resp.read.side_effect = [tar_bytes, b""]
+        dl_resp.headers = {"Content-Length": str(len(tar_bytes))}
+        dl_resp.__enter__ = MagicMock(return_value=dl_resp)
+        dl_resp.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch("urllib.request.urlopen", return_value=dl_resp),
+            patch.object(update_mgr, "_get_expected_sha256", return_value=real_sha),
+            patch.object(update_mgr, "_sha256_file", return_value=real_sha),
+            patch.object(type(update_mgr), "sig_run_on_gui", create=True),
+        ):
+            with pytest.raises(RuntimeError, match="symlink"):
+                update_mgr._apply_update_frozen_linux(
+                    "http://example.com/update.tar.gz",
+                    symlink,
+                    headers,
+                    release_data,
+                )
+
+    def test_tar_traversal_member_skipped(self, update_mgr, tmp_path):
+        """Tar members with '..' or starting with '/' should be skipped."""
+        import hashlib
+        import io
+        import tarfile
+        from unittest.mock import MagicMock, patch
+
+        # Create a tar with a malicious member AND a legit member
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
+            # Malicious member
+            evil = tarfile.TarInfo(name="../../../etc/passwd")
+            evil.size = 4
+            tar.addfile(evil, io.BytesIO(b"evil"))
+            # Legit member
+            good = tarfile.TarInfo(name="YTDownloader")
+            good.size = 6
+            tar.addfile(good, io.BytesIO(b"binary"))
+        tar_bytes = tar_buffer.getvalue()
+        real_sha = hashlib.sha256(tar_bytes).hexdigest()
+
+        exe_path = tmp_path / "YTDownloader"
+        exe_path.write_bytes(b"old")
+
+        dl_resp = MagicMock()
+        dl_resp.read.side_effect = [tar_bytes, b""]
+        dl_resp.headers = {"Content-Length": str(len(tar_bytes))}
+        dl_resp.__enter__ = MagicMock(return_value=dl_resp)
+        dl_resp.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch("urllib.request.urlopen", return_value=dl_resp),
+            patch.object(update_mgr, "_get_expected_sha256", return_value=real_sha),
+            patch.object(update_mgr, "_sha256_file", return_value=real_sha),
+            patch.object(type(update_mgr), "sig_run_on_gui", create=True),
+            patch.object(type(update_mgr), "sig_update_status", create=True),
+            patch.object(type(update_mgr), "sig_request_close", create=True),
+            patch("subprocess.Popen"),
+        ):
+            # Should succeed — the evil member is skipped, the good one is extracted
+            update_mgr._apply_update_frozen_linux(
+                "http://example.com/update.tar.gz",
+                exe_path,
+                {"User-Agent": "test"},
+                {"tag_name": "v1.0"},
+            )
+
+        # The binary should have been replaced with the legit content
+        assert exe_path.read_bytes() == b"binary"
+
+
+class TestDownloadStreamSegmentErrorWrapping:
+    """Test _download_stream_segment wraps network errors into RuntimeError."""
+
+    def test_url_error_wrapped(self, download_mgr):
+        """URLError should be wrapped in RuntimeError with user-friendly message."""
+        import urllib.error
+        from unittest.mock import patch
+
+        with patch.object(
+            download_mgr,
+            "_download_stream_segment_inner",
+            side_effect=urllib.error.URLError("Connection refused"),
+        ):
+            with pytest.raises(RuntimeError, match="Network error"):
+                download_mgr._download_stream_segment(
+                    "http://example.com/stream", 0, 10, "/tmp/out", "video"
+                )
+
+    def test_socket_timeout_wrapped(self, download_mgr):
+        """socket.timeout should be wrapped in RuntimeError."""
+        import socket
+        from unittest.mock import patch
+
+        with patch.object(
+            download_mgr,
+            "_download_stream_segment_inner",
+            side_effect=socket.timeout("timed out"),
+        ):
+            with pytest.raises(RuntimeError, match="Network error"):
+                download_mgr._download_stream_segment(
+                    "http://example.com/stream", 0, 10, "/tmp/out", "audio"
+                )
+
+    def test_os_error_wrapped(self, download_mgr):
+        """OSError should be wrapped in RuntimeError with try again suggestion."""
+        from unittest.mock import patch
+
+        with patch.object(
+            download_mgr,
+            "_download_stream_segment_inner",
+            side_effect=OSError("Connection reset"),
+        ):
+            with pytest.raises(RuntimeError, match="Try again"):
+                download_mgr._download_stream_segment(
+                    "http://example.com/stream", 0, 10, "/tmp/out", "video"
+                )
+
+
+class TestParseYtdlpOutputErrorLineCap:
+    """Test _parse_ytdlp_output caps error lines at 100."""
+
+    def test_error_line_cap(self, download_mgr):
+        """Should collect at most 100 error lines."""
+        from unittest.mock import MagicMock
+
+        download_mgr.is_downloading = True
+        download_mgr._download_has_progress = False
+        download_mgr.last_progress_time = None
+
+        # Create a mock process with 150 error lines
+        lines = [f"ERROR: something went wrong #{i}\n" for i in range(150)]
+        mock_proc = MagicMock()
+        mock_proc.stdout = iter(lines)
+
+        with (
+            __import__("unittest.mock", fromlist=["patch"]).patch.object(
+                download_mgr, "update_status"
+            ),
+            __import__("unittest.mock", fromlist=["patch"]).patch.object(
+                download_mgr, "update_progress"
+            ),
+        ):
+            errors = download_mgr._parse_ytdlp_output(mock_proc)
+
+        assert len(errors) == 100
+
+
+class TestClipboardManagerLifecycle:
+    """Test ClipboardManager deque FIFO ordering and stop event lifecycle."""
+
+    @pytest.fixture
+    def mgr(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.clipboard_manager import ClipboardManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        m = ClipboardManager(thread_pool=pool)
+        yield m
+        pool.shutdown(wait=False)
+
+    def test_deque_fifo_ordering(self, mgr):
+        """Items should be retrievable in FIFO order with popleft."""
+        with mgr.clipboard_lock:
+            mgr.clipboard_url_list.append({"url": "http://a", "status": "pending"})
+            mgr.clipboard_url_list.append({"url": "http://b", "status": "pending"})
+            mgr.clipboard_url_list.append({"url": "http://c", "status": "pending"})
+
+        assert mgr.clipboard_url_list[0]["url"] == "http://a"
+        first = mgr.clipboard_url_list.popleft()
+        assert first["url"] == "http://a"
+        assert mgr.clipboard_url_list[0]["url"] == "http://b"
+
+    def test_stop_event_lifecycle(self, mgr):
+        """clipboard_stop_event should toggle correctly."""
+        assert mgr.clipboard_stop_event.is_set()
+        mgr.clipboard_stop_event.clear()
+        assert not mgr.clipboard_stop_event.is_set()
+        mgr.clipboard_stop_event.set()
+        assert mgr.clipboard_stop_event.is_set()
+
+    def test_shutting_down_flag(self, mgr):
+        """_shutting_down flag should default False and be settable."""
+        assert mgr._shutting_down is False
+        mgr._shutting_down = True
+        assert mgr._shutting_down is True
+
+
+class TestEncodingStderrThreadTimeout:
+    """Test run_ffmpeg_with_progress handles stderr thread join timeout."""
+
+    def test_stderr_thread_timeout_logs_warning(self):
+        """When stderr thread doesn't exit in 5s, method should still return."""
+        import threading
+        from unittest.mock import MagicMock, patch
+
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder=None)
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = iter([])  # no output
+
+        # Make stderr block forever so the thread won't finish
+        block_event = threading.Event()
+
+        def blocking_stderr():
+            block_event.wait(10)  # block up to 10s
+            yield "error line"
+
+        mock_proc.stderr = blocking_stderr()
+
+        callbacks = MagicMock()
+        callbacks.on_progress = MagicMock()
+        callbacks.on_status = MagicMock()
+        callbacks.on_heartbeat = MagicMock()
+
+        with (
+            patch("managers.encoding.subprocess.Popen", return_value=mock_proc),
+            patch("managers.encoding.safe_process_cleanup"),
+        ):
+            result = enc.run_ffmpeg_with_progress(
+                ["ffmpeg", "-i", "in.mp4", "out.mp4"],
+                60,
+                "Test encoding",
+                callbacks,
+            )
+
+        block_event.set()  # unblock the thread
+        assert result is True
+
+
+class TestDownloadLocalFileErrors:
+    """Test download_local_file error paths."""
+
+    def test_ffmpeg_not_found(self, download_mgr):
+        """FileNotFoundError should report ffmpeg not found."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+
+        with (
+            patch.object(download_mgr, "update_status") as mock_status,
+            patch.object(download_mgr, "update_progress"),
+            patch(
+                "managers.download_manager.subprocess.Popen",
+                side_effect=FileNotFoundError("ffmpeg not found"),
+            ),
+        ):
+            download_mgr.download_local_file("/tmp/input.mp4", "/tmp/output.mp4", 0, 10, 1.0, True)
+
+        # Should mention ffmpeg in the status
+        status_calls = [str(c) for c in mock_status.call_args_list]
+        assert any("ffmpeg" in s.lower() for s in status_calls)
+
+    def test_generic_exception_handled(self, download_mgr):
+        """Generic exceptions should be caught and reported."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+
+        with (
+            patch.object(download_mgr, "update_status") as mock_status,
+            patch.object(download_mgr, "update_progress"),
+            patch(
+                "managers.download_manager.subprocess.Popen",
+                side_effect=RuntimeError("unexpected"),
+            ),
+        ):
+            download_mgr.download_local_file("/tmp/input.mp4", "/tmp/output.mp4", 0, 10, 1.0, True)
+
+        status_calls = [str(c) for c in mock_status.call_args_list]
+        assert any("error" in s.lower() or "unexpected" in s.lower() for s in status_calls)
+
+
+class TestTrimHistoryOnStartup:
+    """Test UploadManager._trim_history_on_startup."""
+
+    def test_trims_file_over_500_lines(self, tmp_path):
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import patch
+
+        from managers.upload_manager import UploadManager
+
+        history_file = tmp_path / "upload_history.txt"
+        lines = [f"2026-01-01 | file{i}.mp4 | http://example.com/{i}\n" for i in range(600)]
+        history_file.write_text("".join(lines))
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        with patch("managers.upload_manager.UPLOAD_HISTORY_FILE", history_file):
+            UploadManager(thread_pool=pool)
+
+        result_lines = history_file.read_text().splitlines()
+        assert len(result_lines) == 500
+        pool.shutdown(wait=False)
+
+    def test_no_op_under_500_lines(self, tmp_path):
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import patch
+
+        from managers.upload_manager import UploadManager
+
+        history_file = tmp_path / "upload_history.txt"
+        lines = [f"2026-01-01 | file{i}.mp4 | http://example.com/{i}\n" for i in range(100)]
+        history_file.write_text("".join(lines))
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        with patch("managers.upload_manager.UPLOAD_HISTORY_FILE", history_file):
+            UploadManager(thread_pool=pool)
+
+        result_lines = history_file.read_text().splitlines()
+        assert len(result_lines) == 100
+        pool.shutdown(wait=False)
+
+
+class TestSaveUploadLinkPeriodicTrim:
+    """Test save_upload_link trims history every 100 saves."""
+
+    def test_periodic_trim_at_100_saves(self, tmp_path):
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import patch
+
+        from managers.upload_manager import UploadManager
+
+        history_file = tmp_path / "upload_history.txt"
+        # Pre-populate with 1001 lines
+        history_file.write_text("".join(f"old entry {i}\n" for i in range(1001)))
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        with patch("managers.upload_manager.UPLOAD_HISTORY_FILE", history_file):
+            mgr = UploadManager(thread_pool=pool)  # trims to 500 at startup
+            # Now save 100 entries to trigger periodic trim
+            for i in range(100):
+                mgr.save_upload_link(f"http://example.com/{i}", f"file{i}.mp4")
+
+        # After startup trim (500) + 100 new writes (600) + periodic trim (500)
+        result_lines = history_file.read_text().splitlines()
+        assert len(result_lines) == 500
+        pool.shutdown(wait=False)
+
+
+class TestGetUpdateAssetUrl:
+    """Test _get_update_asset_url finds correct platform binary."""
+
+    @pytest.fixture
+    def update_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.update_manager import UpdateManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        mgr = UpdateManager(ytdlp_path="yt-dlp", thread_pool=pool)
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_finds_windows_asset(self, update_mgr):
+        from unittest.mock import patch
+
+        release = {
+            "assets": [
+                {"name": "YTDownloader.exe", "browser_download_url": "http://dl/win.exe"},
+                {
+                    "name": "YTDownloader-Linux.tar.gz",
+                    "browser_download_url": "http://dl/linux.tar.gz",
+                },
+            ]
+        }
+        with patch("managers.update_manager.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            result = update_mgr._get_update_asset_url(release)
+        assert result == "http://dl/win.exe"
+
+    def test_finds_linux_asset(self, update_mgr):
+        from unittest.mock import patch
+
+        release = {
+            "assets": [
+                {"name": "YTDownloader.exe", "browser_download_url": "http://dl/win.exe"},
+                {
+                    "name": "YTDownloader-Linux.tar.gz",
+                    "browser_download_url": "http://dl/linux.tar.gz",
+                },
+            ]
+        }
+        with patch("managers.update_manager.sys") as mock_sys:
+            mock_sys.platform = "linux"
+            result = update_mgr._get_update_asset_url(release)
+        assert result == "http://dl/linux.tar.gz"
+
+    def test_missing_asset_returns_none(self, update_mgr):
+        release = {"assets": [{"name": "README.md", "browser_download_url": "http://dl/readme"}]}
+        result = update_mgr._get_update_asset_url(release)
+        assert result is None
+
+
+class TestIsOnedirFrozen:
+    """Test _is_onedir_frozen detection."""
+
+    @pytest.fixture
+    def update_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.update_manager import UpdateManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        mgr = UpdateManager(ytdlp_path="yt-dlp", thread_pool=pool)
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_source_mode_returns_false(self, update_mgr):
+        """Non-frozen (source) mode should return False."""
+        from unittest.mock import patch
+
+        with patch("managers.update_manager.sys") as mock_sys:
+            mock_sys.frozen = False
+            del mock_sys.frozen  # getattr(sys, "frozen", False) returns False
+            result = update_mgr._is_onedir_frozen()
+        assert result is False
+
+    def test_onefile_mode_returns_false(self, update_mgr, tmp_path):
+        """Onefile mode (_MEIPASS != exe parent) should return False."""
+        from unittest.mock import patch
+
+        with patch("managers.update_manager.sys") as mock_sys:
+            mock_sys.frozen = True
+            mock_sys._MEIPASS = "/tmp/random_temp_dir"
+            mock_sys.executable = str(tmp_path / "YTDownloader")
+            result = update_mgr._is_onedir_frozen()
+        assert result is False
+
+    def test_onedir_mode_returns_true(self, update_mgr, tmp_path):
+        """Onedir mode (_MEIPASS == exe parent) should return True."""
+        from unittest.mock import patch
+
+        app_dir = str(tmp_path / "myapp")
+        with patch("managers.update_manager.sys") as mock_sys:
+            mock_sys.frozen = True
+            mock_sys._MEIPASS = app_dir
+            mock_sys.executable = str(tmp_path / "myapp" / "YTDownloader")
+            result = update_mgr._is_onedir_frozen()
+        assert result is True
+
+
+class TestSha256File:
+    """Test _sha256_file chunked hashing with actual files."""
+
+    def test_matches_hashlib(self, tmp_path):
+        """Chunked file hash should match in-memory hash."""
+        import hashlib
+
+        from managers.update_manager import UpdateManager
+
+        content = b"A" * 500_000 + b"B" * 500_000  # 1MB
+        test_file = tmp_path / "testfile.bin"
+        test_file.write_bytes(content)
+
+        expected = hashlib.sha256(content).hexdigest().lower()
+        result = UpdateManager._sha256_file(str(test_file))
+        assert result == expected
+
+    def test_empty_file(self, tmp_path):
+        """Empty file should return SHA-256 of empty bytes."""
+        import hashlib
+
+        from managers.update_manager import UpdateManager
+
+        test_file = tmp_path / "empty.bin"
+        test_file.write_bytes(b"")
+
+        expected = hashlib.sha256(b"").hexdigest().lower()
+        result = UpdateManager._sha256_file(str(test_file))
+        assert result == expected
+
+
+class TestUpdatePreviewsEndTimeAdjustment:
+    """Test update_previews_thread adjusts end_time near EOF."""
+
+    def test_end_time_near_eof_adjusted(self):
+        """End time within 1s of duration should be adjusted to duration - 3."""
+        from unittest.mock import MagicMock, patch
+
+        from managers.trimming_manager import TrimmingManager
+
+        mgr = TrimmingManager.__new__(TrimmingManager)
+        mgr.video_duration = 60
+        mgr.preview_lock = __import__("threading").Lock()
+        mgr.preview_thread_running = True
+
+        captured_times = []
+
+        def mock_extract_frame(t):
+            captured_times.append(t)
+            return "/tmp/frame.png"
+
+        mock_image = MagicMock()
+
+        with (
+            patch.object(mgr, "extract_frame", side_effect=mock_extract_frame),
+            patch.object(mgr, "_path_to_image", return_value=mock_image),
+            patch.object(type(mgr), "sig_preview_ready", create=True),
+        ):
+            mgr.update_previews_thread(start_time=5, end_time=59)
+
+        # Start frame at 5, end frame adjusted to 57 (60 - 3)
+        assert captured_times[0] == 5
+        assert captured_times[1] == 57
+
+    def test_end_time_far_from_eof_not_adjusted(self):
+        """End time far from duration should not be adjusted."""
+        from unittest.mock import MagicMock, patch
+
+        from managers.trimming_manager import TrimmingManager
+
+        mgr = TrimmingManager.__new__(TrimmingManager)
+        mgr.video_duration = 60
+        mgr.preview_lock = __import__("threading").Lock()
+        mgr.preview_thread_running = True
+
+        captured_times = []
+
+        def mock_extract_frame(t):
+            captured_times.append(t)
+            return "/tmp/frame.png"
+
+        mock_image = MagicMock()
+
+        with (
+            patch.object(mgr, "extract_frame", side_effect=mock_extract_frame),
+            patch.object(mgr, "_path_to_image", return_value=mock_image),
+            patch.object(type(mgr), "sig_preview_ready", create=True),
+        ):
+            mgr.update_previews_thread(start_time=5, end_time=30)
+
+        assert captured_times[1] == 30  # not adjusted
+
+
+class TestFetchLocalFileDurationErrors:
+    """Test _fetch_local_file_duration error handling paths."""
+
+    @pytest.fixture
+    def trim_mgr(self):
+        from managers.trimming_manager import TrimmingManager
+
+        mgr = TrimmingManager.__new__(TrimmingManager)
+        mgr.ffprobe_path = "ffprobe"
+        mgr.video_duration = 0
+        mgr.is_fetching_duration = True
+        mgr.fetch_lock = __import__("threading").Lock()
+        return mgr
+
+    def test_ffprobe_nonzero_exit(self, trim_mgr):
+        """CalledProcessError should emit error messagebox."""
+        import subprocess
+        from unittest.mock import MagicMock, patch
+
+        mock_show = MagicMock()
+        mock_status = MagicMock()
+        mock_fetch_done = MagicMock()
+
+        with (
+            patch.object(type(trim_mgr), "sig_show_messagebox", create=True, new=mock_show),
+            patch.object(type(trim_mgr), "sig_update_status", create=True, new=mock_status),
+            patch.object(type(trim_mgr), "sig_fetch_done", create=True, new=mock_fetch_done),
+            patch(
+                "managers.trimming_manager.subprocess.run",
+                side_effect=subprocess.CalledProcessError(1, "ffprobe", stderr="bad file"),
+            ),
+        ):
+            trim_mgr._fetch_local_file_duration("/tmp/bad.mp4")
+
+        mock_show.emit.assert_called_once()
+        assert "error" in str(mock_show.emit.call_args)
+        assert trim_mgr.is_fetching_duration is False
+
+    def test_non_numeric_duration(self, trim_mgr):
+        """Non-numeric ffprobe output should trigger ValueError path."""
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.stdout = "not_a_number\n"
+        mock_result.returncode = 0
+
+        mock_show = MagicMock()
+        mock_status = MagicMock()
+        mock_fetch_done = MagicMock()
+
+        with (
+            patch.object(type(trim_mgr), "sig_show_messagebox", create=True, new=mock_show),
+            patch.object(type(trim_mgr), "sig_update_status", create=True, new=mock_status),
+            patch.object(type(trim_mgr), "sig_fetch_done", create=True, new=mock_fetch_done),
+            patch("managers.trimming_manager.subprocess.run", return_value=mock_result),
+        ):
+            trim_mgr._fetch_local_file_duration("/tmp/weird.mp4")
+
+        mock_show.emit.assert_called_once()
+        assert "Invalid" in str(mock_show.emit.call_args) or "error" in str(
+            mock_show.emit.call_args
+        )
+        assert trim_mgr.is_fetching_duration is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -1,12 +1,13 @@
 # Technical Debt
 
-Last updated: 2026-04-04
+Last updated: 2026-04-05
 
 ## Summary
 **Audit 1**: 55 found, 53 fixed, 2 accepted
 **Audit 2**: 48 found, 47 fixed, 1 remaining
 **Audit 3**: 65 found, 62 fixed, 3 accepted
 **Audit 4**: 38 raw → 21 validated (12 false positives removed), 20 fixed, 1 deferred
+**Audit 5**: 39 raw (5 agents) → 18 unique after dedup, 17 fixed (incl. 2 formerly deferred), 0 remaining
 
 ## Remaining Issues
 
@@ -17,6 +18,58 @@ Last updated: 2026-04-04
 
 ### Accepted tradeoffs (from audit 1)
 - **Widget reads from worker in `_fetch_file_size`** — Safe via closure. [informational]
+
+## Fixed Issues (audit 5 — 15 total)
+
+<details>
+<summary>Click to expand</summary>
+
+### Critical (1)
+- [x] C-1: `UnboundLocalError` in `stop_clipboard_downloads` — `stopped` used before assignment when auto-downloading inactive
+
+### High (1)
+- [x] H-1: Race condition in `_drain_stderr` — closure captured `self.current_process` which could become None; captured to local
+
+### Medium (5)
+- [x] M-1: Missing `--` sentinel before URLs in 4 yt-dlp commands (trimming_manager:96, :264, downloader_pyqt6:3222, download_manager:1210)
+- [x] M-3: Missing symlink check before yt-dlp binary replacement in `_update_ytdlp`
+- [x] M-4: `_cleanup_old_temp_dirs` ran on GUI thread via QTimer — moved to thread pool
+- [x] M-6: Test CI used `requirements.txt` (ranges) while build used `requirements.lock` (pinned) — aligned to `.lock`
+- [x] M-7: `dependabot-auto-merge.yml` used `synchronize` event — removed (redundant with `--auto`)
+
+### Medium (2, formerly deferred)
+- [x] M-2: Inline yt-dlp command duplication — refactored audio/10MB/normal paths to use builders
+- [x] M-5: `_fetch_file_size` used expensive `--dump-json` — replaced with `--print filesize,filesize_approx`
+
+### Tests (51 new — 293 total, was 242)
+- [x] `_monitor_download_timeout` progress stall: normal 600s and trim 1200s thresholds (2)
+- [x] `_do_trimmed_download`: cancel after video/audio, merge failure, volume reencode, copy codec (5)
+- [x] `_apply_update_source` rollback on partial write failure (1)
+- [x] `_apply_update_frozen_linux` symlink guard and tar traversal defense (2)
+- [x] `_download_stream_segment` error wrapping: URLError, socket.timeout, OSError (3)
+- [x] `_parse_ytdlp_output` error line cap at 100 (1)
+- [x] `ClipboardManager` deque FIFO, stop_event lifecycle, _shutting_down flag (3)
+- [x] `EncodingService.run_ffmpeg_with_progress` stderr thread join timeout (1)
+- [x] `download_local_file` FileNotFoundError and generic exception paths (2)
+- [x] `UploadManager._trim_history_on_startup` over/under 500 lines (2)
+- [x] `save_upload_link` periodic trimming at 100 saves (1)
+- [x] `_get_update_asset_url` Windows/Linux/missing asset (3)
+- [x] `_is_onedir_frozen` source/onefile/onedir modes (3)
+- [x] `_sha256_file` chunked hashing with actual file + empty file (2)
+- [x] `update_previews_thread` end-time adjustment near/far from EOF (2)
+- [x] `_fetch_local_file_duration` ffprobe error and non-numeric duration (2)
+
+### Low (8)
+- [x] L-1: Redundant `import tempfile` inside `_apply_update_frozen_windows`
+- [x] L-2: Clipboard status update scanned deque O(n) — now uses `clipboard_url_widgets` dict O(1)
+- [x] L-3: `check_dependencies` ran yt-dlp `--version` twice — consolidated
+- [x] L-4: `_cleanup_old_updates` ran synchronous I/O on GUI thread during `__init__` — offloaded to thread pool
+- [x] L-5: Coverage threshold documented as 70% but enforced at 55% — fixed documentation
+- [x] L-6: Lint job missing `cache-dependency-path` — added
+- [x] L-7: Two separate `pip install` commands in build job — combined
+- [x] L-8: cosign `sign-blob` step missing `name:` label — added
+
+</details>
 
 ## Fixed Issues (audit 4 — 20 total)
 
@@ -126,7 +179,7 @@ PERF-2 (256KB buffered), PERF-5 (deque capped), PERF-6 (accepted M-17), DO-11 (a
 - [x] No `permissions: {}` top-level on 4 workflow files — added least-privilege default
 - [x] No concurrency control on workflows — added concurrency groups
 - [x] `ruff` version not pinned in CI — pinned to 0.9.7
-- [x] No coverage threshold enforcement — added `--cov-fail-under=70`
+- [x] No coverage threshold enforcement — added `--cov-fail-under=55` (managers-only scope)
 - [x] No `timeout-minutes` on jobs — added to all workflows
 - [x] `_find_latest_file` uses 2N stat calls — replaced with `os.scandir`
 - [x] `check_dependencies` parallel opportunity — documented (kept sequential for simplicity)

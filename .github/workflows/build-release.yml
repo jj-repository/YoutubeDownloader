@@ -55,9 +55,7 @@ jobs:
         sudo apt-get install -y libdbus-1-dev libdbus-glib-1-dev python3-dev
 
     - name: Install dependencies
-      run: |
-        pip install pyinstaller==6.13.0
-        pip install -r requirements.lock
+      run: pip install pyinstaller==6.13.0 -r requirements.lock
 
     - name: Install optional dependencies (Linux)
       if: matrix.os == 'ubuntu-latest'
@@ -201,7 +199,8 @@ jobs:
       uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3
       with:
         cosign-release: 'v2.4.1'
-    - run: cosign sign-blob --yes SHA256SUMS --output-signature SHA256SUMS.sig --output-certificate SHA256SUMS.pem
+    - name: Sign SHA256SUMS
+      run: cosign sign-blob --yes SHA256SUMS --output-signature SHA256SUMS.sig --output-certificate SHA256SUMS.pem
 
     - name: Create Release
       uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2

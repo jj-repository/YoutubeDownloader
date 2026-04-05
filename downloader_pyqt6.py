@@ -469,8 +469,8 @@ class YouTubeDownloader(QMainWindow):
         self.trimming_mgr.sig_preview_ready.connect(self._on_preview_ready)
         self.trimming_mgr.sig_fetch_done.connect(self._on_fetch_done)
 
-        # Clean up leftover files from previous self-updates
-        self._cleanup_old_updates()
+        # Clean up leftover files from previous self-updates (off GUI thread)
+        self.thread_pool.submit(self._cleanup_old_updates)
 
         # Check dependencies and detect HW encoder in background (avoid startup freeze)
         self.dependencies_ok = True  # assume ok until check completes
@@ -1988,7 +1988,10 @@ class YouTubeDownloader(QMainWindow):
     def check_dependencies(self):
         """Check if yt-dlp, ffmpeg, and ffprobe are available."""
         try:
-            if os.path.isfile(self.ytdlp_path) and os.access(self.ytdlp_path, os.X_OK):
+            ytdlp_found = (
+                os.path.isfile(self.ytdlp_path) and os.access(self.ytdlp_path, os.X_OK)
+            ) or shutil.which(self.ytdlp_path)
+            if ytdlp_found:
                 result = subprocess.run(
                     [self.ytdlp_path, "--version"],
                     capture_output=True,
@@ -2000,16 +2003,6 @@ class YouTubeDownloader(QMainWindow):
                     logger.info(f"yt-dlp version: {version}")
                 else:
                     logger.info(f"yt-dlp is available at: {self.ytdlp_path}")
-            elif shutil.which(self.ytdlp_path):
-                result = subprocess.run(
-                    [self.ytdlp_path, "--version"],
-                    capture_output=True,
-                    timeout=DEPENDENCY_CHECK_TIMEOUT,
-                    **_subprocess_kwargs,
-                )
-                logger.info(
-                    f"yt-dlp version: {result.stdout.decode('utf-8', errors='replace').strip()}"
-                )
             else:
                 logger.error(f"yt-dlp not found at: {self.ytdlp_path}")
                 return False
@@ -2111,8 +2104,8 @@ class YouTubeDownloader(QMainWindow):
     def _init_temp_directory(self):
         """Initialize temp directory and schedule cleanup of orphaned ones."""
         self.temp_dir = tempfile.mkdtemp(prefix="ytdl_preview_")
-        # Defer old-dir cleanup off the GUI thread to avoid blocking startup
-        QTimer.singleShot(0, self._cleanup_old_temp_dirs)
+        # Defer old-dir cleanup to thread pool to avoid blocking the GUI
+        QTimer.singleShot(0, lambda: self.thread_pool.submit(self._cleanup_old_temp_dirs))
 
     def _cleanup_old_temp_dirs(self):
         """Remove orphaned temp directories from previous crashes (deferred)."""
@@ -2417,10 +2410,9 @@ class YouTubeDownloader(QMainWindow):
                 )
 
             with self.clipboard_mgr.clipboard_lock:
-                for item_data in self.clipboard_mgr.clipboard_url_list:
-                    if item_data["url"] == url:
-                        item_data["status"] = status
-                        break
+                widget_data = self.clipboard_url_widgets.get(url)
+                if widget_data:
+                    widget_data["status"] = status
 
     def start_clipboard_downloads(self):
         """Start downloading all pending URLs sequentially."""
@@ -2577,14 +2569,17 @@ class YouTubeDownloader(QMainWindow):
 
             # Parse multiplexed stdout
             url_set = set(pending_urls)
+            seen_urls = set()  # URLs that got an "Extracting URL:" line
             current_url = None
             current_had_error = False
             completed_count = 0
+            stopped_by_user = False
 
             for line in process.stdout:
                 if self.clipboard_mgr.clipboard_stop_event.is_set():
                     utils.safe_process_cleanup(process)
                     logger.info("Batch clipboard download stopped by user")
+                    stopped_by_user = True
                     break
 
                 # Detect URL transition via "Extracting URL:"
@@ -2608,6 +2603,7 @@ class YouTubeDownloader(QMainWindow):
                         # Start tracking new URL
                         current_url = extracted_url
                         current_had_error = False
+                        seen_urls.add(extracted_url)
                         self._safe_after(
                             0, lambda u=current_url: self._update_url_status(u, "downloading")
                         )
@@ -2643,19 +2639,30 @@ class YouTubeDownloader(QMainWindow):
                         lambda: self.update_clipboard_status("Extracting audio...", "blue"),
                     )
 
-            # Finalize last URL
+            # Finalize last URL — check process exit code
             if process.poll() is None:
                 process.wait()
 
             if current_url and not current_had_error:
-                completed_count += 1
-                self._safe_after(0, lambda u=current_url: self._update_url_status(u, "completed"))
-                self._safe_after(
-                    0,
-                    lambda c=completed_count, t=total_count: self.clipboard_total_label.setText(
-                        f"Completed: {c}/{t} videos"
-                    ),
-                )
+                if process.returncode == 0:
+                    completed_count += 1
+                    self._safe_after(
+                        0, lambda u=current_url: self._update_url_status(u, "completed")
+                    )
+                    self._safe_after(
+                        0,
+                        lambda c=completed_count, t=total_count: self.clipboard_total_label.setText(
+                            f"Completed: {c}/{t} videos"
+                        ),
+                    )
+                else:
+                    self._safe_after(0, lambda u=current_url: self._update_url_status(u, "failed"))
+
+            # Mark unreached URLs as failed (yt-dlp exited before processing them)
+            if not stopped_by_user:
+                for u in pending_urls:
+                    if u not in seen_urls:
+                        self._safe_after(0, lambda url=u: self._update_url_status(url, "failed"))
 
             logger.info(f"Batch clipboard download done: {completed_count}/{total_count} completed")
 
@@ -2870,6 +2877,7 @@ class YouTubeDownloader(QMainWindow):
             self._clipboard_batch_process = None
         if was_downloading:
             logger.info("Clipboard batch downloads stopped by user")
+        stopped = False
         with self.clipboard_mgr.auto_download_lock:
             if self.clipboard_mgr.clipboard_auto_downloading:
                 self.clipboard_mgr.clipboard_auto_downloading = False
@@ -3218,7 +3226,15 @@ class YouTubeDownloader(QMainWindow):
                         f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]"
                     )
 
-                cmd = [_ytdlp_path, "--dump-json", "-f", format_selector, url]
+                cmd = [
+                    _ytdlp_path,
+                    "--print",
+                    "%(filesize)s\n%(filesize_approx)s",
+                    "-f",
+                    format_selector,
+                    "--",
+                    url,
+                ]
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
@@ -3229,8 +3245,16 @@ class YouTubeDownloader(QMainWindow):
                 )
 
                 if result.returncode == 0:
-                    info = json.loads(result.stdout)
-                    filesize = info.get("filesize") or info.get("filesize_approx")
+                    lines = result.stdout.strip().split("\n")
+                    filesize = None
+                    for line in lines:
+                        line = line.strip()
+                        if line and line not in ("NA", "None", ""):
+                            try:
+                                filesize = int(float(line))
+                                break
+                            except (ValueError, OverflowError):
+                                continue
 
                     if filesize:
                         filesize_mb = filesize / BYTES_PER_MB

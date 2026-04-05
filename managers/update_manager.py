@@ -575,8 +575,6 @@ class UpdateManager(QObject):
         except OSError as rename_err:
             # Rename failed -- use bat to move file after we exit
             logger.warning(f"Rename failed ({rename_err}), falling back to bat trampoline")
-            import tempfile
-
             bat_fd = tempfile.NamedTemporaryFile(
                 suffix=".bat", prefix="_update_", dir=exe_path.parent, delete=False
             )
@@ -951,6 +949,8 @@ class UpdateManager(QObject):
             logger.info(f"SHA256 verified for {binary_name}: {actual_hash[:16]}...")
 
             # Replace the old binary
+            if os.path.islink(target_path):
+                raise RuntimeError(f"Refusing to overwrite symlink: {target_path}")
             if os.path.exists(target_path):
                 os.remove(target_path)
             os.rename(tmp_path, target_path)

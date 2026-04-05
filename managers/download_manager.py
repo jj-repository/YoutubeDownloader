@@ -1169,45 +1169,22 @@ class DownloadManager(QObject):
                 else:
                     base_name = "%(title)s"
                 output_template = f"{base_name}.%(ext)s"
+                _dp = ui_state["download_path"] if ui_state else ""
+                output_path = os.path.join(_dp, output_template)
 
-                cmd = [
-                    self.ytdlp_path,
-                    "--concurrent-fragments",
-                    CONCURRENT_FRAGMENTS,
-                    "--buffer-size",
-                    BUFFER_SIZE,
-                    "--http-chunk-size",
-                    CHUNK_SIZE,
-                    "-f",
-                    "bestaudio",
-                    "--extract-audio",
-                    "--audio-format",
-                    "mp3",
-                    "--audio-quality",
-                    AUDIO_BITRATE,
-                    "--newline",
-                    "--progress",
-                    "-o",
-                    os.path.join(
-                        ui_state["download_path"] if ui_state else "",
-                        output_template,
-                    ),
-                ]
-
-                ffmpeg_args = []
-                if volume_multiplier != 1.0:
-                    ffmpeg_args.extend(["-af", f"volume={volume_multiplier}"])
-
-                if ffmpeg_args:
-                    cmd.extend(["--postprocessor-args", "ffmpeg:" + " ".join(ffmpeg_args)])
+                cmd = self.build_audio_ytdlp_command(url, output_path, volume=volume_multiplier)
 
                 _sl = ui_state["speed_limit"] if ui_state else None
-                cmd.extend(get_speed_limit_args(_sl))
-
-                if is_playlist:
-                    cmd.append("--no-playlist")
-
-                cmd.append(url)
+                sl_args = get_speed_limit_args(_sl)
+                if sl_args or is_playlist:
+                    # Insert before the trailing ["--", url]
+                    tail = cmd[-2:]  # ["--", url]
+                    cmd = cmd[:-2]
+                    if sl_args:
+                        cmd.extend(sl_args)
+                    if is_playlist:
+                        cmd.append("--no-playlist")
+                    cmd.extend(tail)
             else:
                 if quality.startswith("none") or quality == "none (Audio only)":
                     self.update_status("Please select a video quality", "red")
@@ -1271,76 +1248,35 @@ class DownloadManager(QObject):
                         f"/best[height<={height}]"
                     )
 
-                    cmd = [
-                        self.ytdlp_path,
-                        "--concurrent-fragments",
-                        CONCURRENT_FRAGMENTS,
-                        "--buffer-size",
-                        BUFFER_SIZE,
-                        "--http-chunk-size",
-                        CHUNK_SIZE,
-                        "-f",
-                        format_sel,
-                        "--merge-output-format",
-                        "mp4",
-                    ]
+                    cmd = self.build_base_ytdlp_command()
+                    cmd.extend(["-f", format_sel, "--merge-output-format", "mp4"])
 
                     _sl = ui_state["speed_limit"] if ui_state else None
                     cmd.extend(get_speed_limit_args(_sl))
                     if is_playlist:
                         cmd.append("--no-playlist")
-                    cmd.extend(["--newline", "--progress", "-o", temp_output_template, "--", url])
+                    cmd.extend(["-o", temp_output_template, "--", url])
                 else:
                     # --- Normal single-pass path (no trim) ---
                     temp_dir = None
+                    _dp = ui_state["download_path"] if ui_state else ""
+                    output_path = os.path.join(_dp, output_template)
 
-                    cmd = [
-                        self.ytdlp_path,
-                        "--concurrent-fragments",
-                        CONCURRENT_FRAGMENTS,
-                        "--buffer-size",
-                        BUFFER_SIZE,
-                        "--http-chunk-size",
-                        CHUNK_SIZE,
-                        "-f",
-                        f"bestvideo[height<={height}]+bestaudio/best[height<={height}]",
-                        "--merge-output-format",
-                        "mp4",
-                    ]
-
-                    needs_processing = volume_multiplier != 1.0
-
-                    if needs_processing:
-                        ffmpeg_video_args = self.encoding.get_video_encoder_args(mode="crf") + [
-                            "-c:a",
-                            "aac",
-                            "-b:a",
-                            AUDIO_BITRATE,
-                        ]
-                        if volume_multiplier != 1.0:
-                            ffmpeg_video_args.extend(["-af", f"volume={volume_multiplier}"])
-                        cmd.extend(
-                            [
-                                "--postprocessor-args",
-                                "ffmpeg:" + " ".join(ffmpeg_video_args),
-                            ]
-                        )
+                    cmd = self.build_video_ytdlp_command(
+                        url, output_path, height, volume=volume_multiplier
+                    )
 
                     _sl2 = ui_state["speed_limit"] if ui_state else None
-                    cmd.extend(get_speed_limit_args(_sl2))
-                    if is_playlist:
-                        cmd.append("--no-playlist")
-                    _dp = ui_state["download_path"] if ui_state else ""
-                    cmd.extend(
-                        [
-                            "--newline",
-                            "--progress",
-                            "-o",
-                            os.path.join(_dp, output_template),
-                            "--",
-                            url,
-                        ]
-                    )
+                    sl_args = get_speed_limit_args(_sl2)
+                    if sl_args or is_playlist:
+                        # Insert before the trailing ["--", url]
+                        tail = cmd[-2:]  # ["--", url]
+                        cmd = cmd[:-2]
+                        if sl_args:
+                            cmd.extend(sl_args)
+                        if is_playlist:
+                            cmd.append("--no-playlist")
+                        cmd.extend(tail)
 
             logger.info(f"Download command: {' '.join(cmd)}")
 
@@ -1605,10 +1541,11 @@ class DownloadManager(QObject):
 
             # Drain stderr in background to prevent pipe deadlock
             stderr_lines = []
+            proc = self.current_process
 
             def _drain_stderr():
                 try:
-                    for line in self.current_process.stderr:
+                    for line in proc.stderr:
                         stderr_lines.append(line)
                         self.last_progress_time = time.time()
                 except (ValueError, OSError):
