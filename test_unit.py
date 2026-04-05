@@ -3653,8 +3653,8 @@ class TestFrozenLinuxSecurityGuards:
         import tarfile
         from unittest.mock import MagicMock, patch
 
-        # Create a tar with a malicious member AND a legit member (>1024 bytes total)
-        binary_content = b"x" * 2048
+        # Create a tar >1024 bytes after gzip (random data is incompressible)
+        binary_content = bytes(i % 251 * (i + 7) % 256 for i in range(8192))
         tar_buffer = io.BytesIO()
         with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
             # Malicious member
