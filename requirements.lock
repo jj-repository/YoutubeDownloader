@@ -1,10 +1,9 @@
 # Pinned dependency versions for reproducible builds.
-# Regenerate with: pip install -r requirements.txt && pip freeze | grep -iE "yt-dlp|pyqt6|catbox|pyperclip|dbus" > requirements.lock
+# Only pin direct dependencies — transitive deps (PyQt6-Qt6, PyQt6-sip)
+# vary by platform and are resolved automatically.
 #
-# Used by CI build workflow. Development uses requirements.txt (ranges).
+# Used by CI build and test workflows. Development uses requirements.txt (ranges).
 yt-dlp==2026.3.17
 PyQt6==6.8.1
-PyQt6-Qt6==6.8.3
-PyQt6-sip==13.10.0
 catboxpy==0.1.0
 pyperclip==1.9.0
