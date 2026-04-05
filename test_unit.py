@@ -3616,8 +3616,8 @@ class TestFrozenLinuxSecurityGuards:
         import io
         import tarfile
 
-        # Create a real tar with a YTDownloader binary (>1024 bytes to pass size check)
-        binary_content = b"x" * 2048
+        # Create a tar >1024 bytes after gzip (random data is incompressible)
+        binary_content = bytes(i % 251 * (i + 7) % 256 for i in range(8192))
         tar_buffer = io.BytesIO()
         with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
             info = tarfile.TarInfo(name="YTDownloader")
