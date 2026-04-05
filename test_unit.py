@@ -3563,19 +3563,18 @@ class TestApplyUpdateSourceRollback:
 
         release_data = {"tag_name": "v1.0"}
 
+        import managers.update_manager as um_module
+
+        fake_file = str(managers_dir / "update_manager.py")
+
         with (
-            patch("managers.update_manager.Path.__file__", str(managers_dir / "update_manager.py")),
-            patch(
-                "managers.update_manager.Path.resolve",
-                return_value=managers_dir / "update_manager.py",
-            ),
+            patch.object(um_module, "__file__", fake_file),
             patch.object(type(update_mgr), "sig_run_on_gui", create=True),
             patch.object(type(update_mgr), "sig_update_status", create=True),
             patch.object(type(update_mgr), "sig_show_messagebox", create=True),
             patch("urllib.request.urlopen", side_effect=mock_urlopen),
             patch("shutil.move", side_effect=fail_on_third_move),
         ):
-            # The method should catch the error and rollback
             update_mgr._apply_update_source(release_data)
 
         # First two files should have been rolled back to original
@@ -3640,8 +3639,8 @@ class TestFrozenLinuxSecurityGuards:
             with pytest.raises(RuntimeError, match="symlink"):
                 update_mgr._apply_update_frozen_linux(
                     "http://example.com/update.tar.gz",
-                    symlink,
                     headers,
+                    symlink,
                     release_data,
                 )
 
@@ -3687,8 +3686,8 @@ class TestFrozenLinuxSecurityGuards:
             # Should succeed — the evil member is skipped, the good one is extracted
             update_mgr._apply_update_frozen_linux(
                 "http://example.com/update.tar.gz",
-                exe_path,
                 {"User-Agent": "test"},
+                exe_path,
                 {"tag_name": "v1.0"},
             )
 
@@ -3874,7 +3873,7 @@ class TestDownloadLocalFileErrors:
                 side_effect=FileNotFoundError("ffmpeg not found"),
             ),
         ):
-            download_mgr.download_local_file("/tmp/input.mp4", "/tmp/output.mp4", 0, 10, 1.0, True)
+            download_mgr.download_local_file("/tmp/input.mp4")
 
         # Should mention ffmpeg in the status
         status_calls = [str(c) for c in mock_status.call_args_list]
@@ -3894,7 +3893,7 @@ class TestDownloadLocalFileErrors:
                 side_effect=RuntimeError("unexpected"),
             ),
         ):
-            download_mgr.download_local_file("/tmp/input.mp4", "/tmp/output.mp4", 0, 10, 1.0, True)
+            download_mgr.download_local_file("/tmp/input.mp4")
 
         status_calls = [str(c) for c in mock_status.call_args_list]
         assert any("error" in s.lower() or "unexpected" in s.lower() for s in status_calls)
@@ -3950,17 +3949,19 @@ class TestSaveUploadLinkPeriodicTrim:
         from managers.upload_manager import UploadManager
 
         history_file = tmp_path / "upload_history.txt"
-        # Pre-populate with 1001 lines
-        history_file.write_text("".join(f"old entry {i}\n" for i in range(1001)))
+        # Pre-populate with exactly 500 lines (no startup trim needed)
+        history_file.write_text("".join(f"old entry {i}\n" for i in range(500)))
 
         pool = ThreadPoolExecutor(max_workers=1)
         with patch("managers.upload_manager.UPLOAD_HISTORY_FILE", history_file):
-            mgr = UploadManager(thread_pool=pool)  # trims to 500 at startup
-            # Now save 100 entries to trigger periodic trim
-            for i in range(100):
+            mgr = UploadManager(thread_pool=pool)  # no trim (<=500)
+            # Write 600 entries: after 100th write, file has 600 lines (<= 1000, no trim)
+            # After 200th write, file has 700 lines (<= 1000, no trim)
+            # ... after 600th write, file has 1100 lines (> 1000), periodic trim to 500
+            for i in range(600):
                 mgr.save_upload_link(f"http://example.com/{i}", f"file{i}.mp4")
 
-        # After startup trim (500) + 100 new writes (600) + periodic trim (500)
+        # 500 initial + 600 writes = 1100 > 1000 → trimmed to 500
         result_lines = history_file.read_text().splitlines()
         assert len(result_lines) == 500
         pool.shutdown(wait=False)
