@@ -62,6 +62,7 @@ from constants import (
     CLIPBOARD_URLS_FILE,
     CONFIG_FILE,
     DEPENDENCY_CHECK_TIMEOUT,
+    GITHUB_RELEASES_URL,
     GITHUB_REPO,
     LOG_FILE,
     MAX_VIDEO_DURATION,
@@ -113,7 +114,7 @@ except ImportError:
     PYPERCLIP_AVAILABLE = False
 
 # Configure logging
-APP_DATA_DIR.mkdir(exist_ok=True)
+APP_DATA_DIR.mkdir(exist_ok=True, mode=0o700)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -967,7 +968,7 @@ class YouTubeDownloader(QMainWindow):
 
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setEnabled(False)
-        self.stop_btn.clicked.connect(self.stop_download)
+        self.stop_btn.clicked.connect(self.download_mgr.stop_download)
         btn_row.addWidget(self.stop_btn)
 
         btn_row.addSpacing(15)
@@ -1654,6 +1655,80 @@ class YouTubeDownloader(QMainWindow):
         elif msg_type == "question":
             QMessageBox.question(self, title, message)
 
+    def _show_update_dialog(self, latest_version, release_data):
+        """Show app update available dialog with options."""
+        colors = THEMES[self.current_theme]
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Update Available")
+        dialog.setFixedSize(400, 200)
+        dialog.setStyleSheet(f"background-color: {colors['bg']}; color: {colors['fg']};")
+
+        layout = QVBoxLayout(dialog)
+
+        msg = (
+            f"A new version is available!\n\n"
+            f"Current: v{APP_VERSION}\n"
+            f"Latest: v{latest_version}\n\n"
+            f"Would you like to update?"
+        )
+        label = QLabel(msg)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setWordWrap(True)
+        layout.addWidget(label)
+
+        btn_layout = QHBoxLayout()
+
+        update_btn = QPushButton("Update Now")
+        releases_btn = QPushButton("Open Releases Page")
+        later_btn = QPushButton("Later")
+
+        def update_now():
+            dialog.accept()
+            self.thread_pool.submit(self.update_mgr._apply_update, release_data)
+
+        def open_releases():
+            dialog.accept()
+            webbrowser.open(GITHUB_RELEASES_URL)
+
+        update_btn.clicked.connect(update_now)
+        releases_btn.clicked.connect(open_releases)
+        later_btn.clicked.connect(dialog.reject)
+
+        btn_layout.addWidget(update_btn)
+        btn_layout.addWidget(releases_btn)
+        btn_layout.addWidget(later_btn)
+        layout.addLayout(btn_layout)
+
+        dialog.exec()
+
+    def _show_ytdlp_update_dialog(self, current_version, latest_version):
+        """Show yt-dlp update available dialog."""
+        result = QMessageBox.question(
+            self,
+            "yt-dlp Update Available",
+            f"A new version of yt-dlp is available!\n\n"
+            f"Current: {current_version}\n"
+            f"Latest: {latest_version}\n\n"
+            f"This may fix download issues.\n"
+            f"Update now?",
+        )
+
+        if result == QMessageBox.StandardButton.Yes:
+            if getattr(sys, "frozen", False):
+                self.thread_pool.submit(self.update_mgr._apply_ytdlp_update_binary, latest_version)
+            else:
+                pip_path = self.update_mgr._get_pip_path()
+                if pip_path:
+                    self.thread_pool.submit(self.update_mgr._apply_ytdlp_update_pip, pip_path)
+                else:
+                    QMessageBox.warning(
+                        self,
+                        "Update Not Supported",
+                        "Cannot auto-update yt-dlp in this mode.\n\n"
+                        "Please update manually or download the latest app release.",
+                    )
+
     def _do_clipboard_progress(self, value: float):
         """Update clipboard progress bar."""
         value = max(0.0, min(100.0, value))
@@ -1875,8 +1950,10 @@ class YouTubeDownloader(QMainWindow):
                     for item in self.clipboard_mgr.clipboard_url_list
                     if item["status"] in ["pending", "failed"]
                 ]
-            with open(CLIPBOARD_URLS_FILE, "w", encoding="utf-8") as f:
+            tmp = CLIPBOARD_URLS_FILE.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"urls": urls_to_save}, f, indent=2)
+            os.replace(tmp, CLIPBOARD_URLS_FILE)
             logger.info(f"Saved {len(urls_to_save)} clipboard URLs")
         except Exception as e:
             logger.error(f"Error saving clipboard URLs: {e}")
@@ -1918,10 +1995,12 @@ class YouTubeDownloader(QMainWindow):
 
     @staticmethod
     def _write_config_to_disk(data: dict):
-        """Write config dict to disk. Called from worker thread."""
+        """Write config dict to disk atomically. Called from worker thread."""
         try:
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            tmp = CONFIG_FILE.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+            os.replace(tmp, CONFIG_FILE)
         except Exception as e:
             logger.error(f"Error saving config: {e}")
 

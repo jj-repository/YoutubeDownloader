@@ -20,6 +20,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -197,6 +198,7 @@ class DownloadManager(QObject):
             output_path: Full output path with filename template
             volume: Volume multiplier (default 1.0)
         """
+        volume = float(volume)
         cmd = self.build_base_ytdlp_command()
         cmd.extend(
             [
@@ -235,6 +237,7 @@ class DownloadManager(QObject):
             trim_start: Start time in seconds (optional)
             trim_end: End time in seconds (optional)
         """
+        volume = float(volume)
         cmd = self.build_base_ytdlp_command()
         cmd.extend(
             [
@@ -825,7 +828,7 @@ class DownloadManager(QObject):
                 if not self.is_downloading:
                     break
 
-                if "ERROR" in line or "error" in line.lower():
+                if line.startswith("ERROR:") or "[error]" in line.lower():
                     if len(error_lines) < 100:
                         error_lines.append(line.strip())
                     logger.warning(f"yt-dlp: {line.strip()}")
@@ -1540,7 +1543,7 @@ class DownloadManager(QObject):
             total_duration = self.video_duration if not trim_enabled else (end_time - start_time)
 
             # Drain stderr in background to prevent pipe deadlock
-            stderr_lines = []
+            stderr_lines = deque(maxlen=200)
             proc = self.current_process
 
             def _drain_stderr():

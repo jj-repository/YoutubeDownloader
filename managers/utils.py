@@ -365,6 +365,9 @@ def strip_playlist_params(url: str) -> str:
 
 def is_local_file(input_text: str) -> bool:
     """Check if input is a local file path."""
+    if input_text.startswith(("http://", "https://", "ftp://")):
+        return False
+
     if os.path.isfile(input_text):
         return True
 

@@ -1845,7 +1845,7 @@ class TestParseYtdlpOutput:
         assert 42.0 <= emitted_val <= 43.0
 
     def test_error_lines_collected(self, download_mgr):
-        """Lines containing ERROR should be collected."""
+        """Lines with ERROR: prefix or [error] tag should be collected."""
         download_mgr.is_downloading = True
         download_mgr.last_progress_time = 0
 
@@ -1853,7 +1853,8 @@ class TestParseYtdlpOutput:
             [
                 "ERROR: Video unavailable\n",
                 "[download] Some normal line\n",
-                "error: network issue\n",
+                "[error] network issue\n",
+                "Something went wrong error here\n",  # should NOT match
             ]
         )
         errors = download_mgr._parse_ytdlp_output(proc)

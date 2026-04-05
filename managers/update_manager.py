@@ -47,6 +47,7 @@ class UpdateManager(QObject):
         self.thread_pool = thread_pool
         self._updating = False
         self._shutting_down = False
+        self._sha256sums_cache = {}
 
     # ------------------------------------------------------------------
     #  App update
@@ -141,9 +142,13 @@ class UpdateManager(QObject):
     def _version_newer(latest, current):
         """Compare version strings to check if latest is newer than current.
 
+        Uses integer tuple comparison (e.g. (5, 18) > (5, 9)).
+        Requires monotonically increasing minor version numbers —
+        never release 5.2 after 5.18 (use 5.19+ instead).
+
         Args:
-            latest: Latest version string (e.g., '3.1.3')
-            current: Current version string (e.g., '3.1.2')
+            latest: Latest version string (e.g., '5.18')
+            current: Current version string (e.g., '5.17')
 
         Returns:
             bool: True if latest is newer than current
@@ -164,7 +169,8 @@ class UpdateManager(QObject):
                 h.update(chunk)
         return h.hexdigest().lower()
 
-    def _compute_git_blob_sha(self, content):
+    @staticmethod
+    def _compute_git_blob_sha(content):
         """Compute the git blob SHA1 hash for content (same as git hash-object)."""
         header = f"blob {len(content)}\0".encode()
         return hashlib.sha1(header + content).hexdigest()
@@ -370,7 +376,8 @@ class UpdateManager(QObject):
             logger.info("Restarting after source update...")
 
             def _do_restart():
-                subprocess.Popen([sys.executable] + sys.argv)
+                script = str(Path(__file__).resolve().parent.parent / "downloader_pyqt6.py")
+                subprocess.Popen([sys.executable, script])
                 self._updating = False
                 self.sig_request_close.emit()
 
@@ -403,20 +410,18 @@ class UpdateManager(QObject):
         import urllib.request
 
         tag_name = release_data.get("tag_name", "")
-        cache = getattr(self, "_sha256sums_cache", {})
 
-        if tag_name not in cache:
+        if tag_name not in self._sha256sums_cache:
             sha_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/SHA256SUMS"
             try:
                 req = urllib.request.Request(sha_url, headers=headers)
                 with urllib.request.urlopen(req, timeout=30) as response:
-                    cache[tag_name] = response.read().decode("utf-8")
-                self._sha256sums_cache = cache
+                    self._sha256sums_cache[tag_name] = response.read().decode("utf-8")
             except Exception as e:
                 logger.warning(f"Could not fetch SHA256SUMS: {e}")
                 return None
 
-        sha256sums = cache.get(tag_name, "")
+        sha256sums = self._sha256sums_cache.get(tag_name, "")
         for line in sha256sums.strip().splitlines():
             parts = line.split()
             if len(parts) >= 2 and parts[1] == asset_name:
@@ -728,6 +733,9 @@ class UpdateManager(QObject):
                 shutil.copyfileobj(f, tmp)
                 tmp_path = Path(tmp.name)
 
+        if tmp_path.stat().st_size < 1024:
+            tmp_path.unlink(missing_ok=True)
+            raise RuntimeError("Extracted binary is too small — archive may be corrupt")
         if exe_path.is_symlink():
             raise RuntimeError(f"Refusing to overwrite symlink: {exe_path}")
         shutil.move(str(tmp_path), str(exe_path))
@@ -948,12 +956,10 @@ class UpdateManager(QObject):
                 )
             logger.info(f"SHA256 verified for {binary_name}: {actual_hash[:16]}...")
 
-            # Replace the old binary
+            # Replace the old binary atomically
             if os.path.islink(target_path):
                 raise RuntimeError(f"Refusing to overwrite symlink: {target_path}")
-            if os.path.exists(target_path):
-                os.remove(target_path)
-            os.rename(tmp_path, target_path)
+            os.replace(tmp_path, target_path)
 
             # Make executable on Linux
             if sys.platform != "win32":

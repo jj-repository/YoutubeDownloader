@@ -1,6 +1,6 @@
 # Technical Debt
 
-Last updated: 2026-04-05
+Last updated: 2026-04-05 (audit 6)
 
 ## Summary
 **Audit 1**: 55 found, 53 fixed, 2 accepted
@@ -8,6 +8,7 @@ Last updated: 2026-04-05
 **Audit 3**: 65 found, 62 fixed, 3 accepted
 **Audit 4**: 38 raw → 21 validated (12 false positives removed), 20 fixed, 1 deferred
 **Audit 5**: 39 raw (5 agents) → 18 unique after dedup, 17 fixed (incl. 2 formerly deferred), 0 remaining
+**Audit 6**: 65 raw (5 agents) → 48 unique after dedup, 16 fixed, 12 deferred (refactors/medium effort), 20 test gap findings documented
 
 ## Remaining Issues
 
@@ -16,8 +17,59 @@ Last updated: 2026-04-05
 - **M-28**: No `pip --require-hashes` for supply chain integrity in release builds. Accepted — PyInstaller pinned, full hash pinning too complex for the benefit. [medium]
 - **DO-8**: Release notes not structured (no CHANGELOG.md). Deferred — `generate_release_notes: true` sufficient for current scale. [low]
 
+### Deferred (audit 6 — refactors, medium effort)
+- **CQ-3**: Duplicated UI state snapshot pattern across 6 call sites. Deferred — works correctly, refactor is cosmetic. [medium]
+- **CQ-6**: Progress dialog code duplicated 3× in update_manager.py. Deferred — refactor, ~150 lines. [medium]
+- **P-08**: Multiple setStyleSheet passes during theme toggle. Deferred — needs QSS object-name refactor. [medium]
+- **P-12**: Nested locks + O(n) scans in auto-download on GUI thread. Deferred — needs status counter refactor. [medium]
+- **DO-6**: Test workflow runs only on ubuntu-latest, no Windows. Deferred — needs matrix + conditional steps. [medium]
+- **DO-9**: Ruff select rules minimal (E, F, W, I only). Deferred — enable B, UP, S incrementally. [medium]
+
+### Test coverage gaps (audit 6 — 20 findings, see GH#20)
+- **TQ-1** [critical]: `_apply_update_frozen_windows` untested (rename-dance, bat trampoline, rollback)
+- **TQ-2** [critical]: `_apply_ytdlp_update_binary` untested (SHA-256 verify, symlink guard)
+- **TQ-3** [high]: `_apply_ytdlp_update_pip` untested (success/failure/timeout)
+- **TQ-4** [high]: `download()` PermissionError/OSError handlers untested
+- **TQ-5** [high]: `_post_ytdlp_10mb_encode` untested (empty temp dir, success, failure)
+- **TQ-6** [high]: `validate_download_path` Windows branch untested
+- **TQ-7** [high]: `_download_video_trimmed_10mb_path` full pipeline untested
+- **TQ-8** [medium]: `test_cancellation_during_data_download` xfail masks real gap
+- **TQ-9** [medium]: `test_10mb_path_taken` weak assertions (only checks is_downloading)
+- **TQ-10–20** [medium/low]: Various smaller coverage gaps in update_manager, download_manager, upload_manager
+
 ### Accepted tradeoffs (from audit 1)
 - **Widget reads from worker in `_fetch_file_size`** — Safe via closure. [informational]
+
+## Fixed Issues (audit 6 — 16 total)
+
+<details>
+<summary>Click to expand</summary>
+
+### Critical (1 — functional bug)
+- [x] BUG-1: 3 broken signal connections lost during manager extraction — `_show_update_dialog`, `_show_ytdlp_update_dialog` (methods missing), `stop_download` (connected to self instead of download_mgr)
+
+### High (3)
+- [x] DO-3: GH Actions script injection via `${{ inputs.version }}` in shell `run:` blocks — replaced with `env:` variable indirection
+- [x] CQ-14: `is_local_file` matched URLs with media extensions (e.g. `https://…/video.mp4`) — added scheme guard
+- [x] SEC-7: TOCTOU in yt-dlp binary update between symlink check and remove+rename — replaced with `os.replace()` atomic rename
+
+### Medium (8)
+- [x] SEC-3: Non-atomic config/clipboard writes risk corruption on crash — write-to-tmp + `os.replace()`
+- [x] SEC-5: Source-mode restart propagated unsanitized `sys.argv` — now uses known script path
+- [x] SEC-1: Volume value passed via f-string to ffmpeg args without validation in builders — added `float()` coercion
+- [x] CQ-2: `stderr_lines` in `download_local_file` was unbounded plain list — replaced with `deque(maxlen=200)`
+- [x] CQ-4: `_sha256sums_cache` created lazily via `getattr` — initialized in `__init__`
+- [x] CQ-13: yt-dlp error detection matched any line containing "error" substring — tightened to `ERROR:` prefix or `[error]` tag
+- [x] CQ-16: Linux frozen update had no post-extraction integrity check — added size guard (< 1024 bytes = corrupt)
+- [x] DO-1: `validate` job in build-release.yml missing `timeout-minutes` — added 5min
+
+### Low (4)
+- [x] CQ-5: `_compute_git_blob_sha` was instance method but didn't use `self` — added `@staticmethod`
+- [x] CQ-11: `_version_newer` had no documented invariant for X.XX format — added docstring clarification
+- [x] SEC-4: `APP_DATA_DIR.mkdir()` used default permissions (world-readable on Linux) — added `mode=0o700`
+- [x] DO-4: `dbus-python` unpinned in build and test CI — pinned to 1.3.2
+
+</details>
 
 ## Fixed Issues (audit 5 — 15 total)
 

@@ -42,7 +42,7 @@ jobs:
 
       - name: Install optional dependencies
         continue-on-error: true
-        run: pip install dbus-python
+        run: pip install dbus-python==1.3.2
 
       - name: Run tests
         env:
