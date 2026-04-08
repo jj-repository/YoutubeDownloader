@@ -27,11 +27,9 @@ class ClipboardManager(QObject):
     sig_clipboard_progress = pyqtSignal(float)  # 0-100
     sig_clipboard_status = pyqtSignal(str, str)  # message, color
     sig_clipboard_total = pyqtSignal(str)  # total label text
-    sig_update_url_status = pyqtSignal(str, str)  # url, new_status
     sig_add_url_to_list = pyqtSignal(str)  # url to add to UI
     sig_show_messagebox = pyqtSignal(str, str, str)
     sig_run_on_gui = pyqtSignal(object)  # callable for GUI thread
-    sig_downloads_finished = pyqtSignal()  # queue complete
 
     def __init__(self, thread_pool: ThreadPoolExecutor, parent=None):
         super().__init__(parent)
@@ -46,6 +44,7 @@ class ClipboardManager(QObject):
         self.clipboard_url_list: deque[dict] = deque()  # [{"url": str, "status": str}]
         self.completed_count = 0
         self.failed_count = 0
+        self.downloading_count = 0
         self.clipboard_download_path = str(Path.home() / "Downloads")
         self.clipboard_stop_event = threading.Event()  # set = stopped
         self.clipboard_stop_event.set()  # initially stopped

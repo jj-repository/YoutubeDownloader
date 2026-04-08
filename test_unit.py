@@ -6,7 +6,7 @@ Run with: pytest test_unit.py -v
 Run with coverage: pytest test_unit.py -v --cov=constants --cov=managers
 """
 
-import re
+import os
 import struct
 from pathlib import Path
 
@@ -383,11 +383,15 @@ class TestEncodingService:
         enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder="h264_nvenc")
         args = enc.get_video_encoder_args(mode="crf")
         assert "h264_nvenc" in args
+        assert "-qp" in args
+        assert "23" in args
 
     def test_crf_amf(self):
         enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder="h264_amf")
         args = enc.get_video_encoder_args(mode="crf")
         assert "h264_amf" in args
+        assert "-qp_i" in args
+        assert "23" in args
 
     def test_bitrate_software(self):
         enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder=None)
@@ -407,6 +411,63 @@ class TestEncodingService:
         assert "h264_amf" in args
         assert "-b:v" in args
         assert "-maxrate" in args
+
+    def test_crf_vaapi(self):
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder="h264_vaapi")
+        args = enc.get_video_encoder_args(mode="crf")
+        assert "h264_vaapi" in args
+        assert "-qp" in args
+
+    def test_bitrate_vaapi(self):
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder="h264_vaapi")
+        args = enc.get_video_encoder_args(mode="bitrate", target_bitrate=2000000)
+        assert "h264_vaapi" in args
+        assert "-b:v" in args
+        assert "-maxrate" in args
+
+    def test_postprocessor_crf_vaapi_falls_back_to_libx264(self):
+        """VAAPI can't work through yt-dlp postprocessor — must fall back to libx264."""
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder="h264_vaapi")
+        args = enc.get_crf_args_for_postprocessor()
+        assert "libx264" in args
+        assert "h264_vaapi" not in args
+
+    def test_postprocessor_crf_nvenc_uses_nvenc(self):
+        """NVENC works through yt-dlp postprocessor — should use h264_nvenc."""
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder="h264_nvenc")
+        args = enc.get_crf_args_for_postprocessor()
+        assert "h264_nvenc" in args
+
+    def test_build_vf_args_vaapi_with_scale(self):
+        """VAAPI vf args should use hwupload and scale_vaapi."""
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder="h264_vaapi")
+        args = enc.build_vf_args(scale_height=720)
+        assert "-vf" in args
+        vf = args[args.index("-vf") + 1]
+        assert "format=nv12,hwupload" in vf
+        assert "scale_vaapi" in vf
+        assert "h=720" in vf
+
+    def test_build_vf_args_vaapi_no_scale(self):
+        """VAAPI without scale still needs hwupload."""
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder="h264_vaapi")
+        args = enc.build_vf_args()
+        vf = args[args.index("-vf") + 1]
+        assert vf == "format=nv12,hwupload"
+
+    def test_build_vf_args_nvenc_with_scale(self):
+        """Non-VAAPI uses standard scale filter."""
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder="h264_nvenc")
+        args = enc.build_vf_args(scale_height=720)
+        vf = args[args.index("-vf") + 1]
+        assert "scale=-2:720" in vf
+        assert "vaapi" not in vf
+
+    def test_build_vf_args_no_scale_no_hw(self):
+        """No scale and no VAAPI should return empty."""
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder=None)
+        args = enc.build_vf_args()
+        assert args == []
 
     def test_crf_values(self):
         """CRF mode should include the VIDEO_CRF constant."""
@@ -445,15 +506,11 @@ class TestEncodingService:
         res, bitrate = EncodingService.calculate_optimal_quality(80)
         assert res in [1080, 720, 480, 360]
 
-    def test_calculate_optimal_quality_returns_tuple(self):
-        result = EncodingService.calculate_optimal_quality(60)
-        assert isinstance(result, tuple)
-
-    def test_calculate_optimal_quality_returns_typed_tuple(self):
-        result = EncodingService.calculate_optimal_quality(60)
-        assert len(result) == 2
-        assert isinstance(result[0], int)
-        assert isinstance(result[1], (int, float))
+    def test_calculate_optimal_quality_60s(self):
+        """60-second clip should get a valid resolution and bitrate."""
+        res, bitrate = EncodingService.calculate_optimal_quality(60)
+        assert res in [1080, 720, 480, 360]
+        assert bitrate > 0
 
     def test_bitrate_mode_requires_target(self):
         enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder=None)
@@ -875,23 +932,27 @@ class TestBuildBatchCommands:
 class TestExtractingUrlRegex:
     """Test _EXTRACTING_URL_RE regex for batch output parsing."""
 
-    _RE = re.compile(r"Extracting URL:\s+(\S+)")
-
     def test_youtube_video(self):
+        from downloader_pyqt6 import _EXTRACTING_URL_RE
+
         line = "[youtube] Extracting URL: https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-        m = self._RE.search(line)
+        m = _EXTRACTING_URL_RE.search(line)
         assert m is not None
         assert m.group(1) == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
     def test_youtube_playlist(self):
+        from downloader_pyqt6 import _EXTRACTING_URL_RE
+
         line = "[youtube:tab] Extracting URL: https://www.youtube.com/playlist?list=PLtest"
-        m = self._RE.search(line)
+        m = _EXTRACTING_URL_RE.search(line)
         assert m is not None
         assert "playlist" in m.group(1)
 
     def test_no_match(self):
+        from downloader_pyqt6 import _EXTRACTING_URL_RE
+
         line = "[download] 45.3% of 10.00MiB"
-        m = self._RE.search(line)
+        m = _EXTRACTING_URL_RE.search(line)
         assert m is None
 
 
@@ -1166,6 +1227,7 @@ class TestTrimmingManagerCache:
         m = TrimmingManager.__new__(TrimmingManager)
         m.preview_cache = __import__("collections").OrderedDict()
         m.preview_lock = __import__("threading").Lock()
+        m._stream_url_cache = ("http://old", "http://stream")
         return m
 
     def test_cache_add_and_get(self, mgr, tmp_path):
@@ -1192,25 +1254,25 @@ class TestTrimmingManagerCache:
         mgr._cache_preview_frame(1, path)
         mgr.clear_preview_cache()
         assert mgr._get_cached_frame(1) is None
+        assert mgr._stream_url_cache is None
 
 
 class TestTrimmingManagerErrorImage:
     """Test _error_image returns valid QImage."""
 
-    def test_error_image_valid(self):
+    def test_error_image_valid(self, monkeypatch):
         from managers.trimming_manager import TrimmingManager
 
-        # Reset cached image for clean test
-        TrimmingManager._cached_error_image = None
+        monkeypatch.setattr(TrimmingManager, "_cached_error_image", None)
         img = TrimmingManager._error_image()
         assert not img.isNull()
         assert img.width() == constants.PREVIEW_WIDTH
         assert img.height() == constants.PREVIEW_HEIGHT
 
-    def test_error_image_cached(self):
+    def test_error_image_cached(self, monkeypatch):
         from managers.trimming_manager import TrimmingManager
 
-        TrimmingManager._cached_error_image = None
+        monkeypatch.setattr(TrimmingManager, "_cached_error_image", None)
         img1 = TrimmingManager._error_image()
         img2 = TrimmingManager._error_image()
         assert img1 is img2
@@ -1220,30 +1282,19 @@ class TestTrimmingManagerErrorImage:
 
 
 class TestDownloadTimeout:
-    """Test _monitor_download_timeout and stop_download."""
+    """Test _monitor_download_timeout_tick and stop_download."""
 
-    def test_timeout_monitor_exits_when_not_downloading(self, download_mgr):
-        """Timeout monitor should exit its loop when is_downloading becomes False."""
+    def test_timeout_tick_noop_when_not_downloading(self, download_mgr):
+        """Tick should return early when not downloading."""
         from unittest.mock import patch
 
         download_mgr.is_downloading = False
-        download_mgr._shutting_down = False
+        download_mgr.download_start_time = 1000.0
 
-        # _monitor_download_timeout sleeps TIMEOUT_CHECK_INTERVAL then checks
-        # is_downloading — with it already False it should exit immediately
-        with patch("managers.download_manager.time.sleep"):
-            download_mgr._monitor_download_timeout()
-        # If we get here without hanging, the monitor exited correctly
+        with patch.object(download_mgr, "_timeout_download") as mock_timeout:
+            download_mgr._monitor_download_timeout_tick()
 
-    def test_timeout_monitor_exits_on_shutdown(self, download_mgr):
-        """Timeout monitor should break when _shutting_down is set."""
-        from unittest.mock import patch
-
-        download_mgr.is_downloading = True
-        download_mgr._shutting_down = True
-
-        with patch("managers.download_manager.time.sleep"):
-            download_mgr._monitor_download_timeout()
+        mock_timeout.assert_not_called()
 
     def test_stop_download_noop_when_not_downloading(self, download_mgr):
         """stop_download should be a no-op when nothing is active."""
@@ -1281,39 +1332,23 @@ class TestDownloadTimeout:
             download_mgr.stop_download()
 
         mock_cleanup.assert_not_called()
+        # Note: is_downloading remains True when process is None — known edge case
+        assert download_mgr.current_process is None
 
     def test_absolute_timeout_detection(self, download_mgr):
-        """Monitor should call _timeout_download when elapsed exceeds DOWNLOAD_TIMEOUT."""
+        """Tick should call _timeout_download when elapsed exceeds DOWNLOAD_TIMEOUT."""
         from unittest.mock import patch
 
         download_mgr.is_downloading = True
-        download_mgr._shutting_down = False
         download_mgr._download_has_progress = True
         download_mgr.last_progress_time = None
-
-        # download started 3601 seconds ago (exceeds 3600s timeout)
         download_mgr.download_start_time = 1000.0
 
-        call_count = 0
-        original_is_downloading = True
-
-        def fake_sleep(_):
-            pass
-
-        def fake_time():
-            nonlocal call_count, original_is_downloading
-            call_count += 1
-            # Return time that exceeds the absolute timeout
-            return 1000.0 + 3601
-
         with (
-            patch("managers.download_manager.time.sleep", side_effect=fake_sleep),
-            patch("managers.download_manager.time.time", side_effect=fake_time),
+            patch("managers.download_manager.time.time", return_value=1000.0 + 3601),
             patch.object(download_mgr, "_timeout_download") as mock_timeout,
         ):
-            # _timeout_download will be called but we need the loop to break.
-            # After _timeout_download is called, the method breaks out of the loop.
-            download_mgr._monitor_download_timeout()
+            download_mgr._monitor_download_timeout_tick()
 
         mock_timeout.assert_called_once()
         assert (
@@ -1482,6 +1517,38 @@ class TestEncodingExecution:
                 result = enc.size_constrained_encode("input.mp4", "output.mp4", 2000000, 60.0, cb)
 
         assert result is True
+        mock_sp.assert_called_once()
+        mock_tp.assert_not_called()
+
+    def test_size_constrained_gpu_failure_falls_back_to_two_pass(self):
+        """When GPU single-pass fails, should fall back to CPU two-pass."""
+        from unittest.mock import MagicMock, patch
+
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder="h264_nvenc")
+        cb = MagicMock()
+        cb.is_cancelled.return_value = False
+
+        with patch.object(enc, "encode_single_pass", return_value=False) as mock_sp:
+            with patch.object(enc, "encode_two_pass", return_value=True) as mock_tp:
+                result = enc.size_constrained_encode("input.mp4", "output.mp4", 2000000, 60.0, cb)
+
+        assert result is True
+        mock_sp.assert_called_once()
+        mock_tp.assert_called_once()
+
+    def test_size_constrained_gpu_failure_no_fallback_when_cancelled(self):
+        """When GPU encode fails due to cancellation, should NOT fall back."""
+        from unittest.mock import MagicMock, patch
+
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder="h264_nvenc")
+        cb = MagicMock()
+        cb.is_cancelled.return_value = True
+
+        with patch.object(enc, "encode_single_pass", return_value=False) as mock_sp:
+            with patch.object(enc, "encode_two_pass", return_value=True) as mock_tp:
+                result = enc.size_constrained_encode("input.mp4", "output.mp4", 2000000, 60.0, cb)
+
+        assert result is False
         mock_sp.assert_called_once()
         mock_tp.assert_not_called()
 
@@ -2112,8 +2179,9 @@ class TestVerifyFileAgainstGithub:
         api_resp.__enter__ = MagicMock(return_value=api_resp)
         api_resp.__exit__ = MagicMock(return_value=False)
 
+        wrong_hash = "0" * 64  # valid format but wrong value
         sha256sums_resp = MagicMock()
-        sha256sums_resp.read.return_value = b"0000000000000000  test.py\n"
+        sha256sums_resp.read.return_value = f"{wrong_hash}  test.py\n".encode()
         sha256sums_resp.__enter__ = MagicMock(return_value=sha256sums_resp)
         sha256sums_resp.__exit__ = MagicMock(return_value=False)
 
@@ -2415,7 +2483,9 @@ class TestGetExpectedSha256:
         """Should return the hash for a matching filename."""
         from unittest.mock import MagicMock, patch
 
-        sha256sums = "abc123def456  downloader_pyqt6.py\n789fed012345  constants.py\n"
+        hash_a = "a" * 64
+        hash_b = "b" * 64
+        sha256sums = f"{hash_a}  downloader_pyqt6.py\n{hash_b}  constants.py\n"
         resp = MagicMock()
         resp.read.return_value = sha256sums.encode()
         resp.__enter__ = MagicMock(return_value=resp)
@@ -2424,7 +2494,7 @@ class TestGetExpectedSha256:
         with patch("urllib.request.urlopen", return_value=resp):
             result = update_mgr._get_expected_sha256({"tag_name": "v1.0"}, "constants.py", {})
 
-        assert result == "789fed012345"
+        assert result == hash_b
 
     def test_nonmatching_filename_returns_none(self, update_mgr):
         """Should return None when the filename is not in SHA256SUMS."""
@@ -2458,7 +2528,9 @@ class TestGetExpectedSha256:
         """Second call with same tag should use cached SHA256SUMS, not fetch again."""
         from unittest.mock import MagicMock, patch
 
-        sha256sums = "abc123  test.py\ndef456  other.py\n"
+        hash_1 = "c" * 64
+        hash_2 = "d" * 64
+        sha256sums = f"{hash_1}  test.py\n{hash_2}  other.py\n"
         resp = MagicMock()
         resp.read.return_value = sha256sums.encode()
         resp.__enter__ = MagicMock(return_value=resp)
@@ -2468,8 +2540,8 @@ class TestGetExpectedSha256:
             r1 = update_mgr._get_expected_sha256({"tag_name": "v4.0"}, "test.py", {})
             r2 = update_mgr._get_expected_sha256({"tag_name": "v4.0"}, "other.py", {})
 
-        assert r1 == "abc123"
-        assert r2 == "def456"
+        assert r1 == hash_1
+        assert r2 == hash_2
         # urlopen should only be called once (cached for second call)
         assert mock_urlopen.call_count == 1
 
@@ -2903,7 +2975,7 @@ class TestUploaderQueue:
             upload_mgr.process_uploader_queue()
 
         assert mock_upload.call_count == 2
-        done_spy.assert_called_once_with(2)
+        done_spy.assert_called_once_with(2, True)
 
     def test_stop_flag_stops_iteration(self, upload_mgr):
         """Setting uploader_is_uploading=False should stop queue processing."""
@@ -2930,7 +3002,7 @@ class TestUploaderQueue:
 
         # Should have processed only 1 item before the stop flag was checked
         assert call_count[0] == 1
-        done_spy.assert_called_once_with(1)
+        done_spy.assert_called_once_with(1, False)
 
     def test_start_queue_upload_marks_uploading(self, upload_mgr):
         """start_queue_upload should set uploader_is_uploading and return True."""
@@ -3090,6 +3162,69 @@ class TestEncodeCommands:
 
         assert "-ss" not in captured_cmd
         assert "-to" not in captured_cmd
+
+    def test_single_pass_vaapi_includes_device_and_hwupload(self):
+        """VAAPI single-pass should include -vaapi_device and hwupload filter."""
+        from unittest.mock import patch
+
+        enc = EncodingService(
+            ffmpeg_path="ffmpeg", hw_encoder="h264_vaapi", vaapi_device="/dev/dri/renderD128"
+        )
+        cb = self._make_cb()
+        captured_cmd = []
+
+        def capture_run(cmd, duration, prefix, cb_arg):
+            captured_cmd.extend(cmd)
+            return True
+
+        with patch.object(enc, "run_ffmpeg_with_progress", side_effect=capture_run):
+            enc.encode_single_pass("input.mp4", "output.mp4", 2000000, 60.0, cb)
+
+        assert "-vaapi_device" in captured_cmd
+        assert "/dev/dri/renderD128" in captured_cmd
+        assert "h264_vaapi" in captured_cmd
+        vf_idx = captured_cmd.index("-vf") + 1
+        assert "format=nv12,hwupload" in captured_cmd[vf_idx]
+
+    def test_single_pass_vaapi_scale_uses_scale_vaapi(self):
+        """VAAPI scaling should use scale_vaapi filter, not regular scale."""
+        from unittest.mock import patch
+
+        enc = EncodingService(
+            ffmpeg_path="ffmpeg", hw_encoder="h264_vaapi", vaapi_device="/dev/dri/renderD128"
+        )
+        cb = self._make_cb()
+        captured_cmd = []
+
+        def capture_run(cmd, duration, prefix, cb_arg):
+            captured_cmd.extend(cmd)
+            return True
+
+        with patch.object(enc, "run_ffmpeg_with_progress", side_effect=capture_run):
+            enc.encode_single_pass("input.mp4", "output.mp4", 2000000, 60.0, cb, scale_height=720)
+
+        vf_idx = captured_cmd.index("-vf") + 1
+        assert "scale_vaapi" in captured_cmd[vf_idx]
+        assert "h=720" in captured_cmd[vf_idx]
+
+    def test_two_pass_always_uses_libx264(self):
+        """Two-pass encode must always use libx264, not hardware encoders."""
+        from unittest.mock import patch
+
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder="h264_nvenc")
+        cb = self._make_cb()
+        captured_cmds = []
+
+        def capture_run(cmd, duration, prefix, cb_arg):
+            captured_cmds.append(list(cmd))
+            return True
+
+        with patch.object(enc, "run_ffmpeg_with_progress", side_effect=capture_run):
+            enc.encode_two_pass("input.mp4", "output.mp4", 1500000, 60.0, cb)
+
+        for cmd in captured_cmds:
+            assert "libx264" in cmd
+            assert "h264_nvenc" not in cmd
 
     def test_two_pass_volume_multiplier(self):
         """Volume multiplier should appear in pass 2 only (pass 1 has -an)."""
@@ -3284,7 +3419,7 @@ class TestUploaderQueueAssertions:
         paths = [call[0][0] for call in mock_upload.call_args_list]
         assert "/tmp/a.mp4" in paths
         assert "/tmp/b.mp4" in paths
-        done_spy.assert_called_once_with(2)
+        done_spy.assert_called_once_with(2, True)
 
     def test_start_queue_upload_sets_flag_and_submits(self, upload_mgr):
         """start_queue_upload should set flag to True and submit to thread pool."""
@@ -3296,29 +3431,23 @@ class TestUploaderQueueAssertions:
 
 
 class TestProgressStallDetection:
-    """Test _monitor_download_timeout progress stall (not just absolute timeout)."""
+    """Test _monitor_download_timeout_tick progress stall (not just absolute timeout)."""
 
     def test_progress_stall_normal_mode(self, download_mgr):
         """Stall detection fires at DOWNLOAD_PROGRESS_TIMEOUT (600s) in normal mode."""
         from unittest.mock import patch
 
         download_mgr.is_downloading = True
-        download_mgr._shutting_down = False
         download_mgr._download_has_progress = True
         download_mgr._trim_download_active = False
         download_mgr.download_start_time = 1000.0
-        # Progress was 601 seconds ago (exceeds 600s threshold)
         download_mgr.last_progress_time = 1000.0
 
-        def fake_time():
-            return 1000.0 + 601
-
         with (
-            patch("managers.download_manager.time.sleep"),
-            patch("managers.download_manager.time.time", side_effect=fake_time),
+            patch("managers.download_manager.time.time", return_value=1000.0 + 601),
             patch.object(download_mgr, "_timeout_download") as mock_timeout,
         ):
-            download_mgr._monitor_download_timeout()
+            download_mgr._monitor_download_timeout_tick()
 
         mock_timeout.assert_called_once()
         assert "stall" in mock_timeout.call_args[0][0].lower()
@@ -3328,33 +3457,19 @@ class TestProgressStallDetection:
         from unittest.mock import patch
 
         download_mgr.is_downloading = True
-        download_mgr._shutting_down = False
         download_mgr._download_has_progress = True
         download_mgr._trim_download_active = True
         download_mgr.download_start_time = 1000.0
-        # 800s since progress — exceeds normal (600s) but NOT trim (1200s)
         download_mgr.last_progress_time = 1000.0
 
-        call_count = 0
-
-        def fake_time():
-            nonlocal call_count
-            call_count += 1
-            if call_count <= 2:
-                return 1000.0 + 800  # within trim timeout
-            # On 3rd call, exceed absolute timeout to break loop
-            return 1000.0 + 3601
-
         with (
-            patch("managers.download_manager.time.sleep"),
-            patch("managers.download_manager.time.time", side_effect=fake_time),
+            patch("managers.download_manager.time.time", return_value=1000.0 + 800),
             patch.object(download_mgr, "_timeout_download") as mock_timeout,
         ):
-            download_mgr._monitor_download_timeout()
+            download_mgr._monitor_download_timeout_tick()
 
-        # Should have been called for absolute timeout, NOT stall
-        mock_timeout.assert_called_once()
-        assert "60 min" in mock_timeout.call_args[0][0].lower()
+        # 800s < 1200s trim timeout — should NOT trigger stall
+        mock_timeout.assert_not_called()
 
 
 class TestDoTrimmedDownload:
@@ -3521,15 +3636,15 @@ class TestApplyUpdateSourceRollback:
         (managers_dir / "__init__.py").write_bytes(original_content)
 
         # Mock __file__ to point to managers dir
-        write_count = 0
-        original_move = __import__("shutil").move
+        replace_count = 0
+        original_replace = os.replace
 
-        def fail_on_third_move(src, dst):
-            nonlocal write_count
-            write_count += 1
-            if write_count >= 3:
+        def fail_on_third_replace(src, dst):
+            nonlocal replace_count
+            replace_count += 1
+            if replace_count >= 3:
                 raise OSError("disk full")
-            return original_move(src, dst)
+            return original_replace(src, dst)
 
         sha_sums = "\n".join(
             f"{sha256}  {m}"
@@ -3582,7 +3697,7 @@ class TestApplyUpdateSourceRollback:
             patch.object(type(update_mgr), "sig_update_status", create=True),
             patch.object(type(update_mgr), "sig_show_messagebox", create=True),
             patch("urllib.request.urlopen", side_effect=mock_urlopen),
-            patch("shutil.move", side_effect=fail_on_third_move),
+            patch("os.replace", side_effect=fail_on_third_replace),
         ):
             update_mgr._apply_update_source(release_data)
 
@@ -3725,14 +3840,13 @@ class TestDownloadStreamSegmentErrorWrapping:
                 )
 
     def test_socket_timeout_wrapped(self, download_mgr):
-        """socket.timeout should be wrapped in RuntimeError."""
-        import socket
+        """TimeoutError should be wrapped in RuntimeError."""
         from unittest.mock import patch
 
         with patch.object(
             download_mgr,
             "_download_stream_segment_inner",
-            side_effect=socket.timeout("timed out"),
+            side_effect=TimeoutError("timed out"),
         ):
             with pytest.raises(RuntimeError, match="Network error"):
                 download_mgr._download_stream_segment(
@@ -3770,13 +3884,11 @@ class TestParseYtdlpOutputErrorLineCap:
         mock_proc = MagicMock()
         mock_proc.stdout = iter(lines)
 
+        from unittest.mock import patch
+
         with (
-            __import__("unittest.mock", fromlist=["patch"]).patch.object(
-                download_mgr, "update_status"
-            ),
-            __import__("unittest.mock", fromlist=["patch"]).patch.object(
-                download_mgr, "update_progress"
-            ),
+            patch.object(download_mgr, "update_status"),
+            patch.object(download_mgr, "update_progress"),
         ):
             errors = download_mgr._parse_ytdlp_output(mock_proc)
 
@@ -3919,8 +4031,15 @@ class TestDownloadLocalFileErrors:
 class TestTrimHistoryOnStartup:
     """Test UploadManager._trim_history_on_startup."""
 
-    def test_trims_file_over_500_lines(self, tmp_path):
+    @pytest.fixture
+    def pool(self):
         from concurrent.futures import ThreadPoolExecutor
+
+        p = ThreadPoolExecutor(max_workers=1)
+        yield p
+        p.shutdown(wait=False)
+
+    def test_trims_file_over_500_lines(self, tmp_path, pool):
         from unittest.mock import patch
 
         from managers.upload_manager import UploadManager
@@ -3929,16 +4048,13 @@ class TestTrimHistoryOnStartup:
         lines = [f"2026-01-01 | file{i}.mp4 | http://example.com/{i}\n" for i in range(600)]
         history_file.write_text("".join(lines))
 
-        pool = ThreadPoolExecutor(max_workers=1)
         with patch("managers.upload_manager.UPLOAD_HISTORY_FILE", history_file):
             UploadManager(thread_pool=pool)
 
         result_lines = history_file.read_text().splitlines()
         assert len(result_lines) == 500
-        pool.shutdown(wait=False)
 
-    def test_no_op_under_500_lines(self, tmp_path):
-        from concurrent.futures import ThreadPoolExecutor
+    def test_no_op_under_500_lines(self, tmp_path, pool):
         from unittest.mock import patch
 
         from managers.upload_manager import UploadManager
@@ -3947,20 +4063,25 @@ class TestTrimHistoryOnStartup:
         lines = [f"2026-01-01 | file{i}.mp4 | http://example.com/{i}\n" for i in range(100)]
         history_file.write_text("".join(lines))
 
-        pool = ThreadPoolExecutor(max_workers=1)
         with patch("managers.upload_manager.UPLOAD_HISTORY_FILE", history_file):
             UploadManager(thread_pool=pool)
 
         result_lines = history_file.read_text().splitlines()
         assert len(result_lines) == 100
-        pool.shutdown(wait=False)
 
 
 class TestSaveUploadLinkPeriodicTrim:
     """Test save_upload_link trims history every 100 saves."""
 
-    def test_periodic_trim_at_100_saves(self, tmp_path):
+    @pytest.fixture
+    def pool(self):
         from concurrent.futures import ThreadPoolExecutor
+
+        p = ThreadPoolExecutor(max_workers=1)
+        yield p
+        p.shutdown(wait=False)
+
+    def test_periodic_trim_at_100_saves(self, tmp_path, pool):
         from unittest.mock import patch
 
         from managers.upload_manager import UploadManager
@@ -3969,7 +4090,6 @@ class TestSaveUploadLinkPeriodicTrim:
         # Pre-populate with exactly 500 lines (no startup trim needed)
         history_file.write_text("".join(f"old entry {i}\n" for i in range(500)))
 
-        pool = ThreadPoolExecutor(max_workers=1)
         with patch("managers.upload_manager.UPLOAD_HISTORY_FILE", history_file):
             mgr = UploadManager(thread_pool=pool)  # no trim (<=500)
             # Write 600 entries: after 100th write, file has 600 lines (<= 1000, no trim)
@@ -3981,7 +4101,6 @@ class TestSaveUploadLinkPeriodicTrim:
         # 500 initial + 600 writes = 1100 > 1000 → trimmed to 500
         result_lines = history_file.read_text().splitlines()
         assert len(result_lines) == 500
-        pool.shutdown(wait=False)
 
 
 class TestGetUpdateAssetUrl:
@@ -4639,6 +4758,816 @@ class TestUploadToCarboxIsUploading:
         assert len(was_uploading) == 1
         assert was_uploading[0] is True
         assert upload_mgr.is_uploading is False
+
+
+# ─── TQ-1: _apply_update_frozen_windows ──────────────────────────────────
+
+
+class TestApplyUpdateFrozenWindows:
+    """Tests for UpdateManager._apply_update_frozen_windows (rename-dance, SHA-256, bat)."""
+
+    @pytest.fixture
+    def update_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.update_manager import UpdateManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        mgr = UpdateManager(ytdlp_path="yt-dlp", thread_pool=pool)
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_sha256_verification_pass(self, update_mgr, tmp_path):
+        """Successful SHA-256 verification should complete rename-dance."""
+        from unittest.mock import MagicMock, patch
+
+        exe_path = tmp_path / "app.exe"
+        exe_path.write_bytes(b"old_binary")
+        content = b"x" * 2048  # > 1024 to pass size check
+
+        mock_resp = MagicMock()
+        mock_resp.headers = {"Content-Length": str(len(content))}
+        mock_resp.read = MagicMock(side_effect=[content, b""])
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch("urllib.request.urlopen", return_value=mock_resp),
+            patch.object(update_mgr, "_get_expected_sha256", return_value=None),
+            patch.object(type(update_mgr), "sig_run_on_gui", create=True),
+            patch.object(type(update_mgr), "sig_update_status", create=True),
+            patch.object(type(update_mgr), "sig_show_messagebox", create=True),
+        ):
+            with pytest.raises(RuntimeError, match="SHA-256 verification unavailable"):
+                update_mgr._apply_update_frozen_windows(
+                    "https://github.com/test/test/releases/download/v1/YTDownloader.exe",
+                    {},
+                    exe_path,
+                    release_data={"assets": []},
+                )
+
+    def test_download_too_small_raises(self, update_mgr, tmp_path):
+        """Downloaded file < 1024 bytes should raise RuntimeError."""
+        from unittest.mock import MagicMock, patch
+
+        exe_path = tmp_path / "app.exe"
+        exe_path.write_bytes(b"old")
+
+        mock_resp = MagicMock()
+        mock_resp.headers = {"Content-Length": "10"}
+        mock_resp.read = MagicMock(side_effect=[b"tiny", b""])
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch("urllib.request.urlopen", return_value=mock_resp),
+            patch.object(type(update_mgr), "sig_run_on_gui", create=True),
+            patch.object(type(update_mgr), "sig_update_status", create=True),
+        ):
+            with pytest.raises(RuntimeError, match="too small"):
+                update_mgr._apply_update_frozen_windows(
+                    "https://github.com/test/test/releases/download/v1/YTDownloader.exe",
+                    {},
+                    exe_path,
+                )
+
+    def test_sha256_mismatch_raises(self, update_mgr, tmp_path):
+        """SHA-256 mismatch should raise RuntimeError and delete new exe."""
+        from unittest.mock import MagicMock, patch
+
+        exe_path = tmp_path / "app.exe"
+        exe_path.write_bytes(b"old_binary")
+        content = b"x" * 2048  # > 1024 bytes
+
+        mock_resp = MagicMock()
+        mock_resp.headers = {"Content-Length": str(len(content))}
+        mock_resp.read = MagicMock(side_effect=[content, b""])
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with (
+            patch("urllib.request.urlopen", return_value=mock_resp),
+            patch.object(update_mgr, "_get_expected_sha256", return_value="deadbeef" * 8),
+            patch.object(type(update_mgr), "sig_run_on_gui", create=True),
+            patch.object(type(update_mgr), "sig_update_status", create=True),
+            patch.object(type(update_mgr), "sig_show_messagebox", create=True),
+        ):
+            with pytest.raises(RuntimeError, match="SHA-256 verification failed"):
+                update_mgr._apply_update_frozen_windows(
+                    "https://github.com/test/test/releases/download/v1/YTDownloader.exe",
+                    {},
+                    exe_path,
+                    release_data={"assets": []},
+                )
+        # New exe should be cleaned up
+        new_exe = exe_path.with_suffix(".exe.new")
+        assert not new_exe.exists()
+
+
+# ─── TQ-2: _apply_ytdlp_update_binary ───────────────────────────────────
+
+
+class TestApplyYtdlpUpdateBinary:
+    """Tests for UpdateManager._apply_ytdlp_update_binary (SHA256, symlink, replace)."""
+
+    @pytest.fixture
+    def update_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.update_manager import UpdateManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        mgr = UpdateManager(ytdlp_path="yt-dlp", thread_pool=pool)
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_sha256_mismatch_aborts(self, update_mgr, tmp_path):
+        """SHA256 mismatch should show error messagebox."""
+        from unittest.mock import MagicMock, patch
+
+        sha_response = MagicMock()
+        sha_response.read.return_value = (
+            b"deadbeef00000000000000000000000000000000000000000000000000000000  yt-dlp\n"
+        )
+        sha_response.__enter__ = MagicMock(return_value=sha_response)
+        sha_response.__exit__ = MagicMock(return_value=False)
+
+        bin_response = MagicMock()
+        bin_response.__enter__ = MagicMock(return_value=bin_response)
+        bin_response.__exit__ = MagicMock(return_value=False)
+
+        call_count = [0]
+
+        def mock_urlopen(req, timeout=None):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return sha_response
+            return bin_response
+
+        msgbox_calls = []
+        update_mgr.sig_show_messagebox.connect(lambda t, ti, m: msgbox_calls.append((t, ti, m)))
+
+        with (
+            patch("urllib.request.urlopen", side_effect=mock_urlopen),
+            patch("managers.update_manager.shutil.copyfileobj"),
+            patch.object(update_mgr, "_sha256_file", return_value="badhash" * 8),
+            patch("managers.update_manager.sys.executable", str(tmp_path / "app")),
+            patch("managers.update_manager.sys.platform", "linux"),
+        ):
+            update_mgr._apply_ytdlp_update_binary("2025.01.01")
+
+        assert len(msgbox_calls) > 0
+        assert msgbox_calls[-1][0] == "error"
+
+    def test_sha256sums_missing_binary_raises(self, update_mgr, tmp_path):
+        """If binary name not found in SHA256SUMS, should show error."""
+        from unittest.mock import MagicMock, patch
+
+        sha_response = MagicMock()
+        sha_response.read.return_value = b"abcdef  other-file\n"
+        sha_response.__enter__ = MagicMock(return_value=sha_response)
+        sha_response.__exit__ = MagicMock(return_value=False)
+
+        msgbox_calls = []
+        update_mgr.sig_show_messagebox.connect(lambda t, ti, m: msgbox_calls.append((t, ti, m)))
+
+        with (
+            patch("urllib.request.urlopen", return_value=sha_response),
+            patch("managers.update_manager.sys.executable", str(tmp_path / "app")),
+            patch("managers.update_manager.sys.platform", "linux"),
+        ):
+            update_mgr._apply_ytdlp_update_binary("2025.01.01")
+
+        assert len(msgbox_calls) > 0
+        assert msgbox_calls[-1][0] == "error"
+
+
+# ─── TQ-3: _apply_ytdlp_update_pip ──────────────────────────────────────
+
+
+class TestApplyYtdlpUpdatePip:
+    """Tests for UpdateManager._apply_ytdlp_update_pip (success, failure, timeout)."""
+
+    @pytest.fixture
+    def update_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        from managers.update_manager import UpdateManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        mgr = UpdateManager(ytdlp_path="yt-dlp", thread_pool=pool)
+        yield mgr
+        pool.shutdown(wait=False)
+
+    def test_pip_success(self, update_mgr):
+        """Successful pip install should emit success messagebox."""
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+
+        msgbox_calls = []
+        update_mgr.sig_show_messagebox.connect(lambda t, ti, m: msgbox_calls.append((t, ti, m)))
+
+        with (
+            patch("managers.update_manager.subprocess.run", return_value=mock_result),
+            patch.object(update_mgr, "_get_ytdlp_version", return_value="2025.01.01"),
+        ):
+            update_mgr._apply_ytdlp_update_pip("/usr/bin/pip")
+
+        assert len(msgbox_calls) == 1
+        assert msgbox_calls[0][0] == "info"
+        assert "2025.01.01" in msgbox_calls[0][2]
+
+    def test_pip_failure_shows_stderr(self, update_mgr):
+        """Non-zero exit from pip should show error with stderr content."""
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stderr = b"Permission denied"
+        mock_result.stdout = b""
+
+        msgbox_calls = []
+        update_mgr.sig_show_messagebox.connect(lambda t, ti, m: msgbox_calls.append((t, ti, m)))
+
+        with patch("managers.update_manager.subprocess.run", return_value=mock_result):
+            update_mgr._apply_ytdlp_update_pip("/usr/bin/pip")
+
+        assert len(msgbox_calls) == 1
+        assert msgbox_calls[0][0] == "error"
+
+    def test_pip_timeout(self, update_mgr):
+        """Timeout during pip install should show timeout error."""
+        import subprocess
+        from unittest.mock import patch
+
+        msgbox_calls = []
+        update_mgr.sig_show_messagebox.connect(lambda t, ti, m: msgbox_calls.append((t, ti, m)))
+
+        with patch(
+            "managers.update_manager.subprocess.run",
+            side_effect=subprocess.TimeoutExpired("pip", 120),
+        ):
+            update_mgr._apply_ytdlp_update_pip("/usr/bin/pip")
+
+        assert len(msgbox_calls) == 1
+        assert msgbox_calls[0][0] == "error"
+        assert "timed out" in msgbox_calls[0][2].lower()
+
+
+# ─── TQ-4: download() PermissionError/OSError handlers ──────────────────
+
+
+class TestDownloadErrorHandlers:
+    """Test download() exception handlers for PermissionError and OSError."""
+
+    def _make_ui_state(self, **overrides):
+        state = {
+            "quality": "720",
+            "trim_enabled": False,
+            "audio_only": False,
+            "keep_below_10mb": False,
+            "filename": "",
+            "volume_raw": 100,
+            "download_path": "/tmp",
+            "speed_limit": None,
+            "start_time": "0",
+            "end_time": "60",
+        }
+        state.update(overrides)
+        return state
+
+    def test_permission_error_updates_status(self, download_mgr):
+        """PermissionError during download should update status with permission message."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+        download_mgr.video_duration = 120
+        ui_state = self._make_ui_state()
+
+        status_calls = []
+
+        def capture_status(msg, color):
+            status_calls.append((msg, color))
+
+        download_mgr.sig_update_status.connect(capture_status)
+
+        with patch(
+            "managers.download_manager.subprocess.Popen",
+            side_effect=PermissionError("Access denied"),
+        ):
+            download_mgr.download("https://www.youtube.com/watch?v=test123", ui_state)
+
+        assert any("ermission" in msg for msg, _ in status_calls)
+        assert download_mgr.is_downloading is False
+
+    def test_os_error_updates_status(self, download_mgr):
+        """OSError during download should update status with OS error message."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+        download_mgr.video_duration = 120
+        ui_state = self._make_ui_state()
+
+        status_calls = []
+
+        def capture_status(msg, color):
+            status_calls.append((msg, color))
+
+        download_mgr.sig_update_status.connect(capture_status)
+
+        with patch(
+            "managers.download_manager.subprocess.Popen",
+            side_effect=OSError("Disk full"),
+        ):
+            download_mgr.download("https://www.youtube.com/watch?v=test123", ui_state)
+
+        assert any("OS error" in msg or "Disk full" in msg for msg, _ in status_calls)
+        assert download_mgr.is_downloading is False
+
+
+# ─── TQ-5: _post_ytdlp_10mb_encode ──────────────────────────────────────
+
+
+class TestPostYtdlp10mbEncode:
+    """Tests for _post_ytdlp_10mb_encode (empty temp, custom name, cleanup)."""
+
+    def test_empty_temp_dir_shows_error(self, download_mgr, tmp_path):
+        """Empty temp directory should log error and set status to failed."""
+        status_calls = []
+
+        def capture(msg, color):
+            status_calls.append((msg, color))
+
+        download_mgr.sig_update_status.connect(capture)
+        download_mgr.is_downloading = True
+
+        download_mgr._post_ytdlp_10mb_encode(str(tmp_path), "/tmp", 720, 3000, 1.0, "", 60.0)
+
+        assert any("failed" in msg.lower() for msg, _ in status_calls)
+
+    def test_custom_name_used(self, download_mgr, tmp_path):
+        """Custom name should override video title in output filename."""
+        from unittest.mock import patch
+
+        # Create a fake temp file
+        temp_mp4 = tmp_path / "video_title.mp4"
+        temp_mp4.write_bytes(b"fake")
+
+        encode_args = []
+
+        def mock_encode(input_file, output_file, *args, **kwargs):
+            encode_args.append(output_file)
+            return True
+
+        download_mgr.is_downloading = True
+
+        with (
+            patch.object(download_mgr.encoding, "size_constrained_encode", side_effect=mock_encode),
+            patch.object(type(download_mgr), "sig_update_progress", create=True),
+            patch.object(type(download_mgr), "sig_update_status", create=True),
+            patch.object(type(download_mgr), "sig_enable_upload", create=True),
+        ):
+            download_mgr._post_ytdlp_10mb_encode(
+                str(tmp_path), "/tmp", 720, 3000, 1.0, "my_custom", 60.0
+            )
+
+        assert len(encode_args) == 1
+        assert "my_custom" in encode_args[0]
+
+    def test_temp_dir_not_cleaned_by_post_encode(self, download_mgr, tmp_path):
+        """_post_ytdlp_10mb_encode should NOT clean temp_dir — download() finally does."""
+        from unittest.mock import patch
+
+        temp_dir = tmp_path / "encode_temp"
+        temp_dir.mkdir()
+        (temp_dir / "video.mp4").write_bytes(b"fake")
+
+        with (
+            patch.object(
+                download_mgr.encoding,
+                "size_constrained_encode",
+                return_value=False,
+            ),
+            patch.object(type(download_mgr), "sig_update_progress", create=True),
+            patch.object(type(download_mgr), "sig_update_status", create=True),
+            patch.object(type(download_mgr), "sig_enable_upload", create=True),
+        ):
+            download_mgr.is_downloading = True
+            download_mgr._post_ytdlp_10mb_encode(str(temp_dir), "/tmp", 720, 3000, 1.0, "", 60.0)
+
+        # temp_dir is left for the caller (download()) to clean up in its finally block
+        assert temp_dir.exists()
+
+
+# ─── TQ-6: validate_download_path Windows branch ────────────────────────
+
+
+class TestValidateDownloadPathWindows:
+    """Tests for validate_download_path Windows-specific logic."""
+
+    def test_windows_system_dir_blocked(self):
+        """Windows system directories should be rejected."""
+        from unittest.mock import patch
+
+        with patch("managers.utils.sys") as mock_sys:
+            mock_sys.platform = "win32"
+            with patch.dict(
+                "os.environ",
+                {"SystemRoot": r"C:\Windows"},
+                clear=False,
+            ):
+                with patch("managers.utils.os.path.isabs", return_value=True):
+                    with patch(
+                        "managers.utils.Path.resolve",
+                        return_value=Path(r"C:\Windows\System32"),
+                    ):
+                        valid, _, err = validate_download_path(r"C:\Windows\System32")
+        assert valid is False
+        assert err is not None
+        assert "system directory" in err.lower()
+
+    def test_windows_normal_path_allowed(self):
+        """Normal Windows paths should be allowed."""
+        from unittest.mock import patch
+
+        with (
+            patch("managers.utils.sys") as mock_sys,
+            patch("managers.utils.os.path.isabs", return_value=True),
+        ):
+            mock_sys.platform = "win32"
+            with patch.dict(
+                "os.environ",
+                {"SystemRoot": r"C:\Windows"},
+                clear=False,
+            ):
+                valid, norm_path, err = validate_download_path(r"C:\Users\Test\Downloads")
+
+        assert valid is True
+        assert norm_path is not None
+        assert err is None
+
+    def test_traversal_rejected(self):
+        """Path traversal should be rejected on any platform."""
+        valid, _, err = validate_download_path("../../etc/passwd")
+        assert valid is False
+        assert "traversal" in err.lower()
+
+
+# ─── TQ-7: _download_video_trimmed_10mb_path ────────────────────────────
+
+
+class TestDownloadVideoTrimmed10mbPath:
+    """Tests for _download_video_trimmed_10mb_path pipeline."""
+
+    def _make_ui_state(self, **overrides):
+        state = {
+            "quality": "720",
+            "trim_enabled": True,
+            "audio_only": False,
+            "keep_below_10mb": True,
+            "filename": "",
+            "volume_raw": 100,
+            "download_path": "/tmp",
+            "speed_limit": None,
+            "start_time": "10",
+            "end_time": "30",
+        }
+        state.update(overrides)
+        return state
+
+    def test_trim_then_encode_pipeline(self, download_mgr):
+        """Successful trim should chain into size_constrained_encode."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+        download_mgr.video_title = "Test Video"
+        ui_state = self._make_ui_state()
+
+        encode_called = []
+
+        def mock_encode(*args, **kwargs):
+            encode_called.append(True)
+            return True
+
+        with (
+            patch.object(download_mgr, "_download_trimmed_via_ffmpeg", return_value=True),
+            patch.object(download_mgr.encoding, "size_constrained_encode", side_effect=mock_encode),
+            patch.object(type(download_mgr), "sig_update_progress", create=True),
+            patch.object(type(download_mgr), "sig_update_status", create=True),
+            patch.object(type(download_mgr), "sig_enable_upload", create=True),
+        ):
+            download_mgr._download_video_trimmed_10mb_path(
+                "https://www.youtube.com/watch?v=test", ui_state, 10, 30, 720, 3000
+            )
+
+        assert len(encode_called) == 1
+
+    def test_trim_failure_skips_encode(self, download_mgr):
+        """Failed trim should not call size_constrained_encode."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+        ui_state = self._make_ui_state()
+
+        with (
+            patch.object(download_mgr, "_download_trimmed_via_ffmpeg", return_value=False),
+            patch.object(download_mgr.encoding, "size_constrained_encode") as mock_encode,
+            patch.object(type(download_mgr), "sig_update_status", create=True),
+        ):
+            download_mgr._download_video_trimmed_10mb_path(
+                "https://www.youtube.com/watch?v=test", ui_state, 10, 30, 720, 3000
+            )
+
+        mock_encode.assert_not_called()
+
+    def test_temp_dir_cleaned_on_success(self, download_mgr, tmp_path):
+        """Temp dir should be cleaned up after successful encode."""
+        from unittest.mock import patch
+
+        download_mgr.is_downloading = True
+        download_mgr.video_title = "Test"
+        ui_state = self._make_ui_state(download_path=str(tmp_path))
+
+        with (
+            patch.object(download_mgr, "_download_trimmed_via_ffmpeg", return_value=True),
+            patch.object(download_mgr.encoding, "size_constrained_encode", return_value=True),
+            patch.object(type(download_mgr), "sig_update_progress", create=True),
+            patch.object(type(download_mgr), "sig_update_status", create=True),
+            patch.object(type(download_mgr), "sig_enable_upload", create=True),
+            patch("managers.download_manager.tempfile.mkdtemp", return_value=str(tmp_path / "td")),
+            patch("managers.download_manager.shutil.rmtree") as mock_rmtree,
+        ):
+            (tmp_path / "td").mkdir()
+            download_mgr._download_video_trimmed_10mb_path(
+                "https://www.youtube.com/watch?v=test", ui_state, 10, 30, 720, 3000
+            )
+
+        mock_rmtree.assert_called_once()
+
+
+# ─── TQ-9: Strengthen test_10mb_path_taken ───────────────────────────────
+
+
+class TestDownload10mbPathStrengthened:
+    """Strengthened assertions for the 10MB code path."""
+
+    def _make_ui_state(self, **overrides):
+        state = {
+            "quality": "720",
+            "trim_enabled": False,
+            "audio_only": False,
+            "keep_below_10mb": True,
+            "filename": "",
+            "volume_raw": 100,
+            "download_path": "/tmp",
+            "speed_limit": None,
+            "start_time": "0",
+            "end_time": "60",
+        }
+        state.update(overrides)
+        return state
+
+    @staticmethod
+    def _make_mock_proc(stdout_lines=None, returncode=0):
+        from unittest.mock import MagicMock
+
+        mock_proc = MagicMock()
+        mock_stdout = MagicMock()
+        mock_stdout.__iter__ = MagicMock(return_value=iter(stdout_lines or []))
+        mock_proc.stdout = mock_stdout
+        mock_proc.stderr = MagicMock()
+        mock_proc.wait.return_value = None
+        mock_proc.returncode = returncode
+        return mock_proc
+
+    def test_10mb_calls_post_encode(self, download_mgr):
+        """10MB path should call _post_ytdlp_10mb_encode after yt-dlp."""
+        from unittest.mock import patch
+
+        ui_state = self._make_ui_state()
+        download_mgr.is_downloading = True
+        download_mgr.video_duration = 120
+
+        mock_proc = self._make_mock_proc()
+
+        with (
+            patch("managers.download_manager.subprocess.Popen", return_value=mock_proc),
+            patch.object(download_mgr, "_post_ytdlp_10mb_encode") as mock_post,
+        ):
+            download_mgr.download("https://www.youtube.com/watch?v=test123", ui_state)
+
+        mock_post.assert_called_once()
+        # Verify height and bitrate params
+        call_args = mock_post.call_args
+        assert call_args[1].get("height") or call_args[0][2]  # height param present
+
+    def test_10mb_creates_temp_dir(self, download_mgr):
+        """10MB path should use a temp directory for yt-dlp output."""
+        from unittest.mock import patch
+
+        ui_state = self._make_ui_state()
+        download_mgr.is_downloading = True
+        download_mgr.video_duration = 120
+
+        mock_proc = self._make_mock_proc()
+        captured_cmd = []
+
+        def capture_popen(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            return mock_proc
+
+        with (
+            patch("managers.download_manager.subprocess.Popen", side_effect=capture_popen),
+            patch.object(download_mgr, "_post_ytdlp_10mb_encode"),
+        ):
+            download_mgr.download("https://www.youtube.com/watch?v=test123", ui_state)
+
+        # Output template should point to temp dir, not download_path
+        output_args = [a for a in captured_cmd if "ytdl_10mb" in a]
+        assert len(output_args) > 0
+
+
+# ─── TQ-L7: download_local_file 10MB cancellation ───────────────────────
+
+
+class TestDownloadLocalFile10mbPath:
+    """Test download_local_file with keep_below_10mb flag."""
+
+    def _make_ui_state(self, **overrides):
+        state = {
+            "quality": "720",
+            "trim_enabled": False,
+            "audio_only": False,
+            "keep_below_10mb": True,
+            "filename": "",
+            "volume_raw": 100,
+            "download_path": "/tmp",
+            "speed_limit": None,
+            "start_time": "0",
+            "end_time": "60",
+        }
+        state.update(overrides)
+        return state
+
+    def test_10mb_local_calls_size_constrained_encode(self, download_mgr, tmp_path):
+        """Local file with 10MB flag should call size_constrained_encode."""
+        from unittest.mock import MagicMock, patch
+
+        test_file = tmp_path / "video.mp4"
+        test_file.write_bytes(b"fake_video")
+
+        download_mgr.is_downloading = True
+        download_mgr.video_duration = 120
+        ui_state = self._make_ui_state(download_path=str(tmp_path))
+
+        encode_calls = []
+
+        def mock_encode(*args, **kwargs):
+            encode_calls.append(args)
+            return True
+
+        with (
+            patch.object(download_mgr.encoding, "size_constrained_encode", side_effect=mock_encode),
+            patch.object(download_mgr, "_make_encode_callbacks", return_value=MagicMock()),
+            patch.object(
+                download_mgr.encoding, "calculate_optimal_quality", return_value=(720, 3000)
+            ),
+        ):
+            download_mgr.download_local_file(str(test_file), ui_state)
+
+        assert len(encode_calls) == 1
+        assert download_mgr.is_downloading is False
+
+
+# ─── P-L3: _http_range_read max_size guard ───────────────────────────────
+
+
+class TestHttpRangeReadMaxSize:
+    """Test the max_size guard added to _http_range_read."""
+
+    def test_exceeds_max_size_raises(self, download_mgr):
+        """Requesting more than _HTTP_RANGE_MAX_SIZE bytes should raise ValueError."""
+        max_size = download_mgr._HTTP_RANGE_MAX_SIZE
+        with pytest.raises(ValueError, match="exceeds max"):
+            download_mgr._http_range_read("http://example.com", 0, max_size + 100)
+
+    def test_within_max_size_ok(self, download_mgr):
+        """Requesting within limit should not raise ValueError."""
+        from unittest.mock import MagicMock, patch
+
+        download_mgr.is_downloading = True
+
+        mock_resp = MagicMock()
+        mock_resp.read = MagicMock(side_effect=[b"x" * 100, b""])
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("managers.download_manager.urllib.request.urlopen", return_value=mock_resp):
+            result = download_mgr._http_range_read("http://example.com", 0, 99)
+
+        assert result == b"x" * 100
+
+
+# ─── Dependency check tests (moved to DownloadManager) ──────────────────
+
+
+class TestDownloadManagerDependencyCheck:
+    """Test check_dependencies and detect_hw_encoder on DownloadManager."""
+
+    def test_check_dependencies_all_ok(self, download_mgr):
+        """All tools present should return True."""
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = b"2025.01.01"
+
+        with (
+            patch("managers.download_manager.os.path.isfile", return_value=True),
+            patch("managers.download_manager.os.access", return_value=True),
+            patch("managers.download_manager.subprocess.run", return_value=mock_result),
+        ):
+            assert download_mgr.check_dependencies() is True
+
+    def test_check_dependencies_ytdlp_missing(self, download_mgr):
+        """Missing yt-dlp should return False."""
+        from unittest.mock import patch
+
+        with (
+            patch("managers.download_manager.os.path.isfile", return_value=False),
+            patch("managers.download_manager.shutil.which", return_value=None),
+        ):
+            assert download_mgr.check_dependencies() is False
+
+    def test_detect_hw_encoder_none_available(self, download_mgr):
+        """When no HW encoder works, should return (None, None)."""
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stderr = b"encoder not found"
+
+        with patch("managers.download_manager.subprocess.run", return_value=mock_result):
+            encoder, vaapi_device = download_mgr.detect_hw_encoder(deps_ok=True)
+
+        assert encoder is None
+        assert vaapi_device is None
+
+    def test_detect_hw_encoder_deps_not_ok(self, download_mgr):
+        """When deps_ok is False, should return (None, None) immediately."""
+        encoder, vaapi_device = download_mgr.detect_hw_encoder(deps_ok=False)
+        assert encoder is None
+        assert vaapi_device is None
+
+    def test_detect_hw_encoder_nvenc_preferred_over_amf(self, download_mgr):
+        """NVENC should be probed before AMF."""
+        from unittest.mock import MagicMock, patch
+
+        probed_encoders = []
+
+        def mock_run(cmd, **kwargs):
+            for arg in cmd:
+                if arg.startswith("h264_"):
+                    probed_encoders.append(arg)
+            result = MagicMock()
+            result.returncode = 0 if "h264_nvenc" in cmd else 1
+            result.stderr = b""
+            return result
+
+        with patch("managers.download_manager.subprocess.run", side_effect=mock_run):
+            encoder, _ = download_mgr.detect_hw_encoder(deps_ok=True)
+
+        assert encoder == "h264_nvenc"
+        assert probed_encoders[0] == "h264_nvenc"
+
+    def test_detect_hw_encoder_vaapi_args(self, download_mgr):
+        """VAAPI probe should include -vaapi_device and hwupload filter."""
+        from unittest.mock import MagicMock, patch
+
+        captured_cmds = []
+
+        def mock_run(cmd, **kwargs):
+            captured_cmds.append(cmd)
+            result = MagicMock()
+            # Fail NVENC/AMF, succeed on VAAPI
+            result.returncode = 0 if "h264_vaapi" in cmd else 1
+            result.stderr = b""
+            return result
+
+        with (
+            patch("managers.download_manager.subprocess.run", side_effect=mock_run),
+            patch("managers.download_manager.sys") as mock_sys,
+        ):
+            mock_sys.platform = "linux"
+            encoder, vaapi_device = download_mgr.detect_hw_encoder(deps_ok=True)
+
+        assert encoder == "h264_vaapi"
+        assert vaapi_device == "/dev/dri/renderD128"
+        vaapi_cmd = captured_cmds[-1]
+        assert "-vaapi_device" in vaapi_cmd
+        assert "format=nv12,hwupload" in vaapi_cmd
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Technical Debt
 
-Last updated: 2026-04-05 (audit 7)
+Last updated: 2026-04-08 (audit 9)
 
 ## Summary
 **Audit 1**: 55 found, 53 fixed, 2 accepted
@@ -10,6 +10,9 @@ Last updated: 2026-04-05 (audit 7)
 **Audit 5**: 39 raw (5 agents) → 18 unique after dedup, 17 fixed (incl. 2 formerly deferred), 0 remaining
 **Audit 6**: 65 raw (5 agents) → 48 unique after dedup, 16 fixed, 12 deferred (refactors/medium effort), 20 test gap findings documented
 **Audit 7**: 50 raw (5 agents) → 44 unique after dedup, 39 fixed (2 iterations), 5 deferred
+**Post-audit cleanup**: 17 deferred items fixed (6 refactors, 3 performance, 2 DevOps, 9 test gaps + dependency tests), 28 new tests (340 total)
+**Audit 8**: 15 raw (5 agents) → 15 unique (1 dup removed), 15 fixed (1 iteration), 0 deferred (339 tests, was 340 — net -1 from merged tests)
+**Audit 9**: 30 raw (5 agents) → 30 unique, 23 fixed (1 iteration), 7 deferred (353 tests, was 339 — net +14 from strengthened tests)
 
 ## Remaining Issues
 
@@ -21,32 +24,123 @@ Last updated: 2026-04-05 (audit 7)
 ### Deferred (audit 7 — remaining)
 - **CQ-M5**: Clipboard download subprocess creation duplicated in main window — should delegate to DownloadManager. [medium]
 - **P-M1**: O(n) indexed deletion on deque in _remove_url_from_list — bounded at 500, acceptable for user-triggered action. [low]
-- **CQ-L11**: check_dependencies and _detect_hw_encoder on main window, belong on DownloadManager. [low]
-- **TQ-L7**: download_local_file 10MB cancellation path (is_downloading=False during encoding) untested. [low]
-- **P-L3**: _http_range_read has no max_size guard (currently capped at 512KB by caller). [low]
 
-### Deferred (audit 6 — refactors, medium effort)
-- **CQ-3**: Duplicated UI state snapshot pattern across 6 call sites. Deferred — works correctly, refactor is cosmetic. [medium]
-- **CQ-6**: Progress dialog code duplicated 3× in update_manager.py. Deferred — refactor, ~150 lines. [medium]
-- **P-08**: Multiple setStyleSheet passes during theme toggle. Deferred — needs QSS object-name refactor. [medium]
-- **P-12**: Nested locks in auto-download on GUI thread. Deferred — O(n) scan in `_finish_clipboard_downloads` fixed via counters in audit 7, but `_auto_download_single_url` still scans. [medium]
-- **DO-6**: Test workflow runs only on ubuntu-latest, no Windows. Deferred — needs matrix + conditional steps. [medium]
-- **DO-9**: Ruff select rules minimal (E, F, W, I only). Deferred — enable B, UP, S incrementally. [medium]
+### Deferred (audit 9)
+- **SEC-L3**: Upload history file written non-atomically — append-only path, cosmetic data, low risk. [low]
+- **SEC-L4**: SIDX parser missing bounds check before fixed-offset reads — caught by `struct.error` exception handler. [low]
+- **SEC-L5**: Log file created with default umask — directory is 0o700, defense-in-depth only. [low]
+- **P-L4**: `view_upload_history` reads entire file into QTextEdit — one-time cost per dialog open, 500 lines max. [low]
+- **P-L5**: `on_slider_change` fires per-pixel without debounce for text updates — preview already debounced 500ms. [low]
+- **P-L6**: `_restore_clipboard_urls` re-validates persisted URLs at startup — acceptable at 500 max. [low]
+- **DO-M1**: `softprops/action-gh-release` uses Node.js 20 (EOL 2026-06-02) — waiting on upstream v3. [medium]
 
-### Test coverage gaps (audit 6 — 20 findings, see GH#20)
-- **TQ-1** [critical]: `_apply_update_frozen_windows` untested (rename-dance, bat trampoline, rollback)
-- **TQ-2** [critical]: `_apply_ytdlp_update_binary` untested (SHA-256 verify, symlink guard)
-- **TQ-3** [high]: `_apply_ytdlp_update_pip` untested (success/failure/timeout)
-- **TQ-4** [high]: `download()` PermissionError/OSError handlers untested
-- **TQ-5** [high]: `_post_ytdlp_10mb_encode` untested (empty temp dir, success, failure)
-- **TQ-6** [high]: `validate_download_path` Windows branch untested
-- **TQ-7** [high]: `_download_video_trimmed_10mb_path` full pipeline untested
-- **TQ-8** [medium]: `test_cancellation_during_data_download` xfail masks real gap
-- **TQ-9** [medium]: `test_10mb_path_taken` weak assertions (only checks is_downloading)
+### Test coverage gaps (remaining)
+- **TQ-8** [medium]: `test_cancellation_during_data_download` xfail masks real gap (mock urlopen interaction flaky)
 - **TQ-10–20** [medium/low]: Various smaller coverage gaps in update_manager, download_manager, upload_manager
 
 ### Accepted tradeoffs (from audit 1)
 - **Widget reads from worker in `_fetch_file_size`** — Safe via closure. [informational]
+
+## Fixed Issues (audit 9 — 23 fixed, 353 tests)
+
+<details>
+<summary>Click to expand</summary>
+
+### Critical (1)
+- [x] DO-C1: SHA256SUMS `sed 's|.*/||'` stripped hashes from binary artifact entries — all frozen-mode self-updates silently broken. Fixed with `cd` + `sha256sum` per directory.
+
+### High (2)
+- [x] CQ-H1: `_on_uploader_queue_done` "completed normally" branch unreachable — `finally` block reset `uploader_is_uploading` before signal. Added `completed_normally` bool parameter to `sig_uploader_queue_done`.
+- [x] TQ-H1: `TestApplyUpdateSourceRollback` patched `shutil.move` but production uses `os.replace` — failure injection was dead code. Fixed to patch `os.replace`.
+
+### Medium (6)
+- [x] CQ-M1: `downloading_count` not reset in `clear_all_clipboard_urls` — stale counter could block future auto-downloads. Added reset.
+- [x] SEC-M1: Missing `--` sentinel before filepath in ffprobe command — file paths starting with `-` interpreted as flags. Added `--` separator.
+- [x] SEC-M2: Catbox upload URL not validated — could return malicious URL. Added `https://` prefix check.
+- [x] P-M1: `_do_update_status` (and 3 other status slots) called `setStyleSheet` on every invocation. Added last-color cache to skip redundant QSS parsing.
+- [x] P-M2: Batch clipboard progress emitted unthrottled lambdas flooding GUI event queue (~1500+ events per batch). Added 250ms throttle gate.
+- [x] TQ-M1: `stop_download` with `current_process=None` test missing state assertion. Strengthened with `current_process is None` check.
+
+### Low (14)
+- [x] CQ-L1: Dead signals `sig_update_url_status`, `sig_downloads_finished` in ClipboardManager — never emitted. Removed.
+- [x] CQ-L2: Dead signals `sig_set_upload_url`, `sig_set_uploader_url` in UploadManager — never emitted. Removed with connections and slots.
+- [x] CQ-L3: Dead signals `sig_set_mode_label`, `sig_set_video_info`, `sig_set_filesize_label` on YouTubeDownloader — never emitted. Removed with connections and slots.
+- [x] CQ-L4: 7 dead widget builder methods (`_group`, `_int_row`, `_float_row`, `_pct_row`, `_bool_row`, `_combo_row`, `_label_row`), `self.widgets` dict, and unused imports (`QSpinBox`, `QDoubleSpinBox`, `QGroupBox`). Removed.
+- [x] CQ-L5: Double `shutil.rmtree` on same `temp_dir` in 10MB path — `_post_ytdlp_10mb_encode` and `download()` finally block both cleaned it. Removed from `_post_ytdlp_10mb_encode`.
+- [x] CQ-L6: `height` passed as `str` to `build_vf_args(scale_height: int | None)` — cast to `int(quality)`. Also fixed default `quality` from `""` to `"720"` in `download_local_file`.
+- [x] SEC-L1: SIDX parser division by zero on crafted `timescale=0`. Added early return.
+- [x] SEC-L2: SHA256SUMS hash value not validated as 64-char hex string. Added `re.fullmatch` validation (both app and yt-dlp update paths).
+- [x] SEC-L6: `_open_folder` passes path to `os.startfile`/`xdg-open` without validation. Added `os.path.isdir` check.
+- [x] P-L1: `_update_url_status` performed triple dict lookup. Reduced to single `.get()` call.
+- [x] P-L2: `_poll_clipboard` acquired lock unnecessarily for GUI-thread-only boolean check. Removed lock.
+- [x] TQ-L1: Redundant type-only assertions on `calculate_optimal_quality`. Replaced with value-checking test.
+- [x] TQ-L2: NVENC/AMF CRF tests only checked encoder name. Added `-qp`/`-qp_i` and `23` assertions.
+- [x] TQ-L3: Thread pool leak on assertion failure in `TestTrimHistoryOnStartup` and `TestSaveUploadLinkPeriodicTrim`. Converted to pytest fixture with yield+shutdown.
+- [x] TQ-L4: `TestTrimmingManagerCache` fixture missing `_stream_url_cache`. Added with assertion on `clear_preview_cache`.
+- [x] DO-L1: Inconsistent platform conditions (`matrix.os == 'ubuntu-latest'` vs `runner.os == 'Linux'`). Standardized to `runner.os`.
+
+</details>
+
+## Fixed Issues (audit 8 — 15 fixed)
+
+<details>
+<summary>Click to expand</summary>
+
+### High (2)
+- [x] CQ-H1: `uploader_is_uploading` never reset after `process_uploader_queue` completes — next queue upload silently blocked. Added `finally` block.
+- [x] TQ-H1: `test_windows_system_dir_blocked` and `test_windows_normal_path_allowed` had tautological assertions (`isinstance(valid, bool)`). Now assert `valid is False`/`True` and check error messages.
+
+### Medium (6)
+- [x] CQ-M1: Batch clipboard counters never updated — in-lock `item["status"]` mutations raced with `_update_url_status`, causing "Completed: 0" after batch downloads. Removed in-lock mutations; `_update_url_status` is sole source of truth.
+- [x] CQ-M2: `closeEvent` checked `self._updating` (always False on main window) instead of `self.update_mgr._updating` — window could close during active self-update.
+- [x] TQ-M1: `TestExtractingUrlRegex` tested a locally duplicated regex, not the production `_EXTRACTING_URL_RE`. Now imports from `downloader_pyqt6`.
+- [x] DO-M1: `test.yml` concurrency group `test-${{ github.ref }}` could cancel release's test phase on concurrent push. Added `${{ github.workflow }}` to disambiguate.
+- [x] P-M1: Upload history file read blocked GUI thread in `view_upload_history`. Offloaded to thread pool with callback.
+- [x] P-M2: O(n) linear scans of `clipboard_url_list` in batch download hot path (7× per URL transition under lock). Eliminated by removing in-lock mutations (covered by CQ-M1 fix).
+
+### Low (7)
+- [x] SEC-L1: Missing `_validate_tag_name` in `_apply_update_frozen` — source update validated it, frozen didn't.
+- [x] CQ-L1: 6 dead state variables on `YouTubeDownloader` (`start_preview_image`, `end_preview_image`, `preview_update_timer`, `last_preview_update`, `local_file_path`, `uploader_current_index`) + dead assignments removed.
+- [x] CQ-L2: `TIMEOUT_CHECK_INTERVAL` imported inside `__init__` instead of top-level — moved to top-level import block.
+- [x] CQ-L3: Dead method `_monitor_download_timeout` (blocking loop) replaced by `_monitor_download_timeout_tick` — removed method, rewrote 5 tests to use tick API (net -1 test from merged early-exit tests).
+- [x] P-L1: `_sha256sums_cache` grew unbounded across update checks — cleared at start of `_check_for_updates`.
+- [x] TQ-L1: `TestTrimmingManagerErrorImage` mutated class singleton without cleanup guarantee — switched to `monkeypatch.setattr`.
+- [x] TQ-L2: `TestParseYtdlpOutputErrorLineCap` used non-standard `__import__("unittest.mock")` — replaced with standard `from unittest.mock import patch`.
+
+</details>
+
+## Fixed Issues (post-audit cleanup — 17 fixed, 28 new tests)
+
+<details>
+<summary>Click to expand</summary>
+
+### Code quality refactors (6)
+- [x] CQ-3: Duplicated UI state snapshot pattern — extracted `_snapshot_clipboard_state()` helper.
+- [x] CQ-6: Progress dialog code duplicated 3× in update_manager — extracted `_make_progress_helpers()`.
+- [x] CQ-L11: `check_dependencies` and `_detect_hw_encoder` moved from main window to DownloadManager.
+- [x] DO-9: Ruff rules expanded from E,F,W,I to include B (bugbear), UP (pyupgrade), S (bandit). Fixed all violations.
+- [x] DO-6: Test workflow extended with Windows CI matrix (`ubuntu-latest` + `windows-latest`).
+- [x] UP024/UP041/UP035/B904: Modernized exception aliases, import paths, `raise from` chains.
+
+### Performance (3)
+- [x] P-08: 7 `setStyleSheet()` calls during theme toggle batched into 1 via QSS object names.
+- [x] P-12: O(n) scans in `_auto_download_single_url` and `_update_auto_download_total` replaced with `downloading_count` counter (O(1)).
+- [x] P-L3: `_http_range_read` max_size guard added (512KB cap with ValueError on exceed).
+
+### Tests (28 new — 340 total, was 312)
+- [x] TQ-1: `_apply_update_frozen_windows` — SHA-256 verification, download too small, hash mismatch (3 tests)
+- [x] TQ-2: `_apply_ytdlp_update_binary` — SHA-256 mismatch aborts, missing binary in SHA256SUMS (2 tests)
+- [x] TQ-3: `_apply_ytdlp_update_pip` — success, failure with stderr, timeout (3 tests)
+- [x] TQ-4: `download()` — PermissionError and OSError handlers (2 tests)
+- [x] TQ-5: `_post_ytdlp_10mb_encode` — empty temp dir, custom name, cleanup (3 tests)
+- [x] TQ-6: `validate_download_path` — Windows blocked dirs, normal path, traversal (3 tests)
+- [x] TQ-7: `_download_video_trimmed_10mb_path` — trim+encode pipeline, failure skips encode, cleanup (3 tests)
+- [x] TQ-9: `test_10mb_path_taken` — strengthened with `_post_ytdlp_10mb_encode` assertion and temp dir check (2 tests)
+- [x] TQ-L7: `download_local_file` 10MB path — calls `size_constrained_encode` (1 test)
+- [x] P-L3: `_http_range_read` max_size guard — exceeds raises, within OK (2 tests)
+- [x] CQ-L11: `check_dependencies` and `detect_hw_encoder` — all ok, ytdlp missing, no encoder, deps_not_ok (4 tests)
+
+</details>
 
 ## Fixed Issues (audit 7 — 32 total)
 

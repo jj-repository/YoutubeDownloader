@@ -203,6 +203,7 @@ class TrimmingManager(QObject):
                 "format=duration",
                 "-of",
                 "default=noprint_wrappers=1:nokey=1",
+                "--",
                 filepath,
             ]
 

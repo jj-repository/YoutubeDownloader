@@ -13,8 +13,8 @@ import tempfile
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from constants import (
     AUDIO_BITRATE,
@@ -44,9 +44,10 @@ class EncodeCallbacks:
 class EncodingService:
     """FFmpeg encoding operations."""
 
-    def __init__(self, ffmpeg_path: str, hw_encoder: str | None):
+    def __init__(self, ffmpeg_path: str, hw_encoder: str | None, vaapi_device: str | None = None):
         self.ffmpeg_path = ffmpeg_path
         self.hw_encoder = hw_encoder
+        self.vaapi_device = vaapi_device
 
     def get_video_encoder_args(
         self, mode: str = "crf", target_bitrate: int | None = None
@@ -74,6 +75,8 @@ class EncodingService:
                         "-qp_p",
                         "23",
                     ]
+                elif self.hw_encoder == "h264_vaapi":
+                    return ["-c:v", "h264_vaapi", "-qp", "23"]
                 else:  # h264_nvenc
                     return [
                         "-c:v",
@@ -94,6 +97,17 @@ class EncodingService:
                         "h264_amf",
                         "-quality",
                         "balanced",
+                        "-b:v",
+                        str(target_bitrate),
+                        "-maxrate",
+                        str(maxrate),
+                        "-bufsize",
+                        str(bufsize),
+                    ]
+                elif self.hw_encoder == "h264_vaapi":
+                    return [
+                        "-c:v",
+                        "h264_vaapi",
                         "-b:v",
                         str(target_bitrate),
                         "-maxrate",
@@ -139,6 +153,27 @@ class EncodingService:
                     "-preset",
                     "ultrafast",
                 ]
+
+    def get_crf_args_for_postprocessor(self) -> list[str]:
+        """Get CRF encoder args safe for yt-dlp --postprocessor-args.
+
+        VAAPI requires global ffmpeg input args (-vaapi_device, -vf hwupload)
+        that cannot be passed through yt-dlp's postprocessor mechanism.
+        Falls back to libx264 for VAAPI.
+        """
+        if self.hw_encoder == "h264_vaapi":
+            return ["-c:v", "libx264", "-crf", str(VIDEO_CRF), "-preset", "ultrafast"]
+        return self.get_video_encoder_args(mode="crf")
+
+    def build_vf_args(self, scale_height: int | None = None) -> list[str]:
+        """Build -vf filter args appropriate for the current encoder."""
+        if self.hw_encoder == "h264_vaapi":
+            if scale_height:
+                return ["-vf", f"format=nv12,hwupload,scale_vaapi=w=-2:h={scale_height}"]
+            return ["-vf", "format=nv12,hwupload"]
+        if scale_height:
+            return ["-vf", f"scale=-2:{scale_height}"]
+        return []
 
     def run_ffmpeg_with_progress(
         self,
@@ -224,11 +259,14 @@ class EncodingService:
         end_time: float | None = None,
     ) -> bool:
         """Single-pass encode using hardware encoder with bitrate target."""
-        input_args = [self.ffmpeg_path, "-y", "-i", input_file]
+        input_args = [self.ffmpeg_path, "-y"]
+        if self.hw_encoder == "h264_vaapi" and self.vaapi_device:
+            input_args.extend(["-vaapi_device", self.vaapi_device])
+        input_args.extend(["-i", input_file])
         if start_time is not None and end_time is not None:
             input_args.extend(["-ss", str(start_time), "-to", str(end_time)])
 
-        vf_args = ["-vf", f"scale=-2:{scale_height}"] if scale_height else []
+        vf_args = self.build_vf_args(scale_height)
         enc_args = self.get_video_encoder_args(mode="bitrate", target_bitrate=target_bitrate)
         audio_args = ["-c:a", "aac", "-b:a", AUDIO_BITRATE]
         if volume_multiplier != 1.0:
@@ -251,7 +289,11 @@ class EncodingService:
         start_time: float | None = None,
         end_time: float | None = None,
     ) -> bool:
-        """Two-pass encode using software (libx264) with bitrate target."""
+        """Two-pass encode using software (libx264) with bitrate target.
+
+        Always uses libx264 — ffmpeg's -pass flag is not supported by
+        hardware encoders (NVENC, AMF, VAAPI).
+        """
         passlogfile = os.path.join(
             tempfile.gettempdir(), f"ytdl_2pass_{os.getpid()}_{int(time.time())}"
         )
@@ -261,7 +303,20 @@ class EncodingService:
             input_args.extend(["-ss", str(start_time), "-to", str(end_time)])
 
         vf_args = ["-vf", f"scale=-2:{scale_height}"] if scale_height else []
-        enc_args = self.get_video_encoder_args(mode="bitrate", target_bitrate=target_bitrate)
+        maxrate = int(target_bitrate * 1.5)
+        bufsize = int(target_bitrate * 2)
+        enc_args = [
+            "-c:v",
+            "libx264",
+            "-b:v",
+            str(target_bitrate),
+            "-maxrate",
+            str(maxrate),
+            "-bufsize",
+            str(bufsize),
+            "-preset",
+            "ultrafast",
+        ]
 
         try:
             # --- Pass 1 ---
@@ -336,7 +391,7 @@ class EncodingService:
         software encoding as fallback.
         """
         if self.hw_encoder:
-            return self.encode_single_pass(
+            success = self.encode_single_pass(
                 input_file,
                 output_file,
                 target_bitrate,
@@ -347,6 +402,23 @@ class EncodingService:
                 start_time,
                 end_time,
             )
+            if not success and not cb.is_cancelled():
+                logger.warning(
+                    f"GPU encode failed ({self.hw_encoder}), falling back to libx264 two-pass"
+                )
+                cb.on_status("GPU encode failed, retrying with CPU...", "blue")
+                return self.encode_two_pass(
+                    input_file,
+                    output_file,
+                    target_bitrate,
+                    duration,
+                    cb,
+                    volume_multiplier,
+                    scale_height,
+                    start_time,
+                    end_time,
+                )
+            return success
         else:
             return self.encode_two_pass(
                 input_file,

@@ -24,6 +24,20 @@
 1. Hardcoded site patterns — not easily extensible
 2. `run.sh` outdated
 
+## Intentional Silent Except Patterns (Do Not Fix)
+Audited 2026-04-05. All `except ...: pass` blocks are intentional — do not add logging or refactor.
+
+| Pattern | Where | Why silent |
+|---------|-------|------------|
+| Best-effort file/temp cleanup | pyqt6:1601,2067,2121,2134,2678 / trim_mgr:412 / encoding:318 / update_mgr:979 | OS delete fails are non-critical |
+| Feature/backend probing | pyqt6:2200,2207,2213 | Tries klipper→pyperclip→Qt, expected failures |
+| Subprocess stream drain | download_mgr:1551 / encoding:178 | `(ValueError, OSError)` when process dies — normal |
+| ffmpeg progress parsing | download_mgr:1571 / encoding:197 | `(ValueError, IndexError)` on malformed lines — skip |
+| Optional import | pyqt6:98 | `except ImportError` for optional `dbus` |
+| Corrupt config fallback | pyqt6:381,389 | Bad config/geometry → use defaults |
+| Win32 API best-effort | pyqt6:316 | Dark titlebar; outer handler already logs |
+| Input validation | utils:407 | Invalid speed limit → no limit args |
+
 ## Quality Standards
 Target: reliable downloads, good UX. UI strings: inline English.
 Do not optimize: download speed (yt-dlp/network), UI responsiveness, thumbnail caching — all done.

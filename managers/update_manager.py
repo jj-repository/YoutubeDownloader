@@ -53,6 +53,51 @@ class UpdateManager(QObject):
         self._sha256sums_cache = {}
 
     @staticmethod
+    def _make_progress_helpers():
+        """Create progress dialog state and GUI-thread helpers.
+
+        Returns (progress_state, create_fn, update_fn, close_fn) where:
+        - progress_state: dict with dialog/label/bar refs
+        - create_fn: call via sig_run_on_gui to show dialog
+        - update_fn(text, pct): update label text and bar value
+        - close_fn: call via sig_run_on_gui to close dialog
+        """
+        state = {"dialog": None, "label": None, "bar": None}
+
+        def _create():
+            dlg = QDialog()
+            dlg.setWindowTitle("Downloading Update")
+            dlg.setFixedSize(350, 100)
+            dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+            dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            dlg.setModal(True)
+            layout = QVBoxLayout(dlg)
+            lbl = QLabel("Downloading update...")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(lbl)
+            bar = QProgressBar()
+            bar.setRange(0, 100)
+            bar.setValue(0)
+            layout.addWidget(bar)
+            state["dialog"] = dlg
+            state["label"] = lbl
+            state["bar"] = bar
+            dlg.show()
+
+        def _update(text, pct):
+            if state["label"]:
+                state["label"].setText(text)
+            if state["bar"]:
+                state["bar"].setValue(pct)
+
+        def _close():
+            if state["dialog"]:
+                state["dialog"].close()
+                state["dialog"] = None
+
+        return state, _create, _update, _close
+
+    @staticmethod
     def _validate_tag_name(tag_name: str) -> bool:
         """Validate release tag format to prevent URL manipulation."""
         return bool(_TAG_RE.match(tag_name))
@@ -91,6 +136,7 @@ class UpdateManager(QObject):
         import urllib.error
         import urllib.request
 
+        self._sha256sums_cache.clear()
         ytdlp_update_available = False
         ytdlp_current = None
         ytdlp_latest = None
@@ -202,7 +248,7 @@ class UpdateManager(QObject):
     def _compute_git_blob_sha(content):
         """Compute the git blob SHA1 hash for content (same as git hash-object)."""
         header = f"blob {len(content)}\0".encode()
-        return hashlib.sha1(header + content).hexdigest()
+        return hashlib.sha1(header + content).hexdigest()  # noqa: S324 — git blob hash, not security
 
     def _verify_file_against_github(self, tag_name, filename, content, headers, release_data=None):
         """Verify downloaded file against GitHub's git tree SHA and SHA-256.
@@ -282,38 +328,9 @@ class UpdateManager(QObject):
         """Download, verify, and replace .py source files, then auto-restart."""
         import urllib.request
 
-        progress_state = {"dialog": None, "label": None, "bar": None}
-
-        def _create_progress_dialog():
-            dlg = QDialog()
-            dlg.setWindowTitle("Downloading Update")
-            dlg.setFixedSize(350, 100)
-            dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
-            dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            dlg.setModal(True)
-            layout = QVBoxLayout(dlg)
-            lbl = QLabel("Downloading update...")
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(lbl)
-            bar = QProgressBar()
-            bar.setRange(0, 100)
-            bar.setValue(0)
-            layout.addWidget(bar)
-            progress_state["dialog"] = dlg
-            progress_state["label"] = lbl
-            progress_state["bar"] = bar
-            dlg.show()
-
-        def _update_progress_dialog(text, pct):
-            if progress_state["label"]:
-                progress_state["label"].setText(text)
-            if progress_state["bar"]:
-                progress_state["bar"].setValue(pct)
-
-        def _close_progress_dialog():
-            if progress_state["dialog"]:
-                progress_state["dialog"].close()
-                progress_state["dialog"] = None
+        progress_state, _create_progress_dialog, _update_progress_dialog, _close_progress_dialog = (
+            self._make_progress_helpers()
+        )
 
         try:
             self.sig_update_status.emit("Downloading update...", "blue")
@@ -374,7 +391,7 @@ class UpdateManager(QObject):
                 try:
                     compile(content, module_name, "exec")
                 except SyntaxError as e:
-                    raise RuntimeError(f"{module_name} has syntax errors: {e}")
+                    raise RuntimeError(f"{module_name} has syntax errors: {e}") from e
 
                 downloaded[module_name] = content
 
@@ -456,7 +473,11 @@ class UpdateManager(QObject):
         for line in sha256sums.strip().splitlines():
             parts = line.split()
             if len(parts) >= 2 and parts[1] == asset_name:
-                return parts[0].lower()
+                h = parts[0].lower()
+                if re.fullmatch(r"[0-9a-f]{64}", h):
+                    return h
+                logger.warning(f"Invalid SHA256 hash format in SHA256SUMS: {h!r}")
+                return None
         return None
 
     def _apply_update_frozen(self, release_data):
@@ -464,6 +485,10 @@ class UpdateManager(QObject):
 
         try:
             self.sig_update_status.emit("Downloading update...", "blue")
+
+            tag_name = release_data.get("tag_name", "")
+            if not self._validate_tag_name(tag_name):
+                raise RuntimeError(f"Invalid release tag format: {tag_name!r}")
 
             download_url = self._get_update_asset_url(release_data)
             if not download_url:
@@ -493,47 +518,8 @@ class UpdateManager(QObject):
 
         logger.info(f"Downloading update: {download_url}")
 
-        # Create progress dialog on GUI thread via signal
-        progress_state = {"dialog": None, "label": None, "bar": None}
-
-        def _create_progress_dialog():
-            dlg = QDialog()
-            dlg.setWindowTitle("Downloading Update")
-            dlg.setFixedSize(350, 100)
-            # Prevent user from closing the dialog
-            dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
-            dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            dlg.setModal(True)
-
-            layout = QVBoxLayout(dlg)
-            lbl = QLabel("Downloading update...")
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(lbl)
-
-            bar = QProgressBar()
-            bar.setRange(0, 100)
-            bar.setValue(0)
-            layout.addWidget(bar)
-
-            progress_state["dialog"] = dlg
-            progress_state["label"] = lbl
-            progress_state["bar"] = bar
-            dlg.show()
-
-        def _update_progress_dialog(pct, mb, total_mb):
-            if progress_state["label"]:
-                progress_state["label"].setText(
-                    f"Downloading update... {mb:.1f}/{total_mb:.1f} MB ({pct}%)"
-                )
-            if progress_state["bar"]:
-                progress_state["bar"].setValue(pct)
-
-        def _close_progress_dialog():
-            if progress_state["dialog"]:
-                progress_state["dialog"].close()
-                progress_state["dialog"] = None
-
-        self.sig_run_on_gui.emit(_create_progress_dialog)
+        progress_state, _create_dlg, _update_dlg, _close_dlg = self._make_progress_helpers()
+        self.sig_run_on_gui.emit(_create_dlg)
 
         request = urllib.request.Request(download_url, headers=headers)
         with urllib.request.urlopen(request, timeout=300) as response:
@@ -550,11 +536,12 @@ class UpdateManager(QObject):
                         pct = int(downloaded / total * 100)
                         mb = downloaded / (1024 * 1024)
                         total_mb = total / (1024 * 1024)
+                        text = f"Downloading update... {mb:.1f}/{total_mb:.1f} MB ({pct}%)"
                         self.sig_run_on_gui.emit(
-                            lambda p=pct, m=mb, t=total_mb: _update_progress_dialog(p, m, t),
+                            lambda t=text, p=pct: _update_dlg(t, p),
                         )
 
-        self.sig_run_on_gui.emit(_close_progress_dialog)
+        self.sig_run_on_gui.emit(_close_dlg)
 
         if downloaded < 1024:
             new_exe.unlink(missing_ok=True)
@@ -621,7 +608,9 @@ class UpdateManager(QObject):
             _bad_batch_chars = set('"&|^<>%')
             for p in (new_exe, exe_path):
                 if _bad_batch_chars & set(str(p)):
-                    raise RuntimeError(f"Update path contains unsafe batch characters: {p}")
+                    raise RuntimeError(  # noqa: B904 — not re-raising, new error
+                        f"Update path contains unsafe batch characters: {p}"
+                    )
             bat_content = (
                 "@echo off\r\n"
                 f":wait\r\n"
@@ -651,42 +640,8 @@ class UpdateManager(QObject):
 
         logger.info(f"Downloading update: {download_url}")
 
-        progress_state = {"dialog": None, "label": None, "bar": None}
-
-        def _create_progress_dialog():
-            dlg = QDialog()
-            dlg.setWindowTitle("Downloading Update")
-            dlg.setFixedSize(350, 100)
-            dlg.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
-            dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            dlg.setModal(True)
-            layout = QVBoxLayout(dlg)
-            lbl = QLabel("Downloading update...")
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(lbl)
-            bar = QProgressBar()
-            bar.setRange(0, 100)
-            bar.setValue(0)
-            layout.addWidget(bar)
-            progress_state["dialog"] = dlg
-            progress_state["label"] = lbl
-            progress_state["bar"] = bar
-            dlg.show()
-
-        def _update_progress_dialog(pct, mb, total_mb):
-            if progress_state["label"]:
-                progress_state["label"].setText(
-                    f"Downloading update... {mb:.1f}/{total_mb:.1f} MB ({pct}%)"
-                )
-            if progress_state["bar"]:
-                progress_state["bar"].setValue(pct)
-
-        def _close_progress_dialog():
-            if progress_state["dialog"]:
-                progress_state["dialog"].close()
-                progress_state["dialog"] = None
-
-        self.sig_run_on_gui.emit(_create_progress_dialog)
+        progress_state, _create_dlg, _update_dlg, _close_dlg = self._make_progress_helpers()
+        self.sig_run_on_gui.emit(_create_dlg)
 
         tar_tmp = tempfile.NamedTemporaryFile(
             delete=False, suffix=".tar.gz", dir=str(exe_path.parent)
@@ -709,11 +664,12 @@ class UpdateManager(QObject):
                         pct = int(downloaded / total * 100)
                         mb = downloaded / (1024 * 1024)
                         total_mb = total / (1024 * 1024)
+                        text = f"Downloading update... {mb:.1f}/{total_mb:.1f} MB ({pct}%)"
                         self.sig_run_on_gui.emit(
-                            lambda p=pct, m=mb, t=total_mb: _update_progress_dialog(p, m, t),
+                            lambda t=text, p=pct: _update_dlg(t, p),
                         )
 
-        self.sig_run_on_gui.emit(_close_progress_dialog)
+        self.sig_run_on_gui.emit(_close_dlg)
 
         if downloaded < 1024:
             os.unlink(tar_tmp_path)
@@ -769,7 +725,7 @@ class UpdateManager(QObject):
             raise RuntimeError("Extracted binary is too small — archive may be corrupt")
         if exe_path.is_symlink():
             raise RuntimeError(f"Refusing to overwrite symlink: {exe_path}")
-        os.chmod(str(tmp_path), 0o755)
+        os.chmod(str(tmp_path), 0o755)  # noqa: S103 — executable needs to be runnable
         os.replace(str(tmp_path), str(exe_path))
         os.unlink(tar_tmp_path)
         logger.info(f"Replaced binary: {exe_path}")
@@ -961,7 +917,9 @@ class UpdateManager(QObject):
             for line in sha256sums.strip().splitlines():
                 parts = line.split()
                 if len(parts) >= 2 and parts[1] == binary_name:
-                    expected_hash = parts[0].lower()
+                    h = parts[0].lower()
+                    if re.fullmatch(r"[0-9a-f]{64}", h):
+                        expected_hash = h
                     break
 
             if not expected_hash:
@@ -998,7 +956,7 @@ class UpdateManager(QObject):
 
             # Make executable on Linux
             if sys.platform != "win32":
-                os.chmod(target_path, 0o755)
+                os.chmod(target_path, 0o755)  # noqa: S103 — executable needs to be runnable
 
             # Update the path so the app uses the new binary immediately
             self.ytdlp_path = target_path

@@ -26,10 +26,6 @@ class UploadManager(QObject):
     sig_upload_status = pyqtSignal(str, str)  # msg, color
     # Uploader tab status
     sig_uploader_status = pyqtSignal(str, str)  # msg, color
-    # Show upload URL on trimmer tab
-    sig_set_upload_url = pyqtSignal(str)
-    # Show upload URL on uploader tab
-    sig_set_uploader_url = pyqtSignal(str)
     # Enable/disable trimmer upload button
     sig_enable_upload_btn = pyqtSignal(bool)
     # Show a message box (type, title, message)
@@ -40,8 +36,8 @@ class UploadManager(QObject):
     sig_upload_complete = pyqtSignal(str, str)
     # Single file from uploader queue done (file_url)
     sig_uploader_file_uploaded = pyqtSignal(str)
-    # Uploader queue finished (count of files uploaded)
-    sig_uploader_queue_done = pyqtSignal(int)
+    # Uploader queue finished (count of files uploaded, completed_normally)
+    sig_uploader_queue_done = pyqtSignal(int, bool)
 
     def __init__(self, thread_pool: ThreadPoolExecutor, parent=None):
         super().__init__(parent)
@@ -96,6 +92,8 @@ class UploadManager(QObject):
                 self.is_uploading = True
             logger.info(f"Starting upload to Catbox.moe: {filepath}")
             file_url = self._get_catbox_client().upload(filepath)
+            if not file_url or not file_url.startswith("https://"):
+                raise RuntimeError(f"Unexpected upload URL: {file_url!r}")
             filename = os.path.basename(filepath)
             self.save_upload_link(file_url, filename)
             self.sig_upload_complete.emit(file_url, filename)
@@ -147,28 +145,38 @@ class UploadManager(QObject):
         total_count = len(queue_snapshot)
         uploaded_count = 0
 
-        for index, item in enumerate(queue_snapshot):
+        completed_normally = False
+        try:
+            for index, item in enumerate(queue_snapshot):
+                with self.uploader_lock:
+                    if not self.uploader_is_uploading:
+                        logger.info("Uploader queue processing stopped by user")
+                        break
+
+                file_path = item["path"]
+                filename = os.path.basename(file_path)
+                self.sig_uploader_status.emit(
+                    f"Uploading {index + 1}/{total_count}: {filename}...", "blue"
+                )
+
+                if self.upload_single_file(file_path):
+                    uploaded_count += 1
+            else:
+                # Loop finished without break — all items processed
+                completed_normally = True
+        finally:
             with self.uploader_lock:
-                if not self.uploader_is_uploading:
-                    logger.info("Uploader queue processing stopped by user")
-                    break
+                self.uploader_is_uploading = False
 
-            file_path = item["path"]
-            filename = os.path.basename(file_path)
-            self.sig_uploader_status.emit(
-                f"Uploading {index + 1}/{total_count}: {filename}...", "blue"
-            )
-
-            if self.upload_single_file(file_path):
-                uploaded_count += 1
-
-        self.sig_uploader_queue_done.emit(uploaded_count)
+        self.sig_uploader_queue_done.emit(uploaded_count, completed_normally)
 
     def upload_single_file(self, file_path: str) -> bool:
         """Upload a single file to Catbox. Returns True on success."""
         try:
             logger.info(f"Uploading file from queue: {file_path}")
             file_url = self._get_catbox_client().upload(file_path)
+            if not file_url or not file_url.startswith("https://"):
+                raise RuntimeError(f"Unexpected upload URL: {file_url!r}")
             filename = os.path.basename(file_path)
             self.save_upload_link(file_url, filename)
             self.sig_uploader_file_uploaded.emit(file_url)

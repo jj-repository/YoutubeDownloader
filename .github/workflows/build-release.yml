@@ -90,7 +90,7 @@ jobs:
         cache-dependency-path: 'requirements.lock'
 
     - name: Install system dependencies (Linux)
-      if: matrix.os == 'ubuntu-latest'
+      if: runner.os == 'Linux'
       run: |
         sudo apt-get update
         sudo apt-get install -y libdbus-1-dev libdbus-glib-1-dev python3-dev
@@ -99,13 +99,13 @@ jobs:
       run: pip install pyinstaller==6.13.0 -r requirements.lock
 
     - name: Install optional dependencies (Linux)
-      if: matrix.os == 'ubuntu-latest'
+      if: runner.os == 'Linux'
       continue-on-error: true
       run: |
         pip install dbus-python==1.3.2
 
     - name: Download and bundle ffmpeg (Linux)
-      if: matrix.os == 'ubuntu-latest'
+      if: runner.os == 'Linux'
       run: |
         wget --retry-connrefused --waitretry=5 --tries=3 https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
         # Verify download is a real archive (>10MB)
@@ -122,7 +122,7 @@ jobs:
         rm -rf ffmpeg-master-latest-linux64-gpl ffmpeg-master-latest-linux64-gpl.tar.xz
 
     - name: Download and bundle yt-dlp (Linux)
-      if: matrix.os == 'ubuntu-latest'
+      if: runner.os == 'Linux'
       run: |
         wget --retry-connrefused --waitretry=5 --tries=3 https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O yt-dlp
         wget --retry-connrefused --waitretry=5 --tries=3 https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS -O SHA2-256SUMS
@@ -131,12 +131,12 @@ jobs:
         chmod +x yt-dlp
 
     - name: Build executable (Linux)
-      if: matrix.os == 'ubuntu-latest'
+      if: runner.os == 'Linux'
       run: |
         pyinstaller --onefile --name YTDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --add-data "icon.png:." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets downloader_pyqt6.py
 
     - name: Download and bundle ffmpeg (Windows)
-      if: matrix.os == 'windows-latest'
+      if: runner.os == 'Windows'
       shell: pwsh
       run: |
         $ProgressPreference = 'SilentlyContinue'
@@ -155,7 +155,7 @@ jobs:
         Remove-Item -Recurse -Force ffmpeg-master-latest-win64-gpl, ffmpeg.zip
 
     - name: Download and bundle yt-dlp (Windows)
-      if: matrix.os == 'windows-latest'
+      if: runner.os == 'Windows'
       shell: pwsh
       run: |
         $ProgressPreference = 'SilentlyContinue'
@@ -173,12 +173,12 @@ jobs:
         Remove-Item SHA2-256SUMS
 
     - name: Build executable (Windows)
-      if: matrix.os == 'windows-latest'
+      if: runner.os == 'Windows'
       run: |
         pyinstaller --onefile --name YTDownloader --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets downloader_pyqt6.py
 
     - name: Validate build output (Linux)
-      if: matrix.os == 'ubuntu-latest'
+      if: runner.os == 'Linux'
       run: |
         test -f dist/YTDownloader || { echo "::error::Linux executable not created"; exit 1; }
         test -x dist/YTDownloader || { echo "::error::Linux executable not executable"; exit 1; }
@@ -186,7 +186,7 @@ jobs:
         echo "Linux build OK: $(du -h dist/YTDownloader | cut -f1)"
 
     - name: Validate build output (Windows)
-      if: matrix.os == 'windows-latest'
+      if: runner.os == 'Windows'
       shell: pwsh
       run: |
         if (-not (Test-Path dist/YTDownloader.exe)) { throw "Windows executable not created" }
@@ -195,7 +195,7 @@ jobs:
         Write-Host "Windows build OK: $([math]::Round($size/1MB, 1)) MB"
 
     - name: Create release package (Linux)
-      if: matrix.os == 'ubuntu-latest'
+      if: runner.os == 'Linux'
       run: |
         mkdir -p release
         cp dist/YTDownloader release/
@@ -203,7 +203,7 @@ jobs:
         tar -czf YTDownloader-Linux.tar.gz -C release .
 
     - name: Upload Linux artifact
-      if: matrix.os == 'ubuntu-latest'
+      if: runner.os == 'Linux'
       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
       with:
         name: linux-build
@@ -211,7 +211,7 @@ jobs:
         retention-days: 1
 
     - name: Upload Windows artifact
-      if: matrix.os == 'windows-latest'
+      if: runner.os == 'Windows'
       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
       with:
         name: windows-build
@@ -242,8 +242,9 @@ jobs:
 
     - name: Generate SHA256SUMS
       run: |
-        # Binary artifacts
-        sha256sum linux-build/YTDownloader-Linux.tar.gz windows-build/YTDownloader.exe | sed 's|.*/||' > SHA256SUMS
+        # Binary artifacts (cd into each dir so sha256sum outputs bare filenames)
+        (cd linux-build && sha256sum YTDownloader-Linux.tar.gz) > SHA256SUMS
+        (cd windows-build && sha256sum YTDownloader.exe) >> SHA256SUMS
         # Source files (for source-mode self-update verification)
         sha256sum downloader_pyqt6.py constants.py managers/*.py >> SHA256SUMS
 

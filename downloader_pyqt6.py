@@ -33,10 +33,8 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QDoubleSpinBox,
     QFileDialog,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -46,7 +44,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
-    QSpinBox,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -63,7 +60,6 @@ from constants import (
     CLIPBOARD_URL_LIST_HEIGHT,
     CLIPBOARD_URLS_FILE,
     CONFIG_FILE,
-    DEPENDENCY_CHECK_TIMEOUT,
     GITHUB_RELEASES_URL,
     GITHUB_REPO,
     LOG_FILE,
@@ -77,6 +73,7 @@ from constants import (
     SLIDER_LENGTH,
     STREAM_FETCH_TIMEOUT,
     THEMES,
+    TIMEOUT_CHECK_INTERVAL,
     UI_INITIAL_DELAY_MS,
     UPLOAD_HISTORY_FILE,
 )
@@ -165,6 +162,9 @@ QSlider::sub-page:horizontal { background: #1565c0; border-radius: 3px; }
 QMessageBox { background-color: #1e1e1e; }
 QStatusBar { background: #2d2d2d; color: #aaa; }
 QToolTip { background: #2d2d2d; color: #dcdcdc; border: 1px solid #555; }
+QLabel#previewLabel { background: #1a1a1a; color: #d4d4d4; }
+QScrollArea#urlListScroll { border: 1px solid #555555; background: #252525; }
+QWidget#urlListInner { background: #252525; }
 """
 
 _LIGHT_STYLE = """
@@ -200,6 +200,9 @@ QSlider::sub-page:horizontal { background: #1565c0; border-radius: 3px; }
 QMessageBox { background-color: #f0f0f0; }
 QStatusBar { background: #e0e0e0; color: #555; }
 QToolTip { background: #ffffcc; color: #1e1e1e; border: 1px solid #bbb; }
+QLabel#previewLabel { background: gray20; color: white; }
+QScrollArea#urlListScroll { border: 1px solid #cccccc; background: #ffffff; }
+QWidget#urlListInner { background: #ffffff; }
 """
 
 
@@ -341,9 +344,6 @@ class YouTubeDownloader(QMainWindow):
     sig_update_status = pyqtSignal(str, str)  # message, color
     sig_reset_buttons = pyqtSignal()
     sig_show_messagebox = pyqtSignal(str, str, str)  # type, title, message
-    sig_set_mode_label = pyqtSignal(str)  # trimmer mode indicator
-    sig_set_video_info = pyqtSignal(str)  # trimmer video info
-    sig_set_filesize_label = pyqtSignal(str)  # trimmer filesize
     sig_run_on_gui = pyqtSignal(object)  # generic callable for thread-safe GUI updates
 
     # ------------------------------------------------------------------
@@ -386,8 +386,6 @@ class YouTubeDownloader(QMainWindow):
         except Exception as e:
             logger.error(f"Error setting window icon: {e}")
 
-        self.widgets: dict[str, QWidget] = {}  # widget registry (template convention)
-
         # ---------- state variables ----------
         self.download_path = str(Path.home() / "Downloads")
         # Download state → download_mgr (current_process, is_downloading, etc.)
@@ -395,7 +393,6 @@ class YouTubeDownloader(QMainWindow):
         self.video_title = None
         self.current_video_url = None
         self._shutting_down = False
-        self._updating = False
 
         # Detect bundled executables (when packaged with PyInstaller)
         self.ffmpeg_path = self._get_bundled_executable("ffmpeg")
@@ -403,17 +400,10 @@ class YouTubeDownloader(QMainWindow):
         self.ytdlp_path = self._get_bundled_executable("yt-dlp")
 
         # Frame preview variables (state in trimming_mgr, created after temp_dir init)
-        self.start_preview_image = None
-        self.end_preview_image = None
         self.temp_dir = None  # set by _init_temp_directory
-        self.preview_update_timer = None
-        self.last_preview_update = 0
 
         # Volume control — stored as int 0-200 (mapping to 0.0-2.0)
         self._volume_int = 100  # 100 = 1.0 = 100%
-
-        # Local file support
-        self.local_file_path = None
 
         # Thread pool for background tasks (must be created before managers)
         self.thread_pool = ThreadPoolExecutor(
@@ -424,8 +414,6 @@ class YouTubeDownloader(QMainWindow):
         self.upload_mgr = UploadManager(thread_pool=self.thread_pool)
         self.upload_mgr.sig_upload_status.connect(self._do_upload_status)
         self.upload_mgr.sig_uploader_status.connect(self._do_uploader_status)
-        self.upload_mgr.sig_set_upload_url.connect(self._do_set_upload_url)
-        self.upload_mgr.sig_set_uploader_url.connect(self._do_set_uploader_url)
         self.upload_mgr.sig_enable_upload_btn.connect(self._do_enable_upload_btn)
         self.upload_mgr.sig_show_messagebox.connect(self._do_show_messagebox)
         self.upload_mgr.sig_run_on_gui.connect(self._do_run_on_gui)
@@ -461,9 +449,7 @@ class YouTubeDownloader(QMainWindow):
         # Clean up leftover files from previous self-updates (off GUI thread)
         self.thread_pool.submit(UpdateManager.cleanup_old_updates)
 
-        # Check dependencies and detect HW encoder in background (avoid startup freeze)
-        self.dependencies_ok = True  # assume ok until check completes
-        self.hw_encoder = None
+        # HW encoder and encoding setup (dependency check runs async via DownloadManager)
         self.encoding = EncodingService(
             ffmpeg_path=self.ffmpeg_path,
             hw_encoder=None,
@@ -475,7 +461,6 @@ class YouTubeDownloader(QMainWindow):
         self.clipboard_mgr.sig_add_url_to_list.connect(self._do_add_url_to_list)
         self.clipboard_mgr.sig_show_messagebox.connect(self._do_show_messagebox)
         self.clipboard_mgr.sig_run_on_gui.connect(self._do_run_on_gui)
-        self.clipboard_mgr.sig_downloads_finished.connect(self._on_clipboard_downloads_finished)
 
         self.download_mgr = DownloadManager(
             ytdlp_path=self.ytdlp_path,
@@ -502,7 +487,7 @@ class YouTubeDownloader(QMainWindow):
         self.update_mgr.sig_run_on_gui.connect(self._do_run_on_gui)
         self.update_mgr.sig_request_close.connect(self.close)
 
-        self.thread_pool.submit(self._init_dependencies_async)
+        self.thread_pool.submit(self.download_mgr.init_dependencies_async)
 
         # Thread safety locks (download_lock → download_mgr; others → respective managers)
         self.config_lock = threading.Lock()
@@ -513,9 +498,6 @@ class YouTubeDownloader(QMainWindow):
 
         # Theme mode
         self.current_theme = self._load_theme_preference()
-
-        # Uploader tab variables (state in upload_mgr)
-        self.uploader_current_index = 0
 
         # Load persisted clipboard URLs
         self._load_clipboard_urls()
@@ -539,9 +521,6 @@ class YouTubeDownloader(QMainWindow):
         self.sig_update_status.connect(self._do_update_status)
         self.sig_reset_buttons.connect(self._do_reset_buttons)
         self.sig_show_messagebox.connect(self._do_show_messagebox)
-        self.sig_set_mode_label.connect(self._do_set_mode_label)
-        self.sig_set_video_info.connect(self._do_set_video_info)
-        self.sig_set_filesize_label.connect(self._do_set_filesize_label)
         self.sig_run_on_gui.connect(self._do_run_on_gui)
 
         # ── Template GUI construction flow ───────────────────────
@@ -604,8 +583,6 @@ class YouTubeDownloader(QMainWindow):
         self._config_save_timer.timeout.connect(self._flush_config)
 
         # Download timeout monitor (replaces per-download daemon thread)
-        from constants import TIMEOUT_CHECK_INTERVAL
-
         self._download_timeout_timer = QTimer(self)
         self._download_timeout_timer.setInterval(TIMEOUT_CHECK_INTERVAL * 1000)
         self._download_timeout_timer.timeout.connect(self._check_download_timeout)
@@ -628,91 +605,6 @@ class YouTubeDownloader(QMainWindow):
         sa.setWidgetResizable(True)
         sa.setFrameShape(QScrollArea.Shape.NoFrame)
         return sa
-
-    # ══════════════════════════════════════════════════════════════
-    #  Widget builder helpers (template convention)
-    # ══════════════════════════════════════════════════════════════
-
-    def _group(self, title: str, rows: list, tooltip: str = "") -> QGroupBox:
-        box = QGroupBox(title)
-        vbox = QVBoxLayout()
-        for row in rows:
-            if isinstance(row, QHBoxLayout):
-                vbox.addLayout(row)
-            elif isinstance(row, QWidget):
-                vbox.addWidget(row)
-        box.setLayout(vbox)
-        if tooltip:
-            box.setTitle(f"{title}  \u24d8")
-            box.setToolTip(tooltip)
-        return box
-
-    def _int_row(self, key: str, label: str, lo: int, hi: int) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(QLabel(label))
-        row.addStretch()
-        spin = QSpinBox()
-        spin.setRange(lo, hi)
-        spin.setFixedWidth(90)
-        self.widgets[key] = spin
-        row.addWidget(spin)
-        return row
-
-    def _float_row(
-        self, key: str, label: str, lo: float, hi: float, suffix: str = ""
-    ) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(QLabel(label))
-        row.addStretch()
-        spin = QDoubleSpinBox()
-        spin.setRange(lo, hi)
-        spin.setDecimals(2)
-        spin.setSingleStep(0.1)
-        spin.setFixedWidth(90)
-        if suffix:
-            spin.setSuffix(f" {suffix}")
-        self.widgets[key] = spin
-        row.addWidget(spin)
-        return row
-
-    def _pct_row(self, key: str, label: str, lo: float, hi: float) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(QLabel(label))
-        row.addStretch()
-        spin = QDoubleSpinBox()
-        spin.setRange(lo, hi)
-        spin.setDecimals(1)
-        spin.setSingleStep(1.0)
-        spin.setSuffix(" %")
-        spin.setFixedWidth(100)
-        self.widgets[key] = spin
-        row.addWidget(spin)
-        return row
-
-    def _bool_row(self, key: str, label: str) -> QHBoxLayout:
-        row = QHBoxLayout()
-        cb = QCheckBox(label)
-        self.widgets[key] = cb
-        row.addWidget(cb)
-        row.addStretch()
-        return row
-
-    def _combo_row(self, key: str, label: str, items: list[str]) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.addWidget(QLabel(label))
-        row.addStretch()
-        combo = QComboBox()
-        combo.addItems(items)
-        combo.setFixedWidth(120)
-        self.widgets[key] = combo
-        row.addWidget(combo)
-        return row
-
-    def _label_row(self, text: str) -> QLabel:
-        lbl = QLabel(text)
-        lbl.setStyleSheet("color: gray; font-size: 11px;")
-        lbl.setWordWrap(True)
-        return lbl
 
     # ------------------------------------------------------------------
     #  Template GUI construction methods
@@ -874,9 +766,9 @@ class YouTubeDownloader(QMainWindow):
         start_pv = QVBoxLayout()
         start_pv.addWidget(QLabel("Start Time:"))
         self.start_preview_label = QLabel()
+        self.start_preview_label.setObjectName("previewLabel")
         self.start_preview_label.setFixedSize(PREVIEW_WIDTH, PREVIEW_HEIGHT)
         self.start_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.start_preview_label.setStyleSheet("background: #1a1a1a; color: #d4d4d4;")
         self.start_preview_label.setText("Preview")
         start_pv.addWidget(self.start_preview_label)
         preview_row.addLayout(start_pv)
@@ -887,9 +779,9 @@ class YouTubeDownloader(QMainWindow):
         end_pv = QVBoxLayout()
         end_pv.addWidget(QLabel("End Time:"))
         self.end_preview_label = QLabel()
+        self.end_preview_label.setObjectName("previewLabel")
         self.end_preview_label.setFixedSize(PREVIEW_WIDTH, PREVIEW_HEIGHT)
         self.end_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.end_preview_label.setStyleSheet("background: #1a1a1a; color: #d4d4d4;")
         self.end_preview_label.setText("Preview")
         end_pv.addWidget(self.end_preview_label)
         preview_row.addLayout(end_pv)
@@ -1166,10 +1058,12 @@ class YouTubeDownloader(QMainWindow):
 
         # Scrollable URL list (QScrollArea + QWidget + QVBoxLayout)
         self.clipboard_url_scroll = QScrollArea()
+        self.clipboard_url_scroll.setObjectName("urlListScroll")
         self.clipboard_url_scroll.setWidgetResizable(True)
         self.clipboard_url_scroll.setFixedHeight(CLIPBOARD_URL_LIST_HEIGHT)
         self.clipboard_url_scroll.setFrameShape(QFrame.Shape.Box)
         self.clipboard_url_list_widget = QWidget()
+        self.clipboard_url_list_widget.setObjectName("urlListInner")
         self.clipboard_url_list_layout = QVBoxLayout(self.clipboard_url_list_widget)
         self.clipboard_url_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.clipboard_url_list_layout.setContentsMargins(2, 2, 2, 2)
@@ -1257,10 +1151,12 @@ class YouTubeDownloader(QMainWindow):
 
         # Scrollable file list
         self.uploader_file_scroll = QScrollArea()
+        self.uploader_file_scroll.setObjectName("urlListScroll")
         self.uploader_file_scroll.setWidgetResizable(True)
         self.uploader_file_scroll.setFixedHeight(75)
         self.uploader_file_scroll.setFrameShape(QFrame.Shape.Box)
         self.uploader_file_list_widget = QWidget()
+        self.uploader_file_list_widget.setObjectName("urlListInner")
         self.uploader_file_list_layout = QVBoxLayout(self.uploader_file_list_widget)
         self.uploader_file_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.uploader_file_list_layout.setContentsMargins(2, 2, 2, 2)
@@ -1474,7 +1370,11 @@ class YouTubeDownloader(QMainWindow):
     #  Theme management
     # ------------------------------------------------------------------
     def _apply_theme(self):
-        """Apply the current QSS theme to the entire application."""
+        """Apply the current QSS theme to the entire application.
+
+        All widget-specific styles use QSS object names (#previewLabel,
+        #urlListScroll, #urlListInner) so a single setStyleSheet call suffices.
+        """
         if self.current_theme == "dark":
             qss = _build_dark_style()
         else:
@@ -1483,31 +1383,6 @@ class YouTubeDownloader(QMainWindow):
 
         # Dark title bar on Windows
         _set_dark_title_bar(self, dark=(self.current_theme == "dark"))
-
-        # Re-apply inline styles on preview labels based on theme
-        colors = THEMES[self.current_theme]
-        if hasattr(self, "start_preview_label"):
-            self.start_preview_label.setStyleSheet(
-                f"background: {colors['preview_bg']}; color: {colors['preview_fg']};"
-            )
-        if hasattr(self, "end_preview_label"):
-            self.end_preview_label.setStyleSheet(
-                f"background: {colors['preview_bg']}; color: {colors['preview_fg']};"
-            )
-
-        # Clipboard URL list scroll area background
-        if hasattr(self, "clipboard_url_scroll"):
-            self.clipboard_url_scroll.setStyleSheet(
-                f"QScrollArea {{ border: 1px solid {colors['border']}; background: {colors['canvas_bg']}; }}"
-            )
-            self.clipboard_url_list_widget.setStyleSheet(f"background: {colors['canvas_bg']};")
-
-        # Uploader file list
-        if hasattr(self, "uploader_file_scroll"):
-            self.uploader_file_scroll.setStyleSheet(
-                f"QScrollArea {{ border: 1px solid {colors['border']}; background: {colors['canvas_bg']}; }}"
-            )
-            self.uploader_file_list_widget.setStyleSheet(f"background: {colors['canvas_bg']};")
 
     def _toggle_theme(self):
         """Toggle between light and dark theme."""
@@ -1525,7 +1400,7 @@ class YouTubeDownloader(QMainWindow):
     # ------------------------------------------------------------------
     def closeEvent(self, event):
         """Handle window close with proper resource cleanup."""
-        if self._updating:
+        if self.update_mgr._updating:
             event.ignore()
             return
         logger.info("Application shutdown initiated...")
@@ -1629,7 +1504,9 @@ class YouTubeDownloader(QMainWindow):
     def _do_update_status(self, message: str, color: str):
         """Update status label (called on GUI thread via signal)."""
         self.status_label.setText(message)
-        self.status_label.setStyleSheet(f"color: {color};")
+        if getattr(self, "_last_status_color", None) != color:
+            self._last_status_color = color
+            self.status_label.setStyleSheet(f"color: {color};")
 
     def _do_reset_buttons(self):
         """Reset download/stop buttons to idle state (called on GUI thread via signal)."""
@@ -1730,7 +1607,9 @@ class YouTubeDownloader(QMainWindow):
     def _do_clipboard_status(self, message: str, color: str):
         """Update clipboard status label."""
         self.clipboard_status_label.setText(message)
-        self.clipboard_status_label.setStyleSheet(f"color: {color};")
+        if getattr(self, "_last_clipboard_status_color", None) != color:
+            self._last_clipboard_status_color = color
+            self.clipboard_status_label.setStyleSheet(f"color: {color};")
 
     def _do_clipboard_total(self, text: str):
         """Update clipboard total label."""
@@ -1739,38 +1618,20 @@ class YouTubeDownloader(QMainWindow):
     def _do_upload_status(self, message: str, color: str):
         """Update trimmer upload status label."""
         self.upload_status_label.setText(message)
-        self.upload_status_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
+        if getattr(self, "_last_upload_status_color", None) != color:
+            self._last_upload_status_color = color
+            self.upload_status_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
 
     def _do_uploader_status(self, message: str, color: str):
         """Update uploader tab status label."""
         self.uploader_status_label.setText(message)
-        self.uploader_status_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
-
-    def _do_set_upload_url(self, url: str):
-        """Show trimmer upload URL."""
-        self.upload_url_entry.setText(url)
-        self.upload_url_widget.setVisible(True)
-
-    def _do_set_uploader_url(self, url: str):
-        """Show uploader upload URL."""
-        self.uploader_url_entry.setText(url)
-        self.uploader_url_widget.setVisible(True)
+        if getattr(self, "_last_uploader_status_color", None) != color:
+            self._last_uploader_status_color = color
+            self.uploader_status_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
 
     def _do_enable_upload_btn(self, enabled: bool):
         """Enable or disable the upload button."""
         self.upload_btn.setEnabled(enabled)
-
-    def _do_set_mode_label(self, text: str):
-        """Set the trimmer mode indicator label."""
-        self.mode_label.setText(text)
-
-    def _do_set_video_info(self, text: str):
-        """Set the trimmer video info label."""
-        self.video_info_label.setText(text)
-
-    def _do_set_filesize_label(self, text: str):
-        """Set the trimmer filesize label."""
-        self.filesize_label.setText(text)
 
     def _do_add_url_to_list(self, url: str):
         """Add a URL to the clipboard list (called on GUI thread via signal)."""
@@ -1800,11 +1661,9 @@ class YouTubeDownloader(QMainWindow):
         """
         pixmap = QPixmap.fromImage(image)
         if position == "start":
-            self.start_preview_image = pixmap
             self.start_preview_label.setPixmap(pixmap)
             self.start_preview_label.setText("")
         else:
-            self.end_preview_image = pixmap
             self.end_preview_label.setPixmap(pixmap)
             self.end_preview_label.setText("")
 
@@ -1812,10 +1671,6 @@ class YouTubeDownloader(QMainWindow):
         """Re-enable fetch button after duration fetch completes."""
         if self.trim_enabled_check.isChecked():
             self.fetch_duration_btn.setEnabled(True)
-
-    def _on_clipboard_downloads_finished(self):
-        """Handle clipboard download queue completion."""
-        self._finish_clipboard_downloads()
 
     # ------------------------------------------------------------------
     #  Tab change handling & clipboard monitoring
@@ -2046,122 +1901,6 @@ class YouTubeDownloader(QMainWindow):
                 return str(python_bin_path)
         return name
 
-    def check_dependencies(self):
-        """Check if yt-dlp, ffmpeg, and ffprobe are available."""
-        try:
-            ytdlp_found = (
-                os.path.isfile(self.ytdlp_path) and os.access(self.ytdlp_path, os.X_OK)
-            ) or shutil.which(self.ytdlp_path)
-            if ytdlp_found:
-                result = subprocess.run(
-                    [self.ytdlp_path, "--version"],
-                    capture_output=True,
-                    timeout=DEPENDENCY_CHECK_TIMEOUT,
-                    **_subprocess_kwargs,
-                )
-                version = result.stdout.decode("utf-8", errors="replace").strip()
-                if version:
-                    logger.info(f"yt-dlp version: {version}")
-                else:
-                    logger.info(f"yt-dlp is available at: {self.ytdlp_path}")
-            else:
-                logger.error(f"yt-dlp not found at: {self.ytdlp_path}")
-                return False
-
-            result = subprocess.run(
-                [self.ffmpeg_path, "-version"],
-                capture_output=True,
-                timeout=DEPENDENCY_CHECK_TIMEOUT,
-                **_subprocess_kwargs,
-            )
-            if result.returncode == 0:
-                logger.info(f"ffmpeg is available at: {self.ffmpeg_path}")
-            else:
-                logger.error("ffmpeg check failed")
-                return False
-
-            result = subprocess.run(
-                [self.ffprobe_path, "-version"],
-                capture_output=True,
-                timeout=DEPENDENCY_CHECK_TIMEOUT,
-                **_subprocess_kwargs,
-            )
-            if result.returncode == 0:
-                logger.info(f"ffprobe is available at: {self.ffprobe_path}")
-            else:
-                logger.error("ffprobe check failed")
-                return False
-
-            return True
-        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-            logger.error(f"Dependency check failed: {e}")
-            return False
-
-    def _detect_hw_encoder(self):
-        """Probe for hardware H.264 encoders (AMD AMF, NVIDIA NVENC). Returns encoder name or None."""
-        if not self.dependencies_ok:
-            return None
-        for encoder in ("h264_amf", "h264_nvenc"):
-            try:
-                probe_out = os.path.join(tempfile.gettempdir(), "ytdl_hwprobe.mp4")
-                cmd = [
-                    self.ffmpeg_path,
-                    "-hide_banner",
-                    "-y",
-                    "-loglevel",
-                    "error",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "testsrc2=size=64x64:rate=25:duration=1",
-                    "-vf",
-                    "format=nv12",
-                    "-frames:v",
-                    "10",
-                    "-c:v",
-                    encoder,
-                    probe_out,
-                ]
-                result = subprocess.run(cmd, capture_output=True, timeout=10, **_subprocess_kwargs)
-                try:
-                    os.remove(probe_out)
-                except OSError:
-                    pass
-                if result.returncode == 0:
-                    logger.info(f"Hardware encoder available: {encoder}")
-                    return encoder
-                else:
-                    stderr = result.stderr.decode("utf-8", errors="replace").strip()
-                    logger.info(f"Hardware encoder {encoder} not available: {stderr[-200:]}")
-            except (subprocess.TimeoutExpired, OSError) as e:
-                logger.info(f"Hardware encoder {encoder} probe failed: {e}")
-        logger.info("No hardware encoder found, using libx264")
-        return None
-
-    def _init_dependencies_async(self):
-        """Check dependencies and detect HW encoder in background thread."""
-        deps_ok = self.check_dependencies()
-        if not deps_ok:
-            logger.warning("Dependencies check failed at startup")
-        hw_enc = self._detect_hw_encoder()
-
-        # Capture paths discovered during check_dependencies
-        ytdlp = self.ytdlp_path
-        ffmpeg = self.ffmpeg_path
-        ffprobe = self.ffprobe_path
-
-        def _apply_on_gui():
-            self.dependencies_ok = deps_ok
-            self.hw_encoder = hw_enc
-            self.encoding.hw_encoder = hw_enc
-            self.encoding.ffmpeg_path = ffmpeg
-            self.update_mgr.ytdlp_path = ytdlp
-            self.download_mgr.ytdlp_path = ytdlp
-            self.download_mgr.ffmpeg_path = ffmpeg
-            self.download_mgr.ffprobe_path = ffprobe
-
-        self.update_mgr.sig_run_on_gui.emit(_apply_on_gui)
-
     def _init_temp_directory(self):
         """Initialize temp directory and schedule cleanup of orphaned ones."""
         self.temp_dir = tempfile.mkdtemp(prefix="ytdl_preview_")
@@ -2225,10 +1964,9 @@ class YouTubeDownloader(QMainWindow):
         self._clipboard_timer.stop()
 
     def _poll_clipboard(self):
-        """Poll clipboard for new YouTube URLs (called by QTimer)."""
-        with self.clipboard_mgr.clipboard_lock:
-            if not self.clipboard_mgr.clipboard_monitoring:
-                return
+        """Poll clipboard for new YouTube URLs (called by QTimer on GUI thread)."""
+        if not self.clipboard_mgr.clipboard_monitoring:
+            return
 
         clipboard_content = None
 
@@ -2367,6 +2105,7 @@ class YouTubeDownloader(QMainWindow):
             self.clipboard_mgr.clipboard_url_list.clear()
             self.clipboard_mgr.completed_count = 0
             self.clipboard_mgr.failed_count = 0
+            self.clipboard_mgr.downloading_count = 0
             self.clipboard_url_widgets.clear()
 
         for widget in widgets_to_destroy:
@@ -2387,37 +2126,50 @@ class YouTubeDownloader(QMainWindow):
     def _update_url_status(self, url, status):
         """Update visual status of URL: pending (gray), downloading (blue),
         completed (green), failed (red). Also maintains status counters."""
-        if url in self.clipboard_url_widgets:
-            item = self.clipboard_url_widgets[url]
-            status_label = item.get("status_label")
+        item = self.clipboard_url_widgets.get(url)
+        if item is None:
+            return
 
-            color_map = {
-                "pending": "gray",
-                "downloading": "blue",
-                "completed": "green",
-                "failed": "red",
-            }
-            color = color_map.get(status, "gray")
-            if status_label:
-                status_label.setStyleSheet(
-                    f"background: {color}; border-radius: 6px; border: none;"
-                )
+        status_label = item.get("status_label")
+        color_map = {
+            "pending": "gray",
+            "downloading": "blue",
+            "completed": "green",
+            "failed": "red",
+        }
+        color = color_map.get(status, "gray")
+        if status_label:
+            status_label.setStyleSheet(f"background: {color}; border-radius: 6px; border: none;")
 
-            with self.clipboard_mgr.clipboard_lock:
-                widget_data = self.clipboard_url_widgets.get(url)
-                if widget_data:
-                    old_status = widget_data.get("status")
-                    if old_status != status:
-                        # Update counters
-                        if old_status == "completed":
-                            self.clipboard_mgr.completed_count -= 1
-                        elif old_status == "failed":
-                            self.clipboard_mgr.failed_count -= 1
-                        if status == "completed":
-                            self.clipboard_mgr.completed_count += 1
-                        elif status == "failed":
-                            self.clipboard_mgr.failed_count += 1
-                        widget_data["status"] = status
+        with self.clipboard_mgr.clipboard_lock:
+            widget_data = item
+            if widget_data:
+                old_status = widget_data.get("status")
+                if old_status != status:
+                    # Update counters
+                    if old_status == "completed":
+                        self.clipboard_mgr.completed_count -= 1
+                    elif old_status == "failed":
+                        self.clipboard_mgr.failed_count -= 1
+                    elif old_status == "downloading":
+                        self.clipboard_mgr.downloading_count -= 1
+                    if status == "completed":
+                        self.clipboard_mgr.completed_count += 1
+                    elif status == "failed":
+                        self.clipboard_mgr.failed_count += 1
+                    elif status == "downloading":
+                        self.clipboard_mgr.downloading_count += 1
+                    widget_data["status"] = status
+
+    def _snapshot_clipboard_state(self) -> dict:
+        """Capture clipboard widget values on GUI thread (thread-safe snapshot)."""
+        return {
+            "quality": self.clipboard_quality_combo.currentText(),
+            "full_playlist": self.clipboard_full_playlist_check.isChecked(),
+            "audio_only": self.clipboard_audio_only_check.isChecked(),
+            "speed_limit": self.clipboard_speed_limit_entry.text().strip(),
+            "download_path": self.clipboard_mgr.clipboard_download_path,
+        }
 
     def start_clipboard_downloads(self):
         """Start downloading all pending URLs sequentially."""
@@ -2443,14 +2195,7 @@ class YouTubeDownloader(QMainWindow):
         total_count = len(pending_urls)
         self.clipboard_total_label.setText(f"Completed: 0/{total_count} videos")
 
-        # Snapshot clipboard widget values on GUI thread for thread safety
-        clip_state = {
-            "quality": self.clipboard_quality_combo.currentText(),
-            "full_playlist": self.clipboard_full_playlist_check.isChecked(),
-            "audio_only": self.clipboard_audio_only_check.isChecked(),
-            "speed_limit": self.clipboard_speed_limit_entry.text().strip(),
-            "download_path": self.clipboard_mgr.clipboard_download_path,
-        }
+        clip_state = self._snapshot_clipboard_state()
         logger.info(f"Starting clipboard batch download: {total_count} URLs")
         self.thread_pool.submit(self._process_clipboard_queue, clip_state)
 
@@ -2579,6 +2324,7 @@ class YouTubeDownloader(QMainWindow):
             current_had_error = False
             completed_count = 0
             stopped_by_user = False
+            _last_progress_emit = 0.0
 
             for line in process.stdout:
                 if self.clipboard_mgr.clipboard_stop_event.is_set():
@@ -2595,12 +2341,6 @@ class YouTubeDownloader(QMainWindow):
                         # Finalize previous URL
                         if current_url and not current_had_error:
                             completed_count += 1
-                            # Update data model immediately under lock (avoid persist race)
-                            with self.clipboard_mgr.clipboard_lock:
-                                for item in self.clipboard_mgr.clipboard_url_list:
-                                    if item["url"] == current_url:
-                                        item["status"] = "completed"
-                                        break
                             self._safe_after(
                                 0, lambda u=current_url: self._update_url_status(u, "completed")
                             )
@@ -2615,12 +2355,6 @@ class YouTubeDownloader(QMainWindow):
                         current_url = extracted_url
                         current_had_error = False
                         seen_urls.add(extracted_url)
-                        # Update data model immediately under lock
-                        with self.clipboard_mgr.clipboard_lock:
-                            for item in self.clipboard_mgr.clipboard_url_list:
-                                if item["url"] == current_url:
-                                    item["status"] = "downloading"
-                                    break
                         self._safe_after(
                             0, lambda u=current_url: self._update_url_status(u, "downloading")
                         )
@@ -2635,20 +2369,19 @@ class YouTubeDownloader(QMainWindow):
                 # Detect errors
                 if "ERROR" in line and current_url:
                     current_had_error = True
-                    # Update data model immediately under lock
-                    with self.clipboard_mgr.clipboard_lock:
-                        for item in self.clipboard_mgr.clipboard_url_list:
-                            if item["url"] == current_url:
-                                item["status"] = "failed"
-                                break
                     self._safe_after(0, lambda u=current_url: self._update_url_status(u, "failed"))
 
-                # Parse progress
+                # Parse progress (throttled to avoid flooding GUI event queue)
                 if "[download]" in line or "Downloading" in line:
                     progress_match = PROGRESS_REGEX.search(line)
                     if progress_match:
-                        progress = float(progress_match.group(1))
-                        self._safe_after(0, lambda p=progress: self.update_clipboard_progress(p))
+                        now = time.time()
+                        if now - _last_progress_emit > 0.25:
+                            progress = float(progress_match.group(1))
+                            self._safe_after(
+                                0, lambda p=progress: self.update_clipboard_progress(p)
+                            )
+                            _last_progress_emit = now
 
                 # Phase status updates
                 if "[Merger]" in line or "Merging" in line:
@@ -2669,11 +2402,6 @@ class YouTubeDownloader(QMainWindow):
             if current_url and not current_had_error:
                 if process.returncode == 0:
                     completed_count += 1
-                    with self.clipboard_mgr.clipboard_lock:
-                        for item in self.clipboard_mgr.clipboard_url_list:
-                            if item["url"] == current_url:
-                                item["status"] = "completed"
-                                break
                     self._safe_after(
                         0, lambda u=current_url: self._update_url_status(u, "completed")
                     )
@@ -2684,22 +2412,12 @@ class YouTubeDownloader(QMainWindow):
                         ),
                     )
                 else:
-                    with self.clipboard_mgr.clipboard_lock:
-                        for item in self.clipboard_mgr.clipboard_url_list:
-                            if item["url"] == current_url:
-                                item["status"] = "failed"
-                                break
                     self._safe_after(0, lambda u=current_url: self._update_url_status(u, "failed"))
 
             # Mark unreached URLs as failed (yt-dlp exited before processing them)
             if not stopped_by_user:
                 for u in pending_urls:
                     if u not in seen_urls:
-                        with self.clipboard_mgr.clipboard_lock:
-                            for item in self.clipboard_mgr.clipboard_url_list:
-                                if item["url"] == u:
-                                    item["status"] = "failed"
-                                    break
                         self._safe_after(0, lambda url=u: self._update_url_status(url, "failed"))
 
             logger.info(f"Batch clipboard download done: {completed_count}/{total_count} completed")
@@ -2925,11 +2643,7 @@ class YouTubeDownloader(QMainWindow):
         """Auto-download single URL when detected (if auto-download enabled)."""
         with self.clipboard_mgr.auto_download_lock:
             with self.clipboard_mgr.clipboard_lock:
-                downloading_count = sum(
-                    1
-                    for item in self.clipboard_mgr.clipboard_url_list
-                    if item["status"] == "downloading"
-                )
+                downloading_count = self.clipboard_mgr.downloading_count
             if downloading_count > 0:
                 logger.info(f"URL queued (another download in progress): {url}")
                 return
@@ -2939,14 +2653,7 @@ class YouTubeDownloader(QMainWindow):
 
         self.clipboard_stop_btn.setEnabled(True)
         self._update_auto_download_total()
-        # Snapshot clipboard widget values on GUI thread for thread safety
-        clip_state = {
-            "quality": self.clipboard_quality_combo.currentText(),
-            "full_playlist": self.clipboard_full_playlist_check.isChecked(),
-            "audio_only": self.clipboard_audio_only_check.isChecked(),
-            "speed_limit": self.clipboard_speed_limit_entry.text().strip(),
-            "download_path": self.clipboard_mgr.clipboard_download_path,
-        }
+        clip_state = self._snapshot_clipboard_state()
         self.thread_pool.submit(self._auto_download_worker, url, clip_state)
 
     def _auto_download_worker(self, url, clip_state=None):
@@ -3022,11 +2729,7 @@ class YouTubeDownloader(QMainWindow):
         """Update total progress for auto-downloads."""
         with self.clipboard_mgr.clipboard_lock:
             total = len(self.clipboard_mgr.clipboard_url_list)
-            completed = sum(
-                1
-                for item in self.clipboard_mgr.clipboard_url_list
-                if item["status"] in ["completed", "failed"]
-            )
+            completed = self.clipboard_mgr.completed_count + self.clipboard_mgr.failed_count
         self.clipboard_mgr.sig_clipboard_total.emit(f"Completed: {completed}/{total} videos")
 
     def update_clipboard_progress(self, value):
@@ -3068,7 +2771,7 @@ class YouTubeDownloader(QMainWindow):
             with open(test_file, "w") as f:
                 f.write("test")
             os.remove(test_file)
-        except (IOError, OSError) as e:
+        except OSError as e:
             QMessageBox.critical(self, "Error", f"Path is not writable:\n{path}\n\n{e}")
             return None
 
@@ -3084,6 +2787,9 @@ class YouTubeDownloader(QMainWindow):
 
     def _open_folder(self, path):
         """Open a folder in the system file manager."""
+        if not os.path.isdir(path):
+            QMessageBox.warning(self, "Error", f"Directory does not exist:\n{path}")
+            return
         try:
             if sys.platform == "win32":
                 os.startfile(path)
@@ -3144,14 +2850,12 @@ class YouTubeDownloader(QMainWindow):
             if not os.path.isfile(url):
                 QMessageBox.critical(self, "Error", f"File not found:\n{url}")
                 return
-            self.local_file_path = url
         else:
             is_valid, message = utils.validate_youtube_url(url)
             if not is_valid:
                 QMessageBox.critical(self, "Invalid URL", message)
                 logger.warning(f"Invalid URL rejected: {url}")
                 return
-            self.local_file_path = None
 
             if utils.is_playlist_url(url):
                 if utils.is_pure_playlist_url(url):
@@ -3637,13 +3341,12 @@ class YouTubeDownloader(QMainWindow):
         except Exception:
             logger.warning("Failed to copy URL to clipboard")
 
-    def _on_uploader_queue_done(self, count):
+    def _on_uploader_queue_done(self, count, completed_normally):
         """Clean up after queue upload completes (signal slot)."""
         with self.upload_mgr.uploader_lock:
             queue_len = len(self.upload_mgr.uploader_file_queue)
-            was_stopped = not self.upload_mgr.uploader_is_uploading
 
-        if was_stopped:
+        if not completed_normally:
             # Stopped mid-way — keep remaining items in queue
             self.uploader_status_label.setText(
                 f"Upload stopped ({count} of {queue_len} files uploaded)"
@@ -3738,7 +3441,6 @@ class YouTubeDownloader(QMainWindow):
 
         if not input_text:
             self.mode_label.setText("")
-            self.local_file_path = None
             return
 
         # Clear filename field when URL/file changes
@@ -3757,11 +3459,9 @@ class YouTubeDownloader(QMainWindow):
         self.fetch_duration_btn.setEnabled(self.trim_enabled_check.isChecked())
 
         if utils.is_local_file(input_text):
-            self.local_file_path = input_text
             self.mode_label.setText(f"Mode: Local File | {Path(input_text).name}")
             self.mode_label.setStyleSheet("color: green; font-size: 9pt;")
         else:
-            self.local_file_path = None
             self.mode_label.setText("Mode: YouTube Download")
             self.mode_label.setStyleSheet("color: green; font-size: 9pt;")
 
@@ -3796,8 +3496,6 @@ class YouTubeDownloader(QMainWindow):
         if filepath:
             self.url_entry.clear()
             self.url_entry.setText(filepath)
-            self.local_file_path = filepath
-
             audio_extensions = {".mp3", ".aac", ".m4a", ".wav"}
             if Path(filepath).suffix.lower() in audio_extensions:
                 self.audio_only_check.setChecked(True)
@@ -3843,7 +3541,7 @@ class YouTubeDownloader(QMainWindow):
             else:
                 self.is_playlist = utils.is_playlist_url(url)
 
-        if not self.dependencies_ok:
+        if not self.download_mgr.dependencies_ok:
             self.sig_show_messagebox.emit(
                 "error",
                 "Error",
@@ -3918,19 +3616,27 @@ class YouTubeDownloader(QMainWindow):
         )
         layout.addWidget(text_edit)
 
-        # Load and display history
-        try:
-            if UPLOAD_HISTORY_FILE.exists():
-                with open(UPLOAD_HISTORY_FILE, "r", encoding="utf-8") as f:
-                    content = f.read()
-                    if content:
-                        text_edit.setPlainText(content)
-                    else:
-                        text_edit.setPlainText("No upload history yet.")
-            else:
-                text_edit.setPlainText("No upload history yet.")
-        except Exception as e:
-            text_edit.setPlainText(f"Error loading history: {e}")
+        # Load and display history (offloaded to avoid blocking GUI thread)
+        text_edit.setPlainText("Loading history...")
+
+        def _load_history():
+            try:
+                if UPLOAD_HISTORY_FILE.exists():
+                    with open(UPLOAD_HISTORY_FILE, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    return content if content else "No upload history yet."
+                return "No upload history yet."
+            except Exception as e:
+                return f"Error loading history: {e}"
+
+        def _on_history_loaded(future):
+            try:
+                text_edit.setPlainText(future.result())
+            except Exception:
+                text_edit.setPlainText("Error loading history.")
+
+        future = self.thread_pool.submit(_load_history)
+        future.add_done_callback(lambda f: self._safe_after(0, lambda: _on_history_loaded(f)))
 
         # Button row
         btn_layout = QHBoxLayout()

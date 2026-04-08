@@ -12,9 +12,9 @@ import logging
 import os
 import re
 import shutil
-import socket
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -32,12 +32,12 @@ from constants import (
     BUFFER_SIZE,
     CHUNK_SIZE,
     CONCURRENT_FRAGMENTS,
+    DEPENDENCY_CHECK_TIMEOUT,
     DOWNLOAD_PROGRESS_TIMEOUT,
     DOWNLOAD_PROGRESS_TIMEOUT_TRIM,
     DOWNLOAD_TIMEOUT,
     METADATA_FETCH_TIMEOUT,
     PROGRESS_COMPLETE,
-    TIMEOUT_CHECK_INTERVAL,
     VOLUME_CHANGE_THRESHOLD,
 )
 from managers.encoding import EncodeCallbacks, EncodingService
@@ -107,6 +107,167 @@ class DownloadManager(QObject):
         # Video metadata (set by main window before download)
         self.video_duration: float = 0
         self.video_title: str | None = None
+
+        # Dependency state (set by init_dependencies_async)
+        self.dependencies_ok: bool = True
+        self.hw_encoder: str | None = None
+
+    # ------------------------------------------------------------------
+    #  Dependency checks
+    # ------------------------------------------------------------------
+
+    def check_dependencies(self) -> bool:
+        """Check if yt-dlp, ffmpeg, and ffprobe are available."""
+        try:
+            ytdlp_found = (
+                os.path.isfile(self.ytdlp_path) and os.access(self.ytdlp_path, os.X_OK)
+            ) or shutil.which(self.ytdlp_path)
+            if ytdlp_found:
+                result = subprocess.run(
+                    [self.ytdlp_path, "--version"],
+                    capture_output=True,
+                    timeout=DEPENDENCY_CHECK_TIMEOUT,
+                    **_subprocess_kwargs,
+                )
+                version = result.stdout.decode("utf-8", errors="replace").strip()
+                if version:
+                    logger.info(f"yt-dlp version: {version}")
+                else:
+                    logger.info(f"yt-dlp is available at: {self.ytdlp_path}")
+            else:
+                logger.error(f"yt-dlp not found at: {self.ytdlp_path}")
+                return False
+
+            result = subprocess.run(
+                [self.ffmpeg_path, "-version"],
+                capture_output=True,
+                timeout=DEPENDENCY_CHECK_TIMEOUT,
+                **_subprocess_kwargs,
+            )
+            if result.returncode == 0:
+                logger.info(f"ffmpeg is available at: {self.ffmpeg_path}")
+            else:
+                logger.error("ffmpeg check failed")
+                return False
+
+            result = subprocess.run(
+                [self.ffprobe_path, "-version"],
+                capture_output=True,
+                timeout=DEPENDENCY_CHECK_TIMEOUT,
+                **_subprocess_kwargs,
+            )
+            if result.returncode == 0:
+                logger.info(f"ffprobe is available at: {self.ffprobe_path}")
+            else:
+                logger.error("ffprobe check failed")
+                return False
+
+            return True
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            logger.error(f"Dependency check failed: {e}")
+            return False
+
+    def detect_hw_encoder(self, deps_ok: bool = True) -> tuple[str | None, str | None]:
+        """Probe for hardware H.264 encoders.
+
+        Probe order: NVENC (NVIDIA) → AMF (AMD, Windows) → VAAPI (AMD/Intel, Linux).
+        Returns (encoder_name, vaapi_device) where vaapi_device is only set for VAAPI.
+        """
+        if not deps_ok:
+            return None, None
+
+        # NVENC and AMF: standard probe via test encode
+        for encoder in ("h264_nvenc", "h264_amf"):
+            try:
+                probe_out = os.path.join(tempfile.gettempdir(), "ytdl_hwprobe.mp4")
+                cmd = [
+                    self.ffmpeg_path,
+                    "-hide_banner",
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=64x64:rate=25:duration=1",
+                    "-vf",
+                    "format=nv12",
+                    "-frames:v",
+                    "10",
+                    "-c:v",
+                    encoder,
+                    probe_out,
+                ]
+                result = subprocess.run(cmd, capture_output=True, timeout=10, **_subprocess_kwargs)
+                try:
+                    os.remove(probe_out)
+                except OSError:
+                    pass
+                if result.returncode == 0:
+                    logger.info(f"Hardware encoder available: {encoder}")
+                    return encoder, None
+                else:
+                    stderr = result.stderr.decode("utf-8", errors="replace").strip()
+                    logger.info(f"Hardware encoder {encoder} not available: {stderr[-200:]}")
+            except (subprocess.TimeoutExpired, OSError) as e:
+                logger.info(f"Hardware encoder {encoder} probe failed: {e}")
+
+        # VAAPI: Linux only (AMD/Intel integrated GPUs)
+        if sys.platform != "win32":
+            vaapi_device = "/dev/dri/renderD128"
+            try:
+                probe_out = os.path.join(tempfile.gettempdir(), "ytdl_hwprobe.mp4")
+                cmd = [
+                    self.ffmpeg_path,
+                    "-hide_banner",
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-vaapi_device",
+                    vaapi_device,
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc2=size=64x64:rate=25:duration=1",
+                    "-vf",
+                    "format=nv12,hwupload",
+                    "-frames:v",
+                    "10",
+                    "-c:v",
+                    "h264_vaapi",
+                    probe_out,
+                ]
+                result = subprocess.run(cmd, capture_output=True, timeout=10, **_subprocess_kwargs)
+                try:
+                    os.remove(probe_out)
+                except OSError:
+                    pass
+                if result.returncode == 0:
+                    logger.info(f"Hardware encoder available: h264_vaapi (device={vaapi_device})")
+                    return "h264_vaapi", vaapi_device
+                else:
+                    stderr = result.stderr.decode("utf-8", errors="replace").strip()
+                    logger.info(f"Hardware encoder h264_vaapi not available: {stderr[-200:]}")
+            except (subprocess.TimeoutExpired, OSError) as e:
+                logger.info(f"Hardware encoder h264_vaapi probe failed: {e}")
+
+        logger.info("No hardware encoder found, using libx264")
+        return None, None
+
+    def init_dependencies_async(self) -> None:
+        """Check dependencies and detect HW encoder (call from thread pool)."""
+        deps_ok = self.check_dependencies()
+        if not deps_ok:
+            logger.warning("Dependencies check failed at startup")
+        hw_enc, vaapi_device = self.detect_hw_encoder(deps_ok)
+
+        def _apply_on_gui():
+            self.dependencies_ok = deps_ok
+            self.hw_encoder = hw_enc
+            self.encoding.hw_encoder = hw_enc
+            self.encoding.vaapi_device = vaapi_device
+
+        self.sig_run_on_gui.emit(_apply_on_gui)
 
     # ------------------------------------------------------------------
     #  Thread-safe helpers
@@ -263,7 +424,7 @@ class DownloadManager(QObject):
 
         needs_processing = trim_enabled or volume != 1.0
         if needs_processing:
-            ffmpeg_args = self.encoding.get_video_encoder_args(mode="crf") + [
+            ffmpeg_args = self.encoding.get_crf_args_for_postprocessor() + [
                 "-c:a",
                 "aac",
                 "-b:a",
@@ -311,7 +472,7 @@ class DownloadManager(QObject):
             ]
         )
         if volume != 1.0:
-            ffmpeg_args = self.encoding.get_video_encoder_args(mode="crf") + [
+            ffmpeg_args = self.encoding.get_crf_args_for_postprocessor() + [
                 "-c:a",
                 "aac",
                 "-b:a",
@@ -347,6 +508,8 @@ class DownloadManager(QObject):
                 p += 4  # reference_id
                 timescale = struct.unpack(">I", data[p : p + 4])[0]
                 p += 4
+                if timescale == 0:
+                    return None
                 if version == 0:
                     p += 4  # earliest_presentation_time
                     first_offset = struct.unpack(">I", data[p : p + 4])[0]
@@ -396,16 +559,23 @@ class DownloadManager(QObject):
         urls = result.stdout.strip().split("\n")
         return (urls[0], urls[1]) if len(urls) >= 2 else (urls[0], None)
 
+    _HTTP_RANGE_MAX_SIZE = 512 * 1024  # 512KB — enough for SIDX/moof headers
+
     def _http_range_read(self, url: str, start: int, end: int) -> bytes:
         """Download a byte range from a URL.
 
         Reads in chunks and checks is_downloading between them so the
         user can cancel during slow CDN responses (e.g. 10-hour videos).
         """
+        requested_size = end - start + 1
+        if requested_size > self._HTTP_RANGE_MAX_SIZE:
+            raise ValueError(
+                f"Requested range {requested_size} exceeds max {self._HTTP_RANGE_MAX_SIZE}"
+            )
         req = urllib.request.Request(url)
         req.add_header("Range", f"bytes={start}-{end}")
         chunks = []
-        expected_size = end - start + 1
+        expected_size = requested_size
         total_read = 0
         with urllib.request.urlopen(req, timeout=DOWNLOAD_PROGRESS_TIMEOUT_TRIM // 10) as resp:
             while True:
@@ -441,7 +611,7 @@ class DownloadManager(QObject):
             return self._download_stream_segment_inner(
                 stream_url, start_time, end_time, output_path, label, progress_base
             )
-        except (urllib.error.URLError, socket.timeout, OSError) as e:
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
             raise RuntimeError(
                 f"Network error downloading {label}: {e}\n\n"
                 f"This can happen with very long videos. Try again or use a shorter trim range."
@@ -734,49 +904,6 @@ class DownloadManager(QObject):
     #  Timeout monitoring
     # ------------------------------------------------------------------
 
-    def _monitor_download_timeout(self) -> None:
-        """Monitor download for timeouts (absolute and progress-based)."""
-        while True:
-            time.sleep(TIMEOUT_CHECK_INTERVAL)
-
-            if self._shutting_down:
-                break
-
-            with self.download_lock:
-                is_still_downloading = self.is_downloading
-
-            if not is_still_downloading:
-                break
-
-            current_time = time.time()
-
-            # Show elapsed time while yt-dlp is preparing (no output yet)
-            if self.download_start_time and not self._download_has_progress:
-                elapsed = int(current_time - self.download_start_time)
-                self.update_status(f"Preparing download... ({elapsed}s elapsed)", "blue")
-
-            if self.download_start_time:
-                elapsed = current_time - self.download_start_time
-                if elapsed > DOWNLOAD_TIMEOUT:
-                    logger.error(f"Download exceeded absolute timeout ({DOWNLOAD_TIMEOUT}s)")
-                    self._timeout_download("Download timeout (60 min limit exceeded)")
-                    break
-
-            if self.last_progress_time:
-                time_since_progress = current_time - self.last_progress_time
-                progress_timeout = (
-                    DOWNLOAD_PROGRESS_TIMEOUT_TRIM
-                    if self._trim_download_active
-                    else DOWNLOAD_PROGRESS_TIMEOUT
-                )
-                if time_since_progress > progress_timeout:
-                    timeout_min = progress_timeout // 60
-                    logger.error(f"Download stalled (no progress for {progress_timeout}s)")
-                    self._timeout_download(
-                        f"Download stalled (no progress for {timeout_min} minutes)"
-                    )
-                    break
-
     def _monitor_download_timeout_tick(self) -> None:
         """Single timeout check (called by GUI QTimer each interval)."""
         if not self.is_downloading:
@@ -912,7 +1039,7 @@ class DownloadManager(QObject):
                 elif "has already been downloaded" in line:
                     self.update_status("File already exists, skipping...", "orange")
                     self.last_progress_time = time.time()
-        except (BrokenPipeError, IOError) as e:
+        except OSError as e:
             if self.is_downloading:
                 logger.warning(f"Pipe error while reading process output: {e}")
         return error_lines
@@ -1122,8 +1249,6 @@ class DownloadManager(QObject):
         elif self.is_downloading:
             self.update_status("Download failed", "red")
             logger.error("Two-pass encoding failed")
-
-        shutil.rmtree(temp_dir, ignore_errors=True)
 
     # ------------------------------------------------------------------
     #  Main download logic
@@ -1419,7 +1544,7 @@ class DownloadManager(QObject):
                 quality = ui_state["quality"]
                 trim_enabled = ui_state["trim_enabled"]
             else:
-                quality = ""
+                quality = "720"
                 trim_enabled = False
             audio_only = (
                 is_audio_file
@@ -1512,7 +1637,7 @@ class DownloadManager(QObject):
                         f"{target_bitrate}bps for {clip_duration}s clip"
                     )
                 else:
-                    height = quality
+                    height = int(quality)
 
                 output_file = os.path.join(_dp, f"{output_name}_{height}p.mp4")
 
@@ -1538,13 +1663,16 @@ class DownloadManager(QObject):
                         self.update_status("Processing failed", "red")
                     return
                 else:
-                    cmd = [self.ffmpeg_path, "-i", filepath]
+                    cmd = [self.ffmpeg_path]
+                    if self.encoding.hw_encoder == "h264_vaapi" and self.encoding.vaapi_device:
+                        cmd.extend(["-vaapi_device", self.encoding.vaapi_device])
+                    cmd.extend(["-i", filepath])
 
                     if trim_enabled:
                         cmd.extend(["-ss", str(start_time), "-to", str(end_time)])
 
                     cmd.extend(
-                        ["-vf", f"scale=-2:{height}"]
+                        self.encoding.build_vf_args(height)
                         + self.encoding.get_video_encoder_args(mode="crf")
                         + ["-c:a", "aac", "-b:a", AUDIO_BITRATE]
                     )
