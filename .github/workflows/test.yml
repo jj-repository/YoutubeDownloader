@@ -53,7 +53,7 @@ jobs:
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest -v --cov=constants --cov=managers --cov=downloader_pyqt6 --cov-report=term-missing --cov-fail-under=55
+        run: pytest -v --cov=constants --cov=managers --cov-report=term-missing --cov-fail-under=55
 
   lint:
     runs-on: ubuntu-latest

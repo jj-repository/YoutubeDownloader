@@ -99,7 +99,7 @@ if sys.platform != "win32":
         pass
 
 # Configure logging
-APP_DATA_DIR.mkdir(exist_ok=True, mode=0o700)
+APP_DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 logging.basicConfig(
     level=logging.INFO,

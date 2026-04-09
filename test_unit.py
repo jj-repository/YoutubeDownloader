@@ -8,6 +8,7 @@ Run with coverage: pytest test_unit.py -v --cov=constants --cov=managers
 
 import os
 import struct
+import sys
 from pathlib import Path
 
 import pytest
@@ -317,6 +318,7 @@ class TestValidateDownloadPath:
         is_valid, _, error = validate_download_path("../../../etc/passwd")
         assert is_valid is False
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="/etc is a Linux path")
     def test_system_paths_rejected(self):
         is_valid, _, _ = validate_download_path("/etc")
         assert is_valid is False
