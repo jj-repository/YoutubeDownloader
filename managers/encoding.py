@@ -44,6 +44,8 @@ class EncodeCallbacks:
 class EncodingService:
     """FFmpeg encoding operations."""
 
+    _STDERR_JOIN_TIMEOUT = 5
+
     def __init__(self, ffmpeg_path: str, hw_encoder: str | None, vaapi_device: str | None = None):
         self.ffmpeg_path = ffmpeg_path
         self.hw_encoder = hw_encoder
@@ -238,9 +240,11 @@ class EncodingService:
             cb.on_heartbeat()
 
         proc.wait()
-        stderr_thread.join(timeout=5)
+        stderr_thread.join(timeout=self._STDERR_JOIN_TIMEOUT)
         if stderr_thread.is_alive():
-            logger.warning(f"{status_prefix}: stderr reader thread did not exit in 5s")
+            logger.warning(
+                f"{status_prefix}: stderr reader thread did not exit in {self._STDERR_JOIN_TIMEOUT}s"
+            )
 
         if proc.returncode != 0:
             stderr_text = "".join(stderr_lines)

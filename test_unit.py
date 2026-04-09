@@ -3946,6 +3946,7 @@ class TestEncodingStderrThreadTimeout:
         from unittest.mock import MagicMock, patch
 
         enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder=None)
+        enc._STDERR_JOIN_TIMEOUT = 0.01
 
         mock_proc = MagicMock()
         mock_proc.returncode = 0
