@@ -1150,13 +1150,14 @@ class TestRetryNetworkOperation:
 
     def test_exhausts_retries(self):
         import subprocess
-        from unittest.mock import MagicMock
+        from unittest.mock import MagicMock, patch
 
         from managers.utils import retry_network_operation
 
         op = MagicMock(side_effect=subprocess.TimeoutExpired("cmd", 5))
-        with pytest.raises(subprocess.TimeoutExpired):
-            retry_network_operation(op, "test_op")
+        with patch("managers.utils.time.sleep"):
+            with pytest.raises(subprocess.TimeoutExpired):
+                retry_network_operation(op, "test_op")
 
 
 # ─── managers/update_manager.py — SHA verification ───────────────────────
