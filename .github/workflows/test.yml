@@ -43,7 +43,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.lock
-          pip install pytest==8.3.4 pytest-cov==6.0.0
+          pip install -r requirements-ci.lock
 
       - name: Install optional dependencies (Linux)
         if: runner.os == 'Linux'
@@ -53,7 +53,7 @@ jobs:
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest test_unit.py -v --cov=constants --cov=managers --cov=downloader_pyqt6 --cov-report=term-missing --cov-fail-under=55
+        run: pytest -v --cov=constants --cov=managers --cov=downloader_pyqt6 --cov-report=term-missing --cov-fail-under=55
 
   lint:
     runs-on: ubuntu-latest
@@ -73,10 +73,23 @@ jobs:
           cache-dependency-path: 'requirements.lock'
 
       - name: Install ruff
-        run: pip install ruff==0.9.7
+        run: pip install -r requirements-ci.lock
 
       - name: Run ruff check
         run: ruff check .
 
       - name: Run ruff format check
         run: ruff format --check .
+
+  all-checks:
+    if: always()
+    needs: [test, lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: All checks passed
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ] || [ "${{ needs.lint.result }}" != "success" ]; then
+            echo "::error::Some checks failed"
+            exit 1
+          fi

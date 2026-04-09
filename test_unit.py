@@ -1321,8 +1321,8 @@ class TestDownloadTimeout:
         assert download_mgr.is_downloading is False
         mock_cleanup.assert_called_once_with(mock_proc)
 
-    def test_stop_download_no_cleanup_when_process_is_none(self, download_mgr):
-        """stop_download should skip cleanup when current_process is None."""
+    def test_stop_download_resets_state_when_process_is_none(self, download_mgr):
+        """stop_download should reset is_downloading even when current_process is None."""
         from unittest.mock import patch
 
         download_mgr.is_downloading = True
@@ -1332,7 +1332,7 @@ class TestDownloadTimeout:
             download_mgr.stop_download()
 
         mock_cleanup.assert_not_called()
-        # Note: is_downloading remains True when process is None — known edge case
+        assert download_mgr.is_downloading is False
         assert download_mgr.current_process is None
 
     def test_absolute_timeout_detection(self, download_mgr):
@@ -5568,6 +5568,180 @@ class TestDownloadManagerDependencyCheck:
         vaapi_cmd = captured_cmds[-1]
         assert "-vaapi_device" in vaapi_cmd
         assert "format=nv12,hwupload" in vaapi_cmd
+
+
+# ─── Audit 10: New test coverage ──────────────────────────────────────────
+
+
+class TestParseSidxTimescaleZero:
+    """TQ-M3: _parse_sidx with timescale=0 should return None (division by zero guard)."""
+
+    def test_timescale_zero_returns_none(self):
+        # Build a SIDX box with timescale=0
+        ver_flags = struct.pack(">I", 0)
+        ref_id = struct.pack(">I", 1)
+        ts = struct.pack(">I", 0)  # timescale = 0
+        earliest_pts = struct.pack(">I", 0)
+        fo = struct.pack(">I", 0)
+        reserved_refcount = struct.pack(">HH", 0, 1)
+        refs = struct.pack(">III", 10000, 5000, 0x90000000)
+        body = ver_flags + ref_id + ts + earliest_pts + fo + reserved_refcount + refs
+        box_size = 8 + len(body)
+        data = struct.pack(">I", box_size) + b"sidx" + body
+        assert DownloadManager._parse_sidx(data) is None
+
+
+class TestDownloadTrimValidation:
+    """TQ-M1/M2: download() early returns for trim with duration=0 or invalid range."""
+
+    def test_trim_with_zero_duration(self, download_mgr):
+        from unittest.mock import MagicMock
+
+        download_mgr.video_duration = 0
+        download_mgr._trim_download_active = True
+        status_spy = MagicMock()
+        download_mgr.sig_update_status.connect(status_spy)
+
+        ui_state = {
+            "quality": "1080",
+            "trim_enabled": True,
+            "start_time": 0,
+            "end_time": 60,
+            "filename": "",
+            "volume_raw": 100,
+            "keep_below_10mb": False,
+            "audio_only": False,
+            "speed_limit": "",
+            "download_path": "/tmp",
+        }
+        download_mgr.download("https://www.youtube.com/watch?v=test", ui_state)
+        assert download_mgr.is_downloading is False
+
+    def test_trim_with_invalid_range(self, download_mgr):
+        from unittest.mock import MagicMock
+
+        download_mgr.video_duration = 120
+        download_mgr._trim_download_active = True
+        status_spy = MagicMock()
+        download_mgr.sig_update_status.connect(status_spy)
+
+        ui_state = {
+            "quality": "1080",
+            "trim_enabled": True,
+            "start_time": 60,
+            "end_time": 60,
+            "filename": "",
+            "volume_raw": 100,
+            "keep_below_10mb": False,
+            "audio_only": False,
+            "speed_limit": "",
+            "download_path": "/tmp",
+        }
+        download_mgr.download("https://www.youtube.com/watch?v=test", ui_state)
+        assert download_mgr.is_downloading is False
+
+
+class TestUploadToCatboxNonHttps:
+    """TQ-M4: upload_to_catbox should reject non-HTTPS response from Catbox."""
+
+    def test_non_https_catbox_response(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import MagicMock, patch
+
+        from managers.upload_manager import UploadManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        upload_mgr = UploadManager(thread_pool=pool)
+        msgbox_spy = MagicMock()
+        upload_mgr.sig_show_messagebox.connect(msgbox_spy)
+
+        mock_client = MagicMock()
+        mock_client.upload.return_value = "http://not-secure.example.com/file.mp4"
+        upload_mgr.last_output_file = "/tmp/test.mp4"
+
+        with patch.object(upload_mgr, "_get_catbox_client", return_value=mock_client):
+            upload_mgr.upload_to_catbox()
+
+        msgbox_spy.assert_called_once()
+        assert msgbox_spy.call_args[0][0] == "error"
+        pool.shutdown(wait=False)
+
+
+class TestUploaderQueueFlagReset:
+    """TQ-M6: process_uploader_queue should reset uploader_is_uploading after completion."""
+
+    def test_flag_reset_after_queue_done(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import MagicMock, patch
+
+        from managers.upload_manager import UploadManager
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        upload_mgr = UploadManager(thread_pool=pool)
+        done_spy = MagicMock()
+        upload_mgr.sig_uploader_queue_done.connect(done_spy)
+
+        upload_mgr.uploader_file_queue = [
+            {"path": "/tmp/a.mp4", "widget": None},
+        ]
+        upload_mgr._queued_paths = {"/tmp/a.mp4"}
+        upload_mgr.uploader_is_uploading = True
+
+        with patch.object(upload_mgr, "upload_single_file", return_value=True):
+            upload_mgr.process_uploader_queue()
+
+        assert upload_mgr.uploader_is_uploading is False
+        pool.shutdown(wait=False)
+
+
+class TestRetryDelayConstant:
+    """TQ-L2: retry_network_operation should use RETRY_DELAY constant."""
+
+    def test_uses_retry_delay_constant(self):
+        import subprocess as sp
+        from unittest.mock import MagicMock, patch
+
+        from constants import RETRY_DELAY
+        from managers.utils import retry_network_operation
+
+        op = MagicMock(side_effect=[sp.CalledProcessError(1, "test"), "ok"])
+        with patch("managers.utils.time.sleep") as mock_sleep:
+            result = retry_network_operation(op, "test_op")
+        assert result == "ok"
+        mock_sleep.assert_called_once_with(RETRY_DELAY * 1)
+
+
+class TestValidateVolumeNanInf:
+    """SEC-L1: validate_volume should reject NaN and Inf."""
+
+    def test_nan_returns_default(self):
+        assert validate_volume(float("nan")) == 1.0
+
+    def test_inf_returns_default(self):
+        assert validate_volume(float("inf")) == 1.0
+
+    def test_neg_inf_returns_default(self):
+        assert validate_volume(float("-inf")) == 1.0
+
+    def test_normal_still_works(self):
+        assert validate_volume(1.5) == 1.5
+
+
+class TestStreamUrlValidation:
+    """SEC-M2: _get_stream_urls should reject non-HTTPS URLs."""
+
+    def test_rejects_http_stream_url(self, download_mgr):
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "http://evil.example.com/video\nhttps://ok.example.com/audio\n"
+
+        with (
+            patch("managers.download_manager.subprocess.run", return_value=mock_result),
+            pytest.raises(RuntimeError, match="non-HTTPS"),
+        ):
+            download_mgr._get_stream_urls("https://youtube.com/watch?v=x", "bestvideo+bestaudio")
 
 
 if __name__ == "__main__":

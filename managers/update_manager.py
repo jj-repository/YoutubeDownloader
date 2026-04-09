@@ -328,7 +328,7 @@ class UpdateManager(QObject):
         """Download, verify, and replace .py source files, then auto-restart."""
         import urllib.request
 
-        progress_state, _create_progress_dialog, _update_progress_dialog, _close_progress_dialog = (
+        _, _create_progress_dialog, _update_progress_dialog, _close_progress_dialog = (
             self._make_progress_helpers()
         )
 
@@ -418,6 +418,11 @@ class UpdateManager(QObject):
                     if tmp_path and os.path.exists(tmp_path):
                         os.unlink(tmp_path)
                     raise
+
+            # Clean up backup files after successful replacement
+            for module_name in downloaded:
+                backup_path = (script_dir / module_name).with_suffix(".py.backup")
+                backup_path.unlink(missing_ok=True)
 
             # Auto-restart: spawn new process, then shut down
             self.sig_update_status.emit("Update complete — restarting...", "green")
@@ -518,7 +523,7 @@ class UpdateManager(QObject):
 
         logger.info(f"Downloading update: {download_url}")
 
-        progress_state, _create_dlg, _update_dlg, _close_dlg = self._make_progress_helpers()
+        _, _create_dlg, _update_dlg, _close_dlg = self._make_progress_helpers()
         self.sig_run_on_gui.emit(_create_dlg)
 
         request = urllib.request.Request(download_url, headers=headers)
@@ -640,7 +645,7 @@ class UpdateManager(QObject):
 
         logger.info(f"Downloading update: {download_url}")
 
-        progress_state, _create_dlg, _update_dlg, _close_dlg = self._make_progress_helpers()
+        _, _create_dlg, _update_dlg, _close_dlg = self._make_progress_helpers()
         self.sig_run_on_gui.emit(_create_dlg)
 
         tar_tmp = tempfile.NamedTemporaryFile(

@@ -1,6 +1,6 @@
 # Technical Debt
 
-Last updated: 2026-04-08 (audit 9)
+Last updated: 2026-04-09 (audit 10)
 
 ## Summary
 **Audit 1**: 55 found, 53 fixed, 2 accepted
@@ -13,6 +13,7 @@ Last updated: 2026-04-08 (audit 9)
 **Post-audit cleanup**: 17 deferred items fixed (6 refactors, 3 performance, 2 DevOps, 9 test gaps + dependency tests), 28 new tests (340 total)
 **Audit 8**: 15 raw (5 agents) → 15 unique (1 dup removed), 15 fixed (1 iteration), 0 deferred (339 tests, was 340 — net -1 from merged tests)
 **Audit 9**: 30 raw (5 agents) → 30 unique, 24 fixed (1 iteration), 6 deferred (353 tests, was 339 — net +14 from strengthened tests)
+**Audit 10**: 35 raw (5 agents) → 35 unique after dedup, 28 fixed (1 iteration), 7 deferred (364 tests, was 353 — net +11 from new tests)
 
 ## Remaining Issues
 
@@ -32,12 +33,63 @@ Last updated: 2026-04-08 (audit 9)
 - **P-L4**: `view_upload_history` reads entire file into QTextEdit — one-time cost per dialog open, 500 lines max. [low]
 - **P-L5**: `on_slider_change` fires per-pixel without debounce for text updates — preview already debounced 500ms. [low]
 - **P-L6**: `_restore_clipboard_urls` re-validates persisted URLs at startup — acceptable at 500 max. [low]
+### Deferred (audit 10)
+- **P-M3**: `last_progress_time` / `_download_has_progress` / `_trim_download_active` read across threads without lock — GIL-safe in CPython, formally undefined. [medium]
+- **DO-L1**: Action version comments in workflow YAML may not match actual tag — Dependabot-managed. [low]
+- **DO-L2**: No coverage report artifact or external upload (only printed to job log). [low]
+- **DO-L3**: `QT_QPA_PLATFORM: offscreen` applied to Windows runner without OS guard. [low]
+- **DO-L5**: No type checking (mypy/pyright) in CI. [low]
+- **SEC-L6**: yt-dlp error lines with signed URLs logged verbatim to rotating log file. [low]
+- **P-L5-b**: `_check_download_timeout` reads `is_downloading` without lock — GIL-safe. [low]
+
 ### Test coverage gaps (remaining)
 - **TQ-8** [medium]: `test_cancellation_during_data_download` xfail masks real gap (mock urlopen interaction flaky)
 - **TQ-10–20** [medium/low]: Various smaller coverage gaps in update_manager, download_manager, upload_manager
 
 ### Accepted tradeoffs (from audit 1)
 - **Widget reads from worker in `_fetch_file_size`** — Safe via closure. [informational]
+
+## Fixed Issues (audit 10 — 28 fixed, 364 tests)
+
+<details>
+<summary>Click to expand</summary>
+
+### High (1)
+- [x] TQ-H1: `stop_download()` with `current_process=None` left `is_downloading=True` — stuck state. Fixed to reset `is_downloading` even without a process.
+
+### Medium (7)
+- [x] SEC-M1: QSS path injection via unquoted temp dir in checkbox image `url()`. Added double-quote wrapping.
+- [x] SEC-M2: Stream URLs from yt-dlp not validated before HTTP fetch (SSRF). Added `https://` scheme check.
+- [x] P-M1: Sequential clipboard progress unthrottled (~100 events/sec). Added 0.25s throttle gate.
+- [x] P-M2: `_clipboard_batch_process` written from worker, read from GUI without lock. Added `_clipboard_batch_lock`.
+- [x] P-M4: `encoding.run_ffmpeg_with_progress` status emitted at ~25 Hz without throttle. Added 0.25s throttle gate.
+- [x] DO-M1: pytest/ruff/pytest-cov pinned in workflow YAML invisible to Dependabot. Created `requirements-ci.lock`.
+- [x] DO-M2: `dependabot-auto-merge` uses `pull_request_target` without fork origin check. Added `head.repo.full_name` guard.
+- [x] DO-M3: pytest hardcoded to `test_unit.py` — new test files silently skipped. Changed to `pytest` discovery.
+
+### Low (20)
+- [x] CQ-L1: `progress_state` unused across all `_make_progress_helpers()` call sites. Replaced with `_`.
+- [x] CQ-L2: Rollback in `_apply_update_source` leaks `.py.backup` files. Added cleanup on success path.
+- [x] CQ-L3: Local variable `is_playlist_url` shadows imported function. Renamed to `url_is_playlist`.
+- [x] CQ-L4: Dead `"question"` branch in `_do_show_messagebox` — never emitted. Removed.
+- [x] CQ-L5: Duplicate assignments in `fetch_duration_clicked`. Hoisted above if/else.
+- [x] CQ-L6: Dead alias `widget_data = item` and always-true guard in `_update_url_status`. Removed.
+- [x] CQ-L7: `_init_temp_directory` referenced `self.trimming_mgr` before assignment. Moved cleanup scheduling.
+- [x] SEC-L1: `validate_volume` passes `nan`/`inf` through clamp. Added `math.isfinite()` guard.
+- [x] SEC-L5-b: Persisted clipboard URL list count unbounded before validation loop. Added `[:MAX_CLIPBOARD_URLS]` cap.
+- [x] P-L1: `UploadManager.add_to_queue` O(n) linear scan for duplicate detection. Added parallel `_queued_paths` set.
+- [x] P-L2: `_fetch_file_size` stale results overwrite fresh. Added `_filesize_fetch_seq` counter.
+- [x] P-L4-b: `_do_run_on_gui` no exception safety. Added try/except with logging.
+- [x] P-L6: `save_upload_link` TOCTOU on `_upload_save_count`. Protected with `upload_lock`.
+- [x] DO-L4: No `all-checks` aggregator job for branch protection. Added `all-checks` job.
+- [x] TQ-M1: Missing test for `download()` trim with `video_duration=0`.
+- [x] TQ-M2: Missing test for `download()` with `start_time >= end_time`.
+- [x] TQ-M3: Missing test for `_parse_sidx` with `timescale=0`.
+- [x] TQ-M4: Missing test for `upload_to_catbox` non-HTTPS response.
+- [x] TQ-M6: Missing assertion for `uploader_is_uploading` reset after queue done.
+- [x] TQ-L2: `retry_network_operation` hardcodes delay constant. Test now uses `RETRY_DELAY`.
+
+</details>
 
 ## Fixed Issues (audit 9 — 23 fixed, 353 tests)
 

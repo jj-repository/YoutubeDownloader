@@ -51,6 +51,7 @@ class UploadManager(QObject):
         self.uploader_is_uploading = False
         self.last_output_file: str | None = None
         self.uploader_file_queue: list[dict] = []  # [{"path": str, "widget": QWidget|None}]
+        self._queued_paths: set[str] = set()  # O(1) duplicate check
         self._upload_save_count = 0
 
         # Trim upload history at startup to prevent unbounded growth
@@ -211,8 +212,9 @@ class UploadManager(QObject):
     def add_to_queue(self, file_path: str) -> bool:
         """Add a file to the upload queue. Returns True if added, False if duplicate."""
         with self.uploader_lock:
-            if any(item["path"] == file_path for item in self.uploader_file_queue):
+            if file_path in self._queued_paths:
                 return False
+            self._queued_paths.add(file_path)
             self.uploader_file_queue.append({"path": file_path, "widget": None})
         return True
 
@@ -224,6 +226,7 @@ class UploadManager(QObject):
                 if item["path"] == file_path:
                     widget = item.get("widget")
                     self.uploader_file_queue.pop(i)
+                    self._queued_paths.discard(file_path)
                     break
         return widget
 
@@ -235,6 +238,7 @@ class UploadManager(QObject):
                 if item.get("widget"):
                     widgets.append(item["widget"])
             self.uploader_file_queue.clear()
+            self._queued_paths.clear()
         return widgets
 
     def queue_count(self) -> int:
@@ -258,19 +262,23 @@ class UploadManager(QObject):
         """Append an upload link to the history file, trimming when needed."""
         try:
             UPLOAD_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-            with open(UPLOAD_HISTORY_FILE, "a", encoding="utf-8") as f:
-                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-                f.write(f"{timestamp} | {filename} | {link}\n")
-            self._upload_save_count += 1
-            if self._upload_save_count >= 100:
-                self._upload_save_count = 0
+            with self.upload_lock:
+                with open(UPLOAD_HISTORY_FILE, "a", encoding="utf-8") as f:
+                    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                    f.write(f"{timestamp} | {filename} | {link}\n")
+                self._upload_save_count += 1
+                should_trim = self._upload_save_count >= 100
+                if should_trim:
+                    self._upload_save_count = 0
+            if should_trim:
                 try:
-                    with open(UPLOAD_HISTORY_FILE, "r", encoding="utf-8") as f:
-                        lines = f.readlines()
-                    if len(lines) > 1000:
-                        with open(UPLOAD_HISTORY_FILE, "w", encoding="utf-8") as f:
-                            f.writelines(lines[-500:])
-                        logger.info("Trimmed upload history to last 500 entries")
+                    with self.upload_lock:
+                        with open(UPLOAD_HISTORY_FILE, "r", encoding="utf-8") as f:
+                            lines = f.readlines()
+                        if len(lines) > 1000:
+                            with open(UPLOAD_HISTORY_FILE, "w", encoding="utf-8") as f:
+                                f.writelines(lines[-500:])
+                            logger.info("Trimmed upload history to last 500 entries")
                 except Exception as trim_err:
                     logger.error(f"Error trimming upload history: {trim_err}")
             logger.info(f"Saved upload link to history: {link}")

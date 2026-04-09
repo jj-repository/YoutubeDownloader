@@ -557,6 +557,9 @@ class DownloadManager(QObject):
         if result.returncode != 0:
             raise RuntimeError(f"Failed to get stream URLs: {result.stderr.strip()}")
         urls = result.stdout.strip().split("\n")
+        for u in urls:
+            if not u.startswith("https://"):
+                raise RuntimeError(f"Rejected non-HTTPS stream URL: {u[:80]}")
         return (urls[0], urls[1]) if len(urls) >= 2 else (urls[0], None)
 
     _HTTP_RANGE_MAX_SIZE = 512 * 1024  # 512KB — enough for SIDX/moof headers
@@ -965,14 +968,17 @@ class DownloadManager(QObject):
             process_to_cleanup = self.current_process
             is_active = self.is_downloading
 
-        if process_to_cleanup and is_active:
+        if not is_active:
+            return
+
+        if process_to_cleanup:
             safe_process_cleanup(process_to_cleanup)
 
-            with self.download_lock:
-                self.is_downloading = False
-                self.current_process = None
-            self.update_status("Download stopped", "orange")
-            self.sig_reset_buttons.emit()
+        with self.download_lock:
+            self.is_downloading = False
+            self.current_process = None
+        self.update_status("Download stopped", "orange")
+        self.sig_reset_buttons.emit()
 
     # ------------------------------------------------------------------
     #  yt-dlp output parsing

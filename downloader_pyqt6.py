@@ -262,8 +262,8 @@ def _build_dark_style():
         _DARK_STYLE_BASE
         + f"""
 QCheckBox::indicator {{ width: 18px; height: 18px; }}
-QCheckBox::indicator:unchecked {{ image: url({unc}); }}
-QCheckBox::indicator:checked {{ image: url({chk}); }}
+QCheckBox::indicator:unchecked {{ image: url("{unc}"); }}
+QCheckBox::indicator:checked {{ image: url("{chk}"); }}
 """
     )
 
@@ -446,6 +446,11 @@ class YouTubeDownloader(QMainWindow):
         self.trimming_mgr.sig_preview_ready.connect(self._on_preview_ready)
         self.trimming_mgr.sig_fetch_done.connect(self._on_fetch_done)
 
+        # Defer old temp-dir cleanup (moved here from _init_temp_directory so trimming_mgr exists)
+        QTimer.singleShot(
+            0, lambda: self.thread_pool.submit(self.trimming_mgr.cleanup_old_temp_dirs)
+        )
+
         # Clean up leftover files from previous self-updates (off GUI thread)
         self.thread_pool.submit(UpdateManager.cleanup_old_updates)
 
@@ -495,6 +500,8 @@ class YouTubeDownloader(QMainWindow):
         # Clipboard Mode (state in clipboard_mgr, created after thread_pool)
         self.clipboard_url_widgets = {}
         self._clipboard_batch_process = None
+        self._filesize_fetch_seq = 0
+        self._clipboard_batch_lock = threading.Lock()
 
         # Theme mode
         self.current_theme = self._load_theme_preference()
@@ -1521,8 +1528,6 @@ class YouTubeDownloader(QMainWindow):
             QMessageBox.warning(self, title, message)
         elif msg_type == "error":
             QMessageBox.critical(self, title, message)
-        elif msg_type == "question":
-            QMessageBox.question(self, title, message)
 
     def _show_update_dialog(self, latest_version, release_data):
         """Show app update available dialog with options."""
@@ -1761,7 +1766,7 @@ class YouTubeDownloader(QMainWindow):
                         raise ValueError(
                             "Invalid clipboard URLs file format: 'urls' must be a list"
                         )
-                    self.persisted_clipboard_urls = data["urls"]
+                    self.persisted_clipboard_urls = data["urls"][:MAX_CLIPBOARD_URLS]
                     logger.info(
                         f"Loaded {len(self.persisted_clipboard_urls)} persisted clipboard URLs"
                     )
@@ -1902,12 +1907,9 @@ class YouTubeDownloader(QMainWindow):
         return name
 
     def _init_temp_directory(self):
-        """Initialize temp directory and schedule cleanup of orphaned ones."""
+        """Initialize temp directory. Cleanup of orphaned dirs is scheduled separately
+        after trimming_mgr is created (see __init__)."""
         self.temp_dir = tempfile.mkdtemp(prefix="ytdl_preview_")
-        # Defer old-dir cleanup to thread pool to avoid blocking the GUI
-        QTimer.singleShot(
-            0, lambda: self.thread_pool.submit(self.trimming_mgr.cleanup_old_temp_dirs)
-        )
 
     # ==================================================================
     #  PORTED BUSINESS LOGIC METHODS
@@ -1917,7 +1919,10 @@ class YouTubeDownloader(QMainWindow):
 
     def _do_run_on_gui(self, fn):
         """Execute a callable on the GUI thread (signal slot)."""
-        fn()
+        try:
+            fn()
+        except Exception as e:
+            logger.error(f"_do_run_on_gui callback raised: {e}")
 
     def _safe_after(self, delay, callback):
         """Schedule *callback* on the GUI thread.
@@ -2142,24 +2147,22 @@ class YouTubeDownloader(QMainWindow):
             status_label.setStyleSheet(f"background: {color}; border-radius: 6px; border: none;")
 
         with self.clipboard_mgr.clipboard_lock:
-            widget_data = item
-            if widget_data:
-                old_status = widget_data.get("status")
-                if old_status != status:
-                    # Update counters
-                    if old_status == "completed":
-                        self.clipboard_mgr.completed_count -= 1
-                    elif old_status == "failed":
-                        self.clipboard_mgr.failed_count -= 1
-                    elif old_status == "downloading":
-                        self.clipboard_mgr.downloading_count -= 1
-                    if status == "completed":
-                        self.clipboard_mgr.completed_count += 1
-                    elif status == "failed":
-                        self.clipboard_mgr.failed_count += 1
-                    elif status == "downloading":
-                        self.clipboard_mgr.downloading_count += 1
-                    widget_data["status"] = status
+            old_status = item.get("status")
+            if old_status != status:
+                # Update counters
+                if old_status == "completed":
+                    self.clipboard_mgr.completed_count -= 1
+                elif old_status == "failed":
+                    self.clipboard_mgr.failed_count -= 1
+                elif old_status == "downloading":
+                    self.clipboard_mgr.downloading_count -= 1
+                if status == "completed":
+                    self.clipboard_mgr.completed_count += 1
+                elif status == "failed":
+                    self.clipboard_mgr.failed_count += 1
+                elif status == "downloading":
+                    self.clipboard_mgr.downloading_count += 1
+                item["status"] = status
 
     def _snapshot_clipboard_state(self) -> dict:
         """Capture clipboard widget values on GUI thread (thread-safe snapshot)."""
@@ -2315,7 +2318,8 @@ class YouTubeDownloader(QMainWindow):
                 bufsize=1,
                 **_subprocess_kwargs,
             )
-            self._clipboard_batch_process = process
+            with self._clipboard_batch_lock:
+                self._clipboard_batch_process = process
 
             # Parse multiplexed stdout
             url_set = set(pending_urls)
@@ -2425,7 +2429,8 @@ class YouTubeDownloader(QMainWindow):
         except Exception as e:
             logger.exception(f"Batch clipboard download error: {e}")
         finally:
-            self._clipboard_batch_process = None
+            with self._clipboard_batch_lock:
+                self._clipboard_batch_process = None
             if process:
                 utils.safe_process_cleanup(process)
             if batch_file_path:
@@ -2458,10 +2463,10 @@ class YouTubeDownloader(QMainWindow):
                 quality = "none"
 
             audio_only = quality.startswith("none") or clip_state.get("audio_only", False)
-            is_playlist_url = utils.is_playlist_url(url)
+            url_is_playlist = utils.is_playlist_url(url)
             full_playlist_enabled = clip_state["full_playlist"]
 
-            download_as_playlist = is_playlist_url and full_playlist_enabled
+            download_as_playlist = url_is_playlist and full_playlist_enabled
 
             self._safe_after(0, lambda: self.clipboard_progress.setValue(0))
             self._safe_after(0, lambda: self.clipboard_progress_label.setText("0%"))
@@ -2489,7 +2494,7 @@ class YouTubeDownloader(QMainWindow):
                     url, output_path, quality, volume=1.0
                 )
 
-            if is_playlist_url and not full_playlist_enabled:
+            if url_is_playlist and not full_playlist_enabled:
                 cmd.insert(1, "--no-playlist")
 
             # Speed limit — insert before the "--" separator so yt-dlp sees them
@@ -2504,7 +2509,7 @@ class YouTubeDownloader(QMainWindow):
 
             if download_as_playlist:
                 logger.info(f"Clipboard full playlist download starting: {url}")
-            elif is_playlist_url:
+            elif url_is_playlist:
                 logger.info(f"Clipboard single video from playlist starting: {url}")
             else:
                 logger.info(f"Clipboard download starting: {url}")
@@ -2521,6 +2526,7 @@ class YouTubeDownloader(QMainWindow):
 
             current_phase = "video" if not audio_only else "audio"
             playlist_item_info = ""
+            _last_seq_progress_emit = 0.0
 
             for line in process.stdout:
                 # Check stop flags
@@ -2557,16 +2563,20 @@ class YouTubeDownloader(QMainWindow):
                     progress_match = PROGRESS_REGEX.search(line)
                     if progress_match:
                         progress = float(progress_match.group(1))
-                        self._safe_after(0, lambda p=progress: self.update_clipboard_progress(p))
-
-                        phase = current_phase
-                        pinfo = playlist_item_info
-                        self._safe_after(
-                            0,
-                            lambda p=progress, ph=phase, pi=pinfo: self.update_clipboard_status(
-                                f"Downloading {ph}{pi}... {p:.1f}%", "blue"
-                            ),
-                        )
+                        now = time.time()
+                        if now - _last_seq_progress_emit > 0.25:
+                            _last_seq_progress_emit = now
+                            self._safe_after(
+                                0, lambda p=progress: self.update_clipboard_progress(p)
+                            )
+                            phase = current_phase
+                            pinfo = playlist_item_info
+                            self._safe_after(
+                                0,
+                                lambda p=progress, ph=phase, pi=pinfo: self.update_clipboard_status(
+                                    f"Downloading {ph}{pi}... {p:.1f}%", "blue"
+                                ),
+                            )
 
                 elif "[Merger]" in line or "Merging" in line:
                     self._safe_after(
@@ -2624,9 +2634,11 @@ class YouTubeDownloader(QMainWindow):
         was_downloading = not self.clipboard_mgr.clipboard_stop_event.is_set()
         self.clipboard_mgr.clipboard_stop_event.set()
         # Terminate batch process if running
-        if self._clipboard_batch_process:
-            utils.safe_process_cleanup(self._clipboard_batch_process)
+        with self._clipboard_batch_lock:
+            proc = self._clipboard_batch_process
             self._clipboard_batch_process = None
+        if proc:
+            utils.safe_process_cleanup(proc)
         if was_downloading:
             logger.info("Clipboard batch downloads stopped by user")
         stopped = False
@@ -2888,12 +2900,9 @@ class YouTubeDownloader(QMainWindow):
             return
 
         if self.current_video_url != url:
-            self.current_video_url = url
-            self.trimming_mgr.current_video_url = url
             self.trimming_mgr.clear_preview_cache()
-        else:
-            self.current_video_url = url
-            self.trimming_mgr.current_video_url = url
+        self.current_video_url = url
+        self.trimming_mgr.current_video_url = url
 
         with self.trimming_mgr.fetch_lock:
             self.trimming_mgr.is_fetching_duration = True
@@ -2952,6 +2961,8 @@ class YouTubeDownloader(QMainWindow):
         _quality = quality if quality is not None else self.quality_combo.currentText()
         _audio_only = audio_only if audio_only is not None else self.audio_only_check.isChecked()
         _ytdlp_path = self.ytdlp_path  # capture immutable snapshot for closure
+        self._filesize_fetch_seq += 1
+        my_seq = self._filesize_fetch_seq
 
         def _fetch():
             try:
@@ -2994,6 +3005,8 @@ class YouTubeDownloader(QMainWindow):
                             except (ValueError, OverflowError):
                                 continue
 
+                    if self._filesize_fetch_seq != my_seq:
+                        return  # stale fetch, newer one in flight
                     if filesize:
                         filesize_mb = filesize / BYTES_PER_MB
                         self._safe_after(

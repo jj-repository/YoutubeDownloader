@@ -11,7 +11,7 @@ jobs:
   auto-merge:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    if: github.actor == 'dependabot[bot]'
+    if: github.actor == 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
     permissions:
       contents: write
       pull-requests: write

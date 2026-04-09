@@ -216,6 +216,7 @@ class EncodingService:
         stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
         stderr_thread.start()
 
+        _last_status_emit = 0.0
         for line in proc.stdout:
             if cb.is_cancelled():
                 safe_process_cleanup(proc)
@@ -228,7 +229,10 @@ class EncodingService:
                     if duration > 0:
                         pct = min(100, (current / duration) * 100)
                         cb.on_progress(pct)
-                        cb.on_status(f"{status_prefix}... {pct:.0f}%", "blue")
+                        now = time.time()
+                        if now - _last_status_emit > 0.25:
+                            _last_status_emit = now
+                            cb.on_status(f"{status_prefix}... {pct:.0f}%", "blue")
                 except (ValueError, IndexError):
                     pass
             cb.on_heartbeat()

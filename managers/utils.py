@@ -132,7 +132,11 @@ def validate_download_path(path: str) -> tuple[bool, str | None, str | None]:
 def validate_volume(volume: float | str) -> float:
     """Validate and clamp volume value to safe range."""
     try:
+        import math
+
         vol = float(volume)
+        if not math.isfinite(vol):
+            return 1.0
         return max(MIN_VOLUME, min(MAX_VOLUME, vol))
     except (ValueError, TypeError):
         return 1.0
