@@ -3,7 +3,7 @@
 # vary by platform and are resolved automatically.
 #
 # Used by CI build and test workflows. Development uses requirements.txt (ranges).
-yt-dlp==2026.3.17
+yt-dlp==2026.03.17
 PyQt6==6.8.1
 catboxpy==0.1.0
 pyperclip==1.9.0
