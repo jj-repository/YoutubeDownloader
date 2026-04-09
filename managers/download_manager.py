@@ -101,7 +101,6 @@ class DownloadManager(QObject):
         self.download_start_time: float | None = None
         self._download_has_progress = False
         self._trim_download_active = False
-        self._shutting_down = False
         self._last_status_update: float = 0
 
         # Video metadata (set by main window before download)
@@ -1005,24 +1004,30 @@ class DownloadManager(QObject):
                     progress_match = PROGRESS_REGEX.search(line)
                     if progress_match:
                         progress = float(progress_match.group(1))
-                        self.update_progress(progress)
-
-                        speed_match = SPEED_REGEX.search(line)
-                        eta_match = ETA_REGEX.search(line)
-
-                        if speed_match and eta_match:
-                            status_msg = (
-                                f"Downloading... {progress:.1f}% "
-                                f"at {speed_match.group(1)} | "
-                                f"ETA: {eta_match.group(1)}"
-                            )
-                        elif speed_match:
-                            status_msg = f"Downloading... {progress:.1f}% at {speed_match.group(1)}"
-                        else:
-                            status_msg = f"Downloading... {progress:.1f}%"
-
-                        self.update_status(status_msg, "blue")
                         self.last_progress_time = time.time()
+
+                        now = self.last_progress_time
+                        if now - self._last_status_update >= 0.25 or progress >= PROGRESS_COMPLETE:
+                            self._last_status_update = now
+                            self.update_progress(progress)
+
+                            speed_match = SPEED_REGEX.search(line)
+                            eta_match = ETA_REGEX.search(line)
+
+                            if speed_match and eta_match:
+                                status_msg = (
+                                    f"Downloading... {progress:.1f}% "
+                                    f"at {speed_match.group(1)} | "
+                                    f"ETA: {eta_match.group(1)}"
+                                )
+                            elif speed_match:
+                                status_msg = (
+                                    f"Downloading... {progress:.1f}% at {speed_match.group(1)}"
+                                )
+                            else:
+                                status_msg = f"Downloading... {progress:.1f}%"
+
+                            self.update_status(status_msg, "blue")
                     elif "Destination" in line:
                         self.update_status("Starting download...", "blue")
                         self.last_progress_time = time.time()
@@ -1053,12 +1058,6 @@ class DownloadManager(QObject):
     # ------------------------------------------------------------------
     #  Download sub-paths (extracted from download() for readability)
     # ------------------------------------------------------------------
-
-    def _finish_download(self) -> None:
-        """Reset download state and re-enable UI buttons."""
-        with self.download_lock:
-            self.is_downloading = False
-        self.sig_reset_buttons.emit()
 
     def _download_audio_trimmed_path(
         self,
@@ -1348,13 +1347,6 @@ class DownloadManager(QObject):
                         cmd.append("--no-playlist")
                     cmd.extend(tail)
             else:
-                if quality.startswith("none") or quality == "none (Audio only)":
-                    self.update_status("Please select a video quality", "red")
-                    self.sig_reset_buttons.emit()
-                    with self.download_lock:
-                        self.is_downloading = False
-                    return
-
                 keep_below_10mb = ui_state["keep_below_10mb"] if ui_state else False
 
                 if keep_below_10mb:
@@ -1443,7 +1435,7 @@ class DownloadManager(QObject):
             logger.info(f"Download command: {' '.join(cmd)}")
 
             with self.download_lock:
-                self.current_process = subprocess.Popen(
+                proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -1452,11 +1444,15 @@ class DownloadManager(QObject):
                     bufsize=1,
                     **_subprocess_kwargs,
                 )
+                self.current_process = proc
 
-            error_lines = self._parse_ytdlp_output(self.current_process)
-            self.current_process.wait()
+            error_lines = self._parse_ytdlp_output(proc)
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                safe_process_cleanup(proc)
 
-            if self.current_process.returncode == 0 and self.is_downloading:
+            if proc.returncode == 0 and self.is_downloading:
                 if not audio_only and keep_below_10mb and temp_dir:
                     _dp2 = ui_state["download_path"] if ui_state else ""
                     self._post_ytdlp_10mb_encode(
@@ -1479,7 +1475,7 @@ class DownloadManager(QObject):
 
             elif self.is_downloading:
                 self.update_status("Download failed", "red")
-                logger.error(f"Download failed with return code {self.current_process.returncode}")
+                logger.error(f"Download failed with return code {proc.returncode}")
                 if error_lines:
                     logger.error(f"yt-dlp errors: {'; '.join(error_lines)}")
                 error_detail = error_lines[-1] if error_lines else "Unknown error"
@@ -1607,10 +1603,12 @@ class DownloadManager(QObject):
 
             if audio_only:
                 output_file = os.path.join(_dp, f"{output_name}.mp3")
-                cmd = [self.ffmpeg_path, "-i", filepath]
+                cmd = [self.ffmpeg_path]
 
                 if trim_enabled:
                     cmd.extend(["-ss", str(start_time), "-to", str(end_time)])
+
+                cmd.extend(["-i", filepath])
 
                 cmd.extend(["-vn", "-c:a", "libmp3lame", "-b:a", AUDIO_BITRATE])
 
@@ -1672,10 +1670,11 @@ class DownloadManager(QObject):
                     cmd = [self.ffmpeg_path]
                     if self.encoding.hw_encoder == "h264_vaapi" and self.encoding.vaapi_device:
                         cmd.extend(["-vaapi_device", self.encoding.vaapi_device])
-                    cmd.extend(["-i", filepath])
 
                     if trim_enabled:
                         cmd.extend(["-ss", str(start_time), "-to", str(end_time)])
+
+                    cmd.extend(["-i", filepath])
 
                     cmd.extend(
                         self.encoding.build_vf_args(height)
@@ -1692,7 +1691,7 @@ class DownloadManager(QObject):
 
             # Execute ffmpeg
             with self.download_lock:
-                self.current_process = subprocess.Popen(
+                proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -1701,12 +1700,12 @@ class DownloadManager(QObject):
                     bufsize=1,
                     **_subprocess_kwargs,
                 )
+                self.current_process = proc
 
             total_duration = self.video_duration if not trim_enabled else (end_time - start_time)
 
             # Drain stderr in background to prevent pipe deadlock
             stderr_lines = deque(maxlen=200)
-            proc = self.current_process
 
             def _drain_stderr():
                 try:
@@ -1719,7 +1718,7 @@ class DownloadManager(QObject):
             stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
             stderr_thread.start()
 
-            for line in self.current_process.stdout:
+            for line in proc.stdout:
                 if not self.is_downloading:
                     break
 
@@ -1727,19 +1726,25 @@ class DownloadManager(QObject):
                     try:
                         time_ms = int(line.split("=")[1].strip())
                         current_time = time_ms / 1000000
+                        self.last_progress_time = time.time()
 
                         if total_duration > 0:
-                            progress = min(100, (current_time / total_duration) * 100)
-                            self.update_progress(progress)
-                            self.update_status(f"Processing... {progress:.1f}%", "blue")
-                            self.last_progress_time = time.time()
+                            now = self.last_progress_time
+                            if now - self._last_status_update >= 0.25:
+                                self._last_status_update = now
+                                progress = min(100, (current_time / total_duration) * 100)
+                                self.update_progress(progress)
+                                self.update_status(f"Processing... {progress:.1f}%", "blue")
                     except (ValueError, IndexError):
                         pass
 
-            self.current_process.wait()
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                safe_process_cleanup(proc)
             stderr_thread.join(timeout=5)
 
-            if self.current_process.returncode == 0 and self.is_downloading:
+            if proc.returncode == 0 and self.is_downloading:
                 self.update_progress(PROGRESS_COMPLETE)
                 self.update_status("Processing complete!", "green")
                 logger.info(f"Local file processed: {output_file}")

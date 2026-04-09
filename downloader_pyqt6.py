@@ -253,12 +253,18 @@ def _make_checkbox_images():
     return _checkbox_temp_dir
 
 
+_dark_style_cache = None
+
+
 def _build_dark_style():
-    """Build dark QSS with generated checkbox images."""
+    """Build dark QSS with generated checkbox images (cached after first call)."""
+    global _dark_style_cache
+    if _dark_style_cache is not None:
+        return _dark_style_cache
     cb_dir = _make_checkbox_images()
     unc = os.path.join(cb_dir, "cb_unc.png").replace("\\", "/")
     chk = os.path.join(cb_dir, "cb_chk.png").replace("\\", "/")
-    return (
+    _dark_style_cache = (
         _DARK_STYLE_BASE
         + f"""
 QCheckBox::indicator {{ width: 18px; height: 18px; }}
@@ -266,6 +272,7 @@ QCheckBox::indicator:unchecked {{ image: url("{unc}"); }}
 QCheckBox::indicator:checked {{ image: url("{chk}"); }}
 """
     )
+    return _dark_style_cache
 
 
 def _set_dark_title_bar(window, dark=True):
@@ -366,7 +373,9 @@ class YouTubeDownloader(QMainWindow):
         try:
             if CONFIG_FILE.exists():
                 with open(CONFIG_FILE) as f:
-                    self._config = json.load(f)
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    self._config = loaded
         except Exception:
             pass
 
@@ -420,9 +429,6 @@ class YouTubeDownloader(QMainWindow):
         self.upload_mgr.sig_upload_complete.connect(self._on_upload_complete)
         self.upload_mgr.sig_uploader_file_uploaded.connect(self._show_upload_url)
         self.upload_mgr.sig_uploader_queue_done.connect(self._on_uploader_queue_done)
-
-        # Custom filename
-        self.custom_filename = None
 
         # Playlist support
         self.is_playlist = False
@@ -1417,9 +1423,6 @@ class YouTubeDownloader(QMainWindow):
             self._preview_debounce_timer.stop()
 
         self._shutting_down = True
-        self.download_mgr._shutting_down = True
-        self.clipboard_mgr._shutting_down = True
-        self.update_mgr._shutting_down = True
 
         # Stop clipboard timer
         if hasattr(self, "_clipboard_timer"):
@@ -1508,9 +1511,13 @@ class YouTubeDownloader(QMainWindow):
         self.progress.setValue(int(value))
         self.progress_label.setText(f"{value:.1f}%")
 
+    _VALID_STATUS_COLORS = frozenset({"blue", "green", "red", "orange", "gray"})
+
     def _do_update_status(self, message: str, color: str):
         """Update status label (called on GUI thread via signal)."""
         self.status_label.setText(message)
+        if color not in self._VALID_STATUS_COLORS:
+            color = "gray"
         if getattr(self, "_last_status_color", None) != color:
             self._last_status_color = color
             self.status_label.setStyleSheet(f"color: {color};")
@@ -1612,6 +1619,8 @@ class YouTubeDownloader(QMainWindow):
     def _do_clipboard_status(self, message: str, color: str):
         """Update clipboard status label."""
         self.clipboard_status_label.setText(message)
+        if color not in self._VALID_STATUS_COLORS:
+            color = "gray"
         if getattr(self, "_last_clipboard_status_color", None) != color:
             self._last_clipboard_status_color = color
             self.clipboard_status_label.setStyleSheet(f"color: {color};")
@@ -1623,6 +1632,8 @@ class YouTubeDownloader(QMainWindow):
     def _do_upload_status(self, message: str, color: str):
         """Update trimmer upload status label."""
         self.upload_status_label.setText(message)
+        if color not in self._VALID_STATUS_COLORS:
+            color = "gray"
         if getattr(self, "_last_upload_status_color", None) != color:
             self._last_upload_status_color = color
             self.upload_status_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
@@ -1630,6 +1641,8 @@ class YouTubeDownloader(QMainWindow):
     def _do_uploader_status(self, message: str, color: str):
         """Update uploader tab status label."""
         self.uploader_status_label.setText(message)
+        if color not in self._VALID_STATUS_COLORS:
+            color = "gray"
         if getattr(self, "_last_uploader_status_color", None) != color:
             self._last_uploader_status_color = color
             self.uploader_status_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
@@ -1657,6 +1670,7 @@ class YouTubeDownloader(QMainWindow):
     def _on_local_duration_fetched(self, duration, video_title):
         """Handle successful local file duration fetch."""
         self.video_duration = duration
+        self.video_title = video_title or None
         self._update_duration_ui_local(video_title)
 
     def _on_preview_ready(self, image, position):
@@ -2274,7 +2288,9 @@ class YouTubeDownloader(QMainWindow):
             fd, batch_file_path = tempfile.mkstemp(prefix="ytdl_batch_", suffix=".txt")
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 for url in pending_urls:
-                    sanitized = url.replace("\r", "").replace("\n", "").replace("\x00", "")
+                    sanitized = url.strip().replace("\r", "").replace("\n", "").replace("\x00", "")
+                    if not sanitized or sanitized.startswith(("#", "-")):
+                        continue
                     f.write(sanitized + "\n")
 
             # Build command
@@ -3465,8 +3481,12 @@ class YouTubeDownloader(QMainWindow):
         self.video_duration = 0
         self.trimming_mgr.video_duration = 0
         self.estimated_filesize = None
+        self.start_slider.blockSignals(True)
         self.start_slider.setValue(0)
+        self.start_slider.blockSignals(False)
+        self.end_slider.blockSignals(True)
         self.end_slider.setValue(0)
+        self.end_slider.blockSignals(False)
         self.filesize_label.setText("")
         self.video_info_label.setText("")
         self.fetch_duration_btn.setEnabled(self.trim_enabled_check.isChecked())

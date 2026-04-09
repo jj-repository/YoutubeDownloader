@@ -200,13 +200,14 @@ These settings provide the best balance between file size and quality, keeping d
 
 ### Architecture & Performance
 
-- **Thread Pool**: Maximum 3 concurrent worker threads for optimal resource usage
+- **Thread Pool**: Up to 8 concurrent worker threads for optimal resource usage
 - **LRU Cache**: Caches up to 20 preview frames for instant access
 - **Retry Logic**: 3 attempts with exponential backoff (2s, 4s, 6s delays)
 - **Timeout Protection**:
-  - 30-minute absolute download limit
-  - 5-minute stall detection (no progress)
+  - 60-minute absolute download limit
+  - 10-minute stall detection (no progress)
 - **Memory Efficient**: Automatic cleanup of temp files and old cache entries
+- **Modular Architecture**: Business logic extracted into 7 manager modules
 
 ### Dependencies (Development Only)
 
@@ -214,14 +215,13 @@ These settings provide the best balance between file size and quality, keeping d
 
 For developers running from source:
 
-- **Python 3.6+**
-- **yt-dlp >= 2024.11.0**: YouTube download engine
-- **Pillow >= 10.0.0**: Image processing for frame previews
+- **Python 3.11+**
+- **PyQt6 >= 6.5.0**: GUI framework
+- **yt-dlp >= 2026.2.21**: YouTube download engine
 - **catboxpy >= 0.1.0**: File upload to catbox.moe
 - **pyperclip >= 1.8.0**: Clipboard access
 - **dbus-python** (Linux only, optional): KDE Klipper integration
 - **ffmpeg**: Video/audio processing (bundled in standalone builds)
-- **tkinter**: GUI (usually included with Python)
 
 ## 📋 Requirements
 
@@ -233,7 +233,7 @@ For developers running from source:
 
 ### For Running from Source (Developers)
 - **OS**: Linux, macOS, Windows
-- **Python**: 3.6 or higher
+- **Python**: 3.11 or higher
 - **Disk Space**: ~20 MB for application, plus space for downloads
 - **RAM**: ~100 MB during operation
 - **Internet**: Required for downloading
@@ -274,87 +274,29 @@ Check this file for detailed error messages and debugging information.
 
 ## 🔄 Changelog
 
-### Version 3.3.0 (Latest)
-- ✨ **Auto-Updates**: Added automatic update checking on startup (configurable)
-- ✨ **Update Toggle**: Added "Check for Updates on Startup" setting in Help menu
-- 🔒 **SHA256 Verification**: Secure update downloads with checksum validation
-- 📝 **Documentation**: Added CLAUDE.md project context file
-- 🧹 **Code Organization**: Extracted constants and translations to separate modules
+### Version 5.21 (Latest)
+- **Modular Architecture**: Main file split from ~7600 to ~3750 lines; business logic extracted to 7 manager modules
+- **10MB Mode**: Auto-selects resolution and bitrate to keep files under 10MB (two-pass encoding, GPU acceleration)
+- **Hardware Encoding**: VAAPI/NVENC detection and fallback for faster encodes
+- **Security Hardening**: SHA-256 mandatory on self-update, symlink checks, SSRF/path traversal protection, tag validation, download URL domain pinning, atomic file writes, tarball member limits
+- **Thread Safety**: Process references captured to local vars, bounded `.wait()` timeouts, stale ffmpeg process cleanup, consistent lock ordering
+- **CI/CD**: Reproducible builds via requirements.lock, cosign-signed releases, CodeQL analysis, Dependabot auto-merge, reusable workflows
+- **Performance**: Deque-based clipboard URLs, cached lookups, offloaded cleanup, signal throttling (0.25s), ffmpeg input seeking for local files
+- **376 tests** (up from 60 at v3.0), 12 audit passes, ruff lint clean
 
-### Version 3.1.2
-- ✅ **Code Cleanup**: Removed duplicate translation keys across all languages (en, de, pl)
-- ✅ **Python 3.13 Compatibility**: Fixed test suite mock compatibility with Python 3.13
-- ✅ **Python 3.6-3.8 Compatibility**: Fixed ThreadPoolExecutor.shutdown() for older Python versions
-- ✅ **Removed Dead Code**: Cleaned up unused THEMES dictionary and redundant imports
-- ✅ **Dependency Pinning**: Added upper bound to catboxpy dependency for stability
+### Version 3.3.0
+- Auto-update checking on startup (configurable)
+- SHA-256 verification for secure updates
+- Constants and translations extracted to separate modules
 
-### Version 3.1.1
-- ✅ **Clipboard Mode Progress Feedback**: Shows "Downloading video...", "Downloading audio...", "Merging..." status
-- ✅ **Fixed Clipboard URL Re-detection**: Normalized clipboard content to prevent false duplicate detection
-- ✅ **Enhanced Status Messages**: Added ffmpeg processing and audio extraction status indicators
-
-### Version 3.1.0
-- ✅ **Speed Limit for Clipboard Mode**: Added download speed cap option (MB/s) matching Trimmer tab
-- ✅ **Improved Preview Extraction**: HTTP reconnect options for reliable YouTube stream fetching
-- ✅ **EOF Preview Fix**: Adjusted end-of-video preview to avoid ffmpeg seek failures
-- ✅ **Fixed Venv Paths**: Resolved broken shebang paths after project rename
-- ✅ **Simplified Clipboard Folder**: Now uses `~/Downloads` instead of `~/Downloads/ClipboardMode`
-- ✅ **Updated Documentation**: READMEs reflect bundled dependencies (no manual install needed)
-
-### Version 3.0.0 - Production-Ready Release
-- ✅ **100% Thread Safety**: All 38 state variables protected with proper locks
-- ✅ **Zero Race Conditions**: Fixed all timing vulnerabilities (TOCTOU issues eliminated)
-- ✅ **Perfect Resource Management**: Fixed subprocess and PIL image handle leaks
-- ✅ **Production-Grade Quality**: Code review score 100/100, zero critical bugs
-- ✅ **Complete Internationalization**: 100% translation coverage (170+ strings × 3 languages)
-- ✅ **Enterprise Standards**: All magic numbers replaced with named constants
-- ✅ **Comprehensive Testing**: 60+ tests passed, all systems verified
-- ✅ **Professional Documentation**: Detailed docstrings for complex methods
-- ✅ **Deployment Ready**: Approved for production use at scale
-
-### Version 2.7.0
-- ✅ **Multi-Language Support**: Full UI translation in English (🇬🇧), German (🇩🇪), and Polish (🇵🇱)
-- ✅ Flag-based language selector dropdown at top of window
-- ✅ Persistent language preference saved to config file
-- ✅ ~150 strings translated across all UI elements
-- ✅ Professional-grade translations for German and Polish
-- ✅ Minimal file size impact (~22KB for complete 3-language support)
-
-### Version 2.6.0
-- ✅ Quality selector converted to dropdown menu in Trimmer tab (space efficient)
-- ✅ Multi-file upload queue in Uploader tab
-- ✅ Sequential file uploads with progress tracking
-- ✅ Auto-upload prevention for playlists (only single videos)
-- ✅ Mouse wheel scrolling anywhere in the window
-- ✅ Compact clipboard URL list (reduced height)
-- ✅ Compact file queue list (reduced height)
-- ✅ Application renamed to YoutubeDownloader
-- ✅ Fixed clipboard URL persistence on shutdown
-- ✅ Fixed syntax warning in docstring
+### Version 3.0.0
+- Thread safety overhaul, internationalization (EN/DE/PL), named constants
 
 ### Version 2.5.0
-- ✅ **Clipboard Mode Tab**: Auto-detect YouTube URLs from clipboard
-- ✅ Auto-download option for detected URLs
-- ✅ URL queue with individual removal and batch download
-- ✅ Persistent clipboard URLs saved between sessions
-- ✅ Separate settings and download folder for Clipboard Mode
-- ✅ **Uploader Tab**: Catbox.moe file upload integration
-- ✅ Upload history tracking with timestamps
-- ✅ Auto-upload after download feature (optional)
-- ✅ Volume control for audio processing
-- ✅ KDE Klipper clipboard manager support
+- Clipboard mode tab, uploader tab (catbox.moe), volume control, KDE Klipper support
 
-### Version 2.0
-- ✅ Added video trimming with frame previews
-- ✅ URL validation for all YouTube formats
-- ✅ Auto-retry with exponential backoff
-- ✅ Download timeout and stall detection
-- ✅ Smart frame caching (10-50x faster)
-- ✅ Thread pool for resource management
-- ✅ Video title display
-- ✅ Progress tracking with speed and ETA
-- ✅ Comprehensive logging framework
-- ✅ Path validation and error handling
+### Version 2.0.0
+- Video trimming with frame previews, URL validation, auto-retry, download timeouts
 - ✅ Memory leak fixes and stability improvements
 
 ### Version 1.0

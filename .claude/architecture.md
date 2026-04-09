@@ -44,7 +44,7 @@ utils (no deps)
 - Workers receive pre-captured widget state dicts (no direct GUI access)
 - Clipboard polling via QTimer on main window
 - Themes: QSS dark/light
-- Shutdown: `closeEvent` + `_shutting_down` flag on managers
+- Shutdown: `closeEvent` + `_shutting_down` flag on main window
 
 ## Signals
 Each manager defines its own signals. Main window connects them all:

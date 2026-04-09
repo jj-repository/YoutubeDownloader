@@ -222,6 +222,7 @@ class EncodingService:
         for line in proc.stdout:
             if cb.is_cancelled():
                 safe_process_cleanup(proc)
+                cb.set_process(None)
                 return False
             if "out_time_ms=" in line:
                 has_stdout_progress.set()
@@ -229,7 +230,7 @@ class EncodingService:
                     time_ms = int(line.split("=")[1].strip())
                     current = time_ms / 1_000_000
                     if duration > 0:
-                        pct = min(100, (current / duration) * 100)
+                        pct = max(0, min(100, (current / duration) * 100))
                         cb.on_progress(pct)
                         now = time.time()
                         if now - _last_status_emit > 0.25:
@@ -250,8 +251,10 @@ class EncodingService:
             stderr_text = "".join(stderr_lines)
             logger.error(f"{status_prefix} failed (rc {proc.returncode}): {stderr_text}")
             safe_process_cleanup(proc)
+            cb.set_process(None)
             return False
         safe_process_cleanup(proc)
+        cb.set_process(None)
         return True
 
     def encode_single_pass(

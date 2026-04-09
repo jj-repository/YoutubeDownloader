@@ -44,6 +44,6 @@ Do not optimize: download speed (yt-dlp/network), UI responsiveness, thumbnail c
 
 ## Review (2026-04-05 — Audit 4 Complete)
 Security: URL validation, no shell=True, config schema, git blob SHA + SHA256 verification, no injection, network timeouts, config lock, tempfile names, BAT trampoline path validation, symlink check on update, clipboard URL sanitization ✓
-Thread safety: download/clipboard/config/uploader locks, signals for all worker→GUI, `_shutting_down` flag, config flush offloaded to worker thread ✓
+Thread safety: download/clipboard/config/uploader locks, signals for all worker→GUI, `_shutting_down` flag (main window only), config flush offloaded to worker thread ✓
 Code quality: constants.py, config validation, error handling, log rotation (1MB), history cap (1000), cache cleanup, deque for clipboard URLs ✓
 CI: reproducible builds via requirements.lock, cosign pinned, post-build validation, artifact integrity checks, dependabot major/minor split ✓

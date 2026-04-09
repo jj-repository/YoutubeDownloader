@@ -267,20 +267,17 @@ class UploadManager(QObject):
                     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
                     f.write(f"{timestamp} | {filename} | {link}\n")
                 self._upload_save_count += 1
-                should_trim = self._upload_save_count >= 100
-                if should_trim:
+                if self._upload_save_count >= 100:
                     self._upload_save_count = 0
-            if should_trim:
-                try:
-                    with self.upload_lock:
+                    try:
                         with open(UPLOAD_HISTORY_FILE, "r", encoding="utf-8") as f:
                             lines = f.readlines()
                         if len(lines) > 1000:
                             with open(UPLOAD_HISTORY_FILE, "w", encoding="utf-8") as f:
                                 f.writelines(lines[-500:])
                             logger.info("Trimmed upload history to last 500 entries")
-                except Exception as trim_err:
-                    logger.error(f"Error trimming upload history: {trim_err}")
+                    except Exception as trim_err:
+                        logger.error(f"Error trimming upload history: {trim_err}")
             logger.info(f"Saved upload link to history: {link}")
         except Exception as e:
             logger.error(f"Error saving upload link: {e}")

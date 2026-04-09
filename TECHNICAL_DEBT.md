@@ -1,6 +1,6 @@
 # Technical Debt
 
-Last updated: 2026-04-09 (audit 10)
+Last updated: 2026-04-09 (final review)
 
 ## Summary
 **Audit 1**: 55 found, 53 fixed, 2 accepted
@@ -14,6 +14,8 @@ Last updated: 2026-04-09 (audit 10)
 **Audit 8**: 15 raw (5 agents) → 15 unique (1 dup removed), 15 fixed (1 iteration), 0 deferred (339 tests, was 340 — net -1 from merged tests)
 **Audit 9**: 30 raw (5 agents) → 30 unique, 24 fixed (1 iteration), 6 deferred (353 tests, was 339 — net +14 from strengthened tests)
 **Audit 10**: 35 raw (5 agents) → 35 unique after dedup, 28 fixed (1 iteration), 7 deferred (364 tests, was 353 — net +11 from new tests)
+**Audit 11**: 59 raw (5 agents) → 56 unique after dedup, 28 fixed (1 iteration), 28 deferred/accepted (376 tests, was 363 — net +13 from new tests)
+**Final review**: 18 found (6 agents), 18 fixed + 4 regression fixes from verification round (376 tests)
 
 ## Remaining Issues
 
@@ -40,14 +42,83 @@ Last updated: 2026-04-09 (audit 10)
 - **DO-L3**: `QT_QPA_PLATFORM: offscreen` applied to Windows runner without OS guard. [low]
 - **DO-L5**: No type checking (mypy/pyright) in CI. [low]
 - **SEC-L6**: yt-dlp error lines with signed URLs logged verbatim to rotating log file. [low]
-- **P-L5-b**: `_check_download_timeout` reads `is_downloading` without lock — GIL-safe. [low]
+
+### Deferred (audit 11)
+- **DO-H1**: Dependabot blind to `.lock` files (requirements.lock, requirements-ci.lock) — Dependabot watches `requirements.txt` (ranges) which is sufficient; lock files are intentionally manually bumped. Accepted. [low]
+- **CQ-M2**: Volume threshold differs between trimmed (±0.15 threshold) and non-trimmed (exact `!= 1.0`) paths — intentional by design. Accepted. [medium]
+- **SEC-M3**: yt-dlp SHA2-256SUMS not verified against signing key — HTTPS + GitHub release integrity sufficient. Accepted. [medium]
+- **P-M3**: `_find_latest_file` scans entire Downloads directory — one-time `scandir` per download, milliseconds even with thousands of files. Accepted. [medium]
+- ~~**DO-M3**: Build yt-dlp binary version not checked against requirements.lock~~ — Fixed: added `--version` check on both Linux and Windows. [medium]
+- **SEC-L2**: Window geometry restore without size validation. [low]
+- **SEC-L3-b**: `_open_folder` defensive path validation. [low]
+- **SEC-L4-b**: Error messages may leak paths (desktop app, minimal risk). [low]
+- **SEC-L6-b**: `download_local_file` doesn't validate input file path (user-typed). [low]
+- **SEC-L7**: `webbrowser.open()` with env-controlled path. [low]
+- **P-L2**: Checkbox temp dir leaks on crash (belt-and-suspenders). [low]
+- **P-L3**: `_http_range_read` double memory with chunks+join (bounded 512KB). [low]
+- **P-L4-b**: `_download_stream_segment` 120s connect timeout. [low]
+- **P-L6-b**: `save_upload_link` trim blocks under lock (rare, small file). [low]
+- **DO-L1-b**: Cosign version pinned inline, not Dependabot-tracked. [low]
+- **DO-L3-b**: dbus-python version not tracked centrally. [low]
+- **DO-L4-b**: Dependabot auto-merge no concurrency group. [low]
+- **DO-L5-b**: ruff S rule ignores broadly scoped — should use per-file-ignores. [low]
+- **CQ-L9**: `_download_timeout_timer` extra fires after download completion (benign). [low]
 
 ### Test coverage gaps (remaining)
 - **TQ-8** [medium]: `test_cancellation_during_data_download` xfail masks real gap (mock urlopen interaction flaky)
 - **TQ-10–20** [medium/low]: Various smaller coverage gaps in update_manager, download_manager, upload_manager
+- **TQ-L1**: `_PLAYLIST_ITEM_RE` regex untested. [low]
+- **TQ-L2**: `enable_upload_button` untested. [low]
+- **TQ-L3**: `queue_count`, `stop_queue_upload`, `set_widget_for_queue_item` untested. [low]
+- **TQ-L4**: `cleanup_old_updates` untested. [low]
+- **TQ-L5**: `_get_pip_path` untested. [low]
+- **TQ-L6**: `init_dependencies_async` untested. [low]
+- **TQ-L9**: `_parse_ytdlp_output` status branches (ExtractAudio/ffmpeg) not fully tested. [low]
+- **TQ-L10**: Shared QApplication fixture fragility. [low]
+- **TQ-M1**: ClipboardManager backend detection untested. [medium]
 
 ### Accepted tradeoffs (from audit 1)
 - **Widget reads from worker in `_fetch_file_size`** — Safe via closure. [informational]
+
+## Fixed Issues (audit 11 — 27 fixed, 376 tests)
+
+<details>
+<summary>Click to expand</summary>
+
+### Medium (7)
+- [x] CQ-M1: `_on_local_duration_fetched` did not set `self.video_title` — local file trims used generic "video" name. Added `self.video_title = video_title or None`.
+- [x] SEC-M1: Batch file URL sanitization incomplete — tabs/whitespace not stripped, no comment/option line rejection. Added `.strip()` and `#`/`-` prefix skip.
+- [x] SEC-M2: `tarfile.open` member iteration without total count or symlink check. Added 100-member cap and `issym()`/`islnk()` skip.
+- [x] P-M1: `_parse_ytdlp_output` emitted status on every progress line (~10Hz). Added 0.25s throttle gate.
+- [x] P-M2: `download_local_file` stdout progress loop unthrottled (~20Hz). Added 0.25s throttle gate.
+- [x] P-M4: `on_url_change` slider reset triggered 4+ signal cascades per keystroke. Added `blockSignals` around `setValue(0)`.
+- [x] DO-M1: PyInstaller version pinned inline in workflow, not in any lock file. Added to `requirements.lock`.
+- [x] DO-M2: CodeQL scheduled run cancellable by push to main. Added `github.event_name` to concurrency group.
+
+### Low (20)
+- [x] CQ-L1: Dead method `_finish_download` in DownloadManager — never called. Removed.
+- [x] CQ-L2: Dead attribute `self.custom_filename` on main window. Removed.
+- [x] CQ-L3: Dead `_shutting_down` on three managers — set by main window but never read by any manager. Removed.
+- [x] CQ-L4: Unused constants `UI_UPDATE_DELAY_MS`, `CLIPBOARD_TIMEOUT`. Removed.
+- [x] CQ-L5: Hardcoded `MAX_DURATION = 24 * 3600` duplicated `MAX_VIDEO_DURATION`. Replaced with constant import.
+- [x] CQ-L6: `_fetch_local_file_duration` missing negative duration validation. Added check matching URL path.
+- [x] CQ-L7: `_fetch_local_file_duration` did not set `self.video_title` on trimming manager. Added.
+- [x] CQ-L8: `save_upload_link` double-locking TOCTOU on trim. Merged trim into single lock scope.
+- [x] SEC-L1: Config JSON loaded without type validation. Added `isinstance(loaded, dict)` check.
+- [x] SEC-L5: `_do_update_status` CSS injection via color param. Added `_VALID_STATUS_COLORS` whitelist.
+- [x] P-L1: `_build_dark_style()` regenerated full QSS string on every call. Added module-level cache.
+- [x] P-L5: Repeated `import urllib.request`/`urllib.error` inside 7 methods in update_manager. Moved to module-level.
+- [x] DO-L2: `inputs.version` shell interpolation in `gh release create`. Changed to env var `$VERSION`.
+- [x] TQ-M7: `_fetch_local_file_duration` success path not tested. Added 3 tests (success, negative, capped).
+- [x] TQ-M6: `speed_limit` insertion order not tested. Added test verifying `--limit-rate` before `--`.
+- [x] TQ-M5: `_download_audio_trimmed_path` not tested. Added success + failure tests.
+- [x] TQ-M4: `_download_video_trimmed_path` not tested. Added success + custom filename tests.
+- [x] TQ-M3: `_make_encode_callbacks` type masking. Added type assertion test.
+- [x] TQ-M2: `cleanup_old_temp_dirs` untested. Added test with real tmp_path dirs.
+- [x] TQ-L7-b: `test_trimmed_path_taken` weak assertions. Added format_spec + volume_multiplier test.
+- [x] TQ-L8: `validate_youtube_url` `/v/` path not tested. Added 2 tests.
+
+</details>
 
 ## Fixed Issues (audit 10 — 28 fixed, 364 tests)
 

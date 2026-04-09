@@ -3930,12 +3930,6 @@ class TestClipboardManagerLifecycle:
         mgr.clipboard_stop_event.set()
         assert mgr.clipboard_stop_event.is_set()
 
-    def test_shutting_down_flag(self, mgr):
-        """_shutting_down flag should default False and be settable."""
-        assert mgr._shutting_down is False
-        mgr._shutting_down = True
-        assert mgr._shutting_down is True
-
 
 class TestEncodingStderrThreadTimeout:
     """Test run_ffmpeg_with_progress handles stderr thread join timeout."""
@@ -4512,6 +4506,7 @@ class TestCheckForUpdatesSilentFalse:
 
         with (
             patch.object(urllib.request, "urlopen", return_value=mock_response),
+            patch.object(update_mgr, "_get_ytdlp_version", return_value="2026.01.01"),
             patch.object(type(update_mgr), "sig_show_messagebox", create=True) as msgbox_spy,
             patch.object(type(update_mgr), "sig_update_status", create=True),
         ):
@@ -5744,6 +5739,401 @@ class TestStreamUrlValidation:
             pytest.raises(RuntimeError, match="non-HTTPS"),
         ):
             download_mgr._get_stream_urls("https://youtube.com/watch?v=x", "bestvideo+bestaudio")
+
+
+# ─── Audit 11 — New tests ────────────────────────────────────────────────
+
+
+class TestFetchLocalFileDurationSuccess:
+    """TQ-M7: Test _fetch_local_file_duration success path."""
+
+    @pytest.fixture
+    def trimming_mgr(self, qapp):
+        from managers.trimming_manager import TrimmingManager
+
+        mgr = TrimmingManager(
+            ytdlp_path="yt-dlp",
+            ffmpeg_path="ffmpeg",
+            ffprobe_path="ffprobe",
+            temp_dir="/tmp/test_trim",
+        )
+        return mgr
+
+    def test_success_sets_duration_and_emits(self, trimming_mgr):
+        """Success path should set video_duration, video_title, and emit signal."""
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "125.7\n"
+
+        spy = MagicMock()
+        trimming_mgr.sig_local_duration_fetched.connect(spy)
+
+        with patch("managers.trimming_manager.subprocess.run", return_value=mock_result):
+            trimming_mgr._fetch_local_file_duration("/tmp/testfile.mp4")
+
+        assert trimming_mgr.video_duration == 125
+        assert trimming_mgr.video_title == "testfile"
+        spy.assert_called_once_with(125, "testfile")
+        assert trimming_mgr.is_fetching_duration is False
+
+    def test_negative_duration_raises(self, trimming_mgr):
+        """Negative duration from ffprobe should be rejected."""
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "-10.0\n"
+
+        error_spy = MagicMock()
+        trimming_mgr.sig_show_messagebox.connect(error_spy)
+
+        with patch("managers.trimming_manager.subprocess.run", return_value=mock_result):
+            trimming_mgr._fetch_local_file_duration("/tmp/bad.mp4")
+
+        error_spy.assert_called_once()
+        assert trimming_mgr.is_fetching_duration is False
+
+    def test_over_max_duration_capped(self, trimming_mgr):
+        """Duration exceeding MAX_VIDEO_DURATION should be capped."""
+        from unittest.mock import MagicMock, patch
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "100000.0\n"  # > 86400
+
+        with patch("managers.trimming_manager.subprocess.run", return_value=mock_result):
+            trimming_mgr._fetch_local_file_duration("/tmp/long.mp4")
+
+        assert trimming_mgr.video_duration == constants.MAX_VIDEO_DURATION
+
+
+class TestSpeedLimitInsertionOrder:
+    """TQ-M6: Verify --limit-rate appears before -- sentinel."""
+
+    @pytest.fixture
+    def download_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder=None)
+        mgr = DownloadManager(
+            ytdlp_path="yt-dlp",
+            ffmpeg_path="ffmpeg",
+            ffprobe_path="ffprobe",
+            encoding=enc,
+            thread_pool=pool,
+        )
+        return mgr
+
+    def _make_ui_state(self, **overrides):
+        state = {
+            "quality": "720",
+            "trim_enabled": False,
+            "audio_only": False,
+            "keep_below_10mb": False,
+            "filename": "",
+            "volume_raw": 100,
+            "download_path": "/tmp",
+            "speed_limit": None,
+            "start_time": "0",
+            "end_time": "60",
+        }
+        state.update(overrides)
+        return state
+
+    def test_speed_limit_before_sentinel(self, download_mgr):
+        """--limit-rate must appear before -- in the yt-dlp command."""
+        from unittest.mock import MagicMock, patch
+
+        ui_state = self._make_ui_state(speed_limit="5.0")
+        download_mgr.is_downloading = True
+
+        captured_cmd = []
+        mock_proc = MagicMock()
+        mock_stdout = MagicMock()
+        mock_stdout.__iter__ = MagicMock(return_value=iter([]))
+        mock_proc.stdout = mock_stdout
+        mock_proc.wait.return_value = None
+        mock_proc.returncode = 0
+
+        def capture_popen(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            return mock_proc
+
+        with patch("managers.download_manager.subprocess.Popen", side_effect=capture_popen):
+            download_mgr.download("https://www.youtube.com/watch?v=test123", ui_state)
+
+        assert "--limit-rate" in captured_cmd
+        assert "--" in captured_cmd
+        lr_idx = captured_cmd.index("--limit-rate")
+        sentinel_idx = captured_cmd.index("--")
+        assert lr_idx < sentinel_idx, "--limit-rate must come before --"
+
+
+class TestDownloadAudioTrimmedPath:
+    """TQ-M5: Test _download_audio_trimmed_path orchestration."""
+
+    @pytest.fixture
+    def download_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder=None)
+        mgr = DownloadManager(
+            ytdlp_path="yt-dlp",
+            ffmpeg_path="ffmpeg",
+            ffprobe_path="ffprobe",
+            encoding=enc,
+            thread_pool=pool,
+        )
+        return mgr
+
+    def test_success_emits_upload(self, download_mgr):
+        """Success path should emit sig_enable_upload with correct filename."""
+        from unittest.mock import MagicMock, patch
+
+        download_mgr.is_downloading = True
+        download_mgr.video_title = "Test Video"
+
+        upload_spy = MagicMock()
+        download_mgr.sig_enable_upload.connect(upload_spy)
+
+        ui_state = {
+            "filename": "",
+            "volume_raw": 100,
+            "download_path": "/tmp",
+        }
+
+        with patch.object(download_mgr, "_download_audio_trimmed", return_value=True):
+            download_mgr._download_audio_trimmed_path(
+                "https://youtube.com/watch?v=x", ui_state, 10, 30
+            )
+
+        upload_spy.assert_called_once()
+        output_path = upload_spy.call_args[0][0]
+        assert "Test Video" in output_path
+        assert "00-00-10" in output_path
+        assert ".mp3" in output_path
+
+    def test_failure_sets_status(self, download_mgr):
+        """Failure path should update status to 'Download failed'."""
+        from unittest.mock import MagicMock, patch
+
+        download_mgr.is_downloading = True
+
+        status_spy = MagicMock()
+        download_mgr.sig_update_status.connect(status_spy)
+
+        ui_state = {
+            "filename": "",
+            "volume_raw": 100,
+            "download_path": "/tmp",
+        }
+
+        with patch.object(download_mgr, "_download_audio_trimmed", return_value=False):
+            download_mgr._download_audio_trimmed_path(
+                "https://youtube.com/watch?v=x", ui_state, 10, 30
+            )
+
+        status_msgs = [call[0][0] for call in status_spy.call_args_list]
+        assert any("failed" in msg.lower() for msg in status_msgs)
+
+
+class TestDownloadVideoTrimmedPath:
+    """TQ-M4: Test _download_video_trimmed_path orchestration."""
+
+    @pytest.fixture
+    def download_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder=None)
+        mgr = DownloadManager(
+            ytdlp_path="yt-dlp",
+            ffmpeg_path="ffmpeg",
+            ffprobe_path="ffprobe",
+            encoding=enc,
+            thread_pool=pool,
+        )
+        return mgr
+
+    def test_success_emits_upload_with_correct_filename(self, download_mgr):
+        """Success should emit upload signal with height and time range in filename."""
+        from unittest.mock import MagicMock, patch
+
+        download_mgr.is_downloading = True
+        download_mgr.video_title = "My Video"
+
+        upload_spy = MagicMock()
+        download_mgr.sig_enable_upload.connect(upload_spy)
+
+        ui_state = {
+            "filename": "",
+            "volume_raw": 100,
+            "download_path": "/tmp",
+        }
+
+        with patch.object(download_mgr, "_download_trimmed_via_ffmpeg", return_value=True):
+            download_mgr._download_video_trimmed_path(
+                "https://youtube.com/watch?v=x", ui_state, 10, 30, "720"
+            )
+
+        upload_spy.assert_called_once()
+        output_path = upload_spy.call_args[0][0]
+        assert "My Video" in output_path
+        assert "720p" in output_path
+        assert ".mp4" in output_path
+
+    def test_custom_filename_used(self, download_mgr):
+        """Custom filename from ui_state should override video_title."""
+        from unittest.mock import MagicMock, patch
+
+        download_mgr.is_downloading = True
+        download_mgr.video_title = "Original Title"
+
+        upload_spy = MagicMock()
+        download_mgr.sig_enable_upload.connect(upload_spy)
+
+        ui_state = {
+            "filename": "custom_name",
+            "volume_raw": 100,
+            "download_path": "/tmp",
+        }
+
+        with patch.object(download_mgr, "_download_trimmed_via_ffmpeg", return_value=True):
+            download_mgr._download_video_trimmed_path(
+                "https://youtube.com/watch?v=x", ui_state, 0, 60, "1080"
+            )
+
+        upload_spy.assert_called_once()
+        output_path = upload_spy.call_args[0][0]
+        assert "custom_name" in output_path
+        assert "Original Title" not in output_path
+
+
+class TestTrimmedPathAssertions:
+    """TQ-L7: Strengthen test_trimmed_path_taken with format_spec assertion."""
+
+    @pytest.fixture
+    def download_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder=None)
+        mgr = DownloadManager(
+            ytdlp_path="yt-dlp",
+            ffmpeg_path="ffmpeg",
+            ffprobe_path="ffprobe",
+            encoding=enc,
+            thread_pool=pool,
+        )
+        return mgr
+
+    def test_trimmed_path_passes_correct_format_spec(self, download_mgr):
+        """_download_trimmed_via_ffmpeg should receive format_spec with quality."""
+        from unittest.mock import patch
+
+        ui_state = {
+            "quality": "720",
+            "trim_enabled": True,
+            "audio_only": False,
+            "keep_below_10mb": False,
+            "filename": "",
+            "volume_raw": 150,
+            "download_path": "/tmp",
+            "speed_limit": None,
+            "start_time": "10",
+            "end_time": "30",
+        }
+        download_mgr.is_downloading = True
+        download_mgr.video_duration = 120
+
+        with patch.object(
+            download_mgr, "_download_trimmed_via_ffmpeg", return_value=True
+        ) as mock_trim:
+            download_mgr.download("https://www.youtube.com/watch?v=test123", ui_state)
+
+        call_args = mock_trim.call_args
+        format_spec = call_args[0][1]
+        assert "720" in format_spec
+        volume_multiplier = call_args[1].get(
+            "volume_multiplier", call_args[0][5] if len(call_args[0]) > 5 else 1.0
+        )
+        assert volume_multiplier == pytest.approx(1.5)
+
+
+class TestCleanupOldTempDirs:
+    """TQ-M2: Test TrimmingManager.cleanup_old_temp_dirs."""
+
+    def test_removes_old_dirs_preserves_current(self, tmp_path):
+        """Old temp dirs should be removed; current temp_dir preserved."""
+        import time
+        from unittest.mock import patch
+
+        from managers.trimming_manager import TrimmingManager
+
+        # Create dirs with the real prefix so glob pattern is tested
+        current = tmp_path / "ytdl_preview_current"
+        current.mkdir()
+        old = tmp_path / "ytdl_preview_old"
+        old.mkdir()
+        # Make old dir very old
+        old_time = time.time() - 7200  # 2 hours ago
+        os.utime(old, (old_time, old_time))
+
+        mgr = TrimmingManager.__new__(TrimmingManager)
+        mgr.temp_dir = str(current)
+
+        with patch("tempfile.gettempdir", return_value=str(tmp_path)):
+            mgr.cleanup_old_temp_dirs()
+
+        # Current dir should still exist
+        assert current.exists()
+        # Old dir should be removed
+        assert not old.exists()
+
+
+class TestMakeEncodeCallbacksType:
+    """TQ-M3: Verify _make_encode_callbacks returns proper EncodeCallbacks."""
+
+    @pytest.fixture
+    def download_mgr(self, qapp):
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder=None)
+        mgr = DownloadManager(
+            ytdlp_path="yt-dlp",
+            ffmpeg_path="ffmpeg",
+            ffprobe_path="ffprobe",
+            encoding=enc,
+            thread_pool=pool,
+        )
+        return mgr
+
+    def test_returns_encode_callbacks_instance(self, download_mgr):
+        """_make_encode_callbacks should return an EncodeCallbacks instance."""
+        from managers.encoding import EncodeCallbacks
+
+        result = download_mgr._make_encode_callbacks()
+        assert isinstance(result, EncodeCallbacks)
+        assert callable(result.on_progress)
+        assert callable(result.on_status)
+        assert callable(result.is_cancelled)
+
+
+class TestYouTubeURLValidationVPath:
+    """TQ-L8: Test /v/ URL path accepted by validate_youtube_url."""
+
+    def test_v_path_valid(self):
+        valid, msg = validate_youtube_url("https://www.youtube.com/v/dQw4w9WgXcQ")
+        assert valid is True
+
+    def test_v_path_with_params(self):
+        valid, msg = validate_youtube_url("https://www.youtube.com/v/dQw4w9WgXcQ?version=3")
+        assert valid is True
 
 
 if __name__ == "__main__":

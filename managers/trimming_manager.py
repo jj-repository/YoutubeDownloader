@@ -18,6 +18,7 @@ from PyQt6.QtGui import QColor, QFont, QImage, QPainter
 
 from constants import (
     FFPROBE_TIMEOUT,
+    MAX_VIDEO_DURATION,
     METADATA_FETCH_TIMEOUT,
     PREVIEW_CACHE_SIZE,
     PREVIEW_HEIGHT,
@@ -147,12 +148,13 @@ class TrimmingManager(QObject):
                 else:
                     raise ValueError(f"Invalid duration format: {duration_str}")
 
-                MAX_DURATION = 24 * 3600
                 if duration < 0:
                     raise ValueError(f"Negative duration: {duration}")
-                if duration > MAX_DURATION:
-                    logger.warning(f"Duration {duration}s exceeds max, capping to {MAX_DURATION}s")
-                    duration = MAX_DURATION
+                if duration > MAX_VIDEO_DURATION:
+                    logger.warning(
+                        f"Duration {duration}s exceeds max, capping to {MAX_VIDEO_DURATION}s"
+                    )
+                    duration = MAX_VIDEO_DURATION
 
                 self.video_duration = duration
 
@@ -217,9 +219,18 @@ class TrimmingManager(QObject):
                 **_subprocess_kwargs,
             )
             duration_seconds = float(result.stdout.strip())
-            self.video_duration = int(duration_seconds)
+            duration = int(duration_seconds)
+            if duration < 0:
+                raise ValueError(f"Negative duration: {duration}")
+            if duration > MAX_VIDEO_DURATION:
+                logger.warning(
+                    f"Duration {duration}s exceeds max, capping to {MAX_VIDEO_DURATION}s"
+                )
+                duration = MAX_VIDEO_DURATION
+            self.video_duration = duration
 
             video_title = Path(filepath).stem
+            self.video_title = video_title
 
             self.sig_local_duration_fetched.emit(self.video_duration, video_title)
             self.sig_update_status.emit("Duration fetched successfully", "green")

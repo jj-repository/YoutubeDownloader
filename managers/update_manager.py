@@ -14,6 +14,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -49,7 +51,6 @@ class UpdateManager(QObject):
         self.ytdlp_path = ytdlp_path
         self.thread_pool = thread_pool
         self._updating = False
-        self._shutting_down = False
         self._sha256sums_cache = {}
 
     @staticmethod
@@ -133,8 +134,6 @@ class UpdateManager(QObject):
         Args:
             silent: If True, don't show dialog when up-to-date or on error
         """
-        import urllib.error
-        import urllib.request
 
         self._sha256sums_cache.clear()
         ytdlp_update_available = False
@@ -254,9 +253,8 @@ class UpdateManager(QObject):
         """Verify downloaded file against GitHub's git tree SHA and SHA-256.
 
         1. Git blob SHA-1 via GitHub Contents API (fast, but SHA-1 is weak).
-        2. SHA-256 via release SHA256SUMS (strong, mandatory if available).
+        2. SHA-256 via release SHA256SUMS (strong, mandatory).
         """
-        import urllib.request
 
         # Check 1: git blob SHA-1 (GitHub Contents API)
         api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{filename}?ref={tag_name}"
@@ -275,30 +273,26 @@ class UpdateManager(QObject):
                 f"The file may have been tampered with."
             )
 
-        # Check 2: SHA-256 from release SHA256SUMS (mandatory if available)
-        actual_sha256 = hashlib.sha256(content).hexdigest().lower()
-        if release_data:
-            expected_sha256 = self._get_expected_sha256(release_data, filename, headers)
-            if expected_sha256:
-                if actual_sha256 != expected_sha256:
-                    raise RuntimeError(
-                        f"SHA-256 verification failed for {filename}!\n"
-                        f"Expected: {expected_sha256[:16]}...\n"
-                        f"Got: {actual_sha256[:16]}..."
-                    )
-                logger.info(
-                    f"Integrity verified for {filename}: sha256={actual_sha256[:16]}... (enforced)"
-                )
-                return
-            else:
-                raise RuntimeError(
-                    f"SHA256SUMS missing for {filename} — cannot verify integrity. Aborting update."
-                )
+        # Check 2: SHA-256 from release SHA256SUMS (mandatory)
+        if not release_data:
+            raise RuntimeError(f"Cannot verify {filename}: release_data required for SHA-256 check")
 
-        logger.info(
-            f"Integrity verified for {filename}: "
-            f"git-sha1={actual_sha[:16]}... sha256={actual_sha256[:16]}..."
-        )
+        actual_sha256 = hashlib.sha256(content).hexdigest().lower()
+        expected_sha256 = self._get_expected_sha256(release_data, filename, headers)
+        if expected_sha256:
+            if actual_sha256 != expected_sha256:
+                raise RuntimeError(
+                    f"SHA-256 verification failed for {filename}!\n"
+                    f"Expected: {expected_sha256[:16]}...\n"
+                    f"Got: {actual_sha256[:16]}..."
+                )
+            logger.info(
+                f"Integrity verified for {filename}: sha256={actual_sha256[:16]}... (enforced)"
+            )
+        else:
+            raise RuntimeError(
+                f"SHA256SUMS missing for {filename} — cannot verify integrity. Aborting update."
+            )
 
     def _apply_update(self, release_data):
         """Download and apply update, then restart the application.
@@ -326,7 +320,6 @@ class UpdateManager(QObject):
 
     def _apply_update_source(self, release_data):
         """Download, verify, and replace .py source files, then auto-restart."""
-        import urllib.request
 
         _, _create_progress_dialog, _update_progress_dialog, _close_progress_dialog = (
             self._make_progress_helpers()
@@ -439,13 +432,15 @@ class UpdateManager(QObject):
         except Exception as e:
             self._updating = False
             self.sig_run_on_gui.emit(_close_progress_dialog)
-            # Rollback any modules already replaced from backups
+            # Rollback any modules already replaced from backups (atomic)
             for module_name in downloaded:
                 backup_path = (script_dir / module_name).with_suffix(".py.backup")
                 module_path = script_dir / module_name
                 if backup_path.exists():
                     try:
-                        shutil.copy2(backup_path, module_path)
+                        tmp_rb = module_path.with_suffix(".py.rollback")
+                        shutil.copy2(backup_path, tmp_rb)
+                        os.replace(str(tmp_rb), str(module_path))
                         logger.info(f"Rolled back: {module_path}")
                     except Exception as rb_err:
                         logger.error(f"Rollback failed for {module_path}: {rb_err}")
@@ -460,9 +455,10 @@ class UpdateManager(QObject):
         Caches the SHA256SUMS content per tag to avoid redundant HTTP requests
         when verifying multiple source modules in a single update.
         """
-        import urllib.request
 
         tag_name = release_data.get("tag_name", "")
+        if not self._validate_tag_name(tag_name):
+            raise RuntimeError(f"Invalid release tag format: {tag_name!r}")
 
         if tag_name not in self._sha256sums_cache:
             sha_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag_name}/SHA256SUMS"
@@ -516,7 +512,6 @@ class UpdateManager(QObject):
 
     def _apply_update_frozen_windows(self, download_url, headers, exe_path, release_data=None):
         """Windows portable exe update: rename-dance with .bat trampoline fallback."""
-        import urllib.request
 
         new_exe = exe_path.with_suffix(".exe.new")
         old_exe = exe_path.with_name(exe_path.stem + ".old")
@@ -641,7 +636,6 @@ class UpdateManager(QObject):
 
     def _apply_update_frozen_linux(self, download_url, headers, exe_path, release_data=None):
         """Linux portable binary update: download tar.gz, extract, replace in place."""
-        import urllib.request
 
         logger.info(f"Downloading update: {download_url}")
 
@@ -704,36 +698,47 @@ class UpdateManager(QObject):
             )
         logger.info("SHA-256 verification passed for Linux tar.gz")
 
-        with tarfile.open(tar_tmp_path, mode="r:gz") as tar:
-            # Find the binary inside the archive
-            binary_member = None
-            for member in tar.getmembers():
-                if ".." in member.name or member.name.startswith("/"):
-                    continue
-                if member.isfile() and "YTDownloader" in member.name:
-                    binary_member = member
-                    break
+        tmp_path = None
+        try:
+            with tarfile.open(tar_tmp_path, mode="r:gz") as tar:
+                # Find the binary inside the archive
+                members = tar.getmembers()
+                if len(members) > 100:
+                    raise RuntimeError(f"Archive has too many entries ({len(members)}), aborting.")
+                binary_member = None
+                for member in members:
+                    if ".." in member.name or member.name.startswith("/"):
+                        continue
+                    if member.issym() or member.islnk():
+                        continue
+                    if member.isfile() and "YTDownloader" in member.name:
+                        binary_member = member
+                        break
 
-            if not binary_member:
-                raise RuntimeError("Could not find YTDownloader binary in archive.")
+                if not binary_member:
+                    raise RuntimeError("Could not find YTDownloader binary in archive.")
 
-            # Extract binary via streaming (avoids loading entire binary into memory)
-            f = tar.extractfile(binary_member)
-            if not f:
-                raise RuntimeError("Could not read binary from archive.")
-            with tempfile.NamedTemporaryFile(delete=False, dir=str(exe_path.parent)) as tmp:
-                shutil.copyfileobj(f, tmp)
-                tmp_path = Path(tmp.name)
+                # Extract binary via streaming (avoids loading entire binary into memory)
+                f = tar.extractfile(binary_member)
+                if not f:
+                    raise RuntimeError("Could not read binary from archive.")
+                with tempfile.NamedTemporaryFile(delete=False, dir=str(exe_path.parent)) as tmp:
+                    shutil.copyfileobj(f, tmp)
+                    tmp_path = Path(tmp.name)
 
-        if tmp_path.stat().st_size < 1024:
-            tmp_path.unlink(missing_ok=True)
-            raise RuntimeError("Extracted binary is too small — archive may be corrupt")
-        if exe_path.is_symlink():
-            raise RuntimeError(f"Refusing to overwrite symlink: {exe_path}")
-        os.chmod(str(tmp_path), 0o755)  # noqa: S103 — executable needs to be runnable
-        os.replace(str(tmp_path), str(exe_path))
-        os.unlink(tar_tmp_path)
-        logger.info(f"Replaced binary: {exe_path}")
+            if tmp_path.stat().st_size < 1024:
+                raise RuntimeError("Extracted binary is too small — archive may be corrupt")
+            if exe_path.is_symlink():
+                raise RuntimeError(f"Refusing to overwrite symlink: {exe_path}")
+            os.chmod(str(tmp_path), 0o755)  # noqa: S103 — executable needs to be runnable
+            os.replace(str(tmp_path), str(exe_path))
+            tmp_path = None  # successfully replaced, don't clean up
+            logger.info(f"Replaced binary: {exe_path}")
+        finally:
+            if os.path.exists(tar_tmp_path):
+                os.unlink(tar_tmp_path)
+            if tmp_path and tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
 
         # Spawn new binary and shut down
         self.sig_update_status.emit("Update complete — restarting...", "green")
@@ -886,7 +891,6 @@ class UpdateManager(QObject):
 
     def _apply_ytdlp_update_binary(self, latest_version):
         """Download latest yt-dlp binary from GitHub releases with SHA256 verification."""
-        import urllib.request
 
         tmp_path = None
         try:

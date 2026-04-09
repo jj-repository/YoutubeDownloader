@@ -96,7 +96,7 @@ jobs:
         sudo apt-get install -y libdbus-1-dev libdbus-glib-1-dev python3-dev
 
     - name: Install dependencies
-      run: pip install pyinstaller==6.13.0 -r requirements.lock
+      run: pip install -r requirements.lock
 
     - name: Install optional dependencies (Linux)
       if: runner.os == 'Linux'
@@ -129,6 +129,12 @@ jobs:
         grep ' yt-dlp$' SHA2-256SUMS | sha256sum -c -
         rm SHA2-256SUMS
         chmod +x yt-dlp
+        EXPECTED_YTDLP=$(grep 'yt-dlp==' requirements.lock | cut -d= -f3)
+        ACTUAL_YTDLP=$(./yt-dlp --version)
+        if [ "$ACTUAL_YTDLP" != "$EXPECTED_YTDLP" ]; then
+          echo "::error::yt-dlp version mismatch! Binary: $ACTUAL_YTDLP, requirements.lock: $EXPECTED_YTDLP"
+          exit 1
+        fi
 
     - name: Build executable (Linux)
       if: runner.os == 'Linux'
@@ -171,6 +177,9 @@ jobs:
         $actual = (Get-FileHash yt-dlp.exe -Algorithm SHA256).Hash.ToLower()
         if ($actual -ne $expected) { throw "SHA256 mismatch for yt-dlp.exe! Expected: $expected Got: $actual" }
         Remove-Item SHA2-256SUMS
+        $expectedVer = ((Get-Content requirements.lock | Select-String 'yt-dlp==').ToString() -split '==')[1]
+        $actualVer = (& .\yt-dlp.exe --version)
+        if ($actualVer -ne $expectedVer) { throw "yt-dlp version mismatch! Binary: $actualVer, requirements.lock: $expectedVer" }
 
     - name: Build executable (Windows)
       if: runner.os == 'Windows'
@@ -257,28 +266,30 @@ jobs:
 
     - name: Create Release
       run: |
-        gh release create "v${{ inputs.version }}" \
+        BODY="$(cat <<NOTES
+        ## YTDownloader v${VERSION}
+
+        ### Downloads
+        | Platform | File |
+        |----------|------|
+        | Windows | \`YTDownloader.exe\` |
+        | Linux | \`YTDownloader-Linux.tar.gz\` |
+
+        ### Setup
+        - **Windows**: Download \`YTDownloader.exe\` and run it directly
+        - **Linux**: Extract and run \`./YTDownloader\`
+
+        See [README](https://github.com/jj-repository/YoutubeDownloader#readme) for full documentation.
+        NOTES
+        )"
+        gh release create "v${VERSION}" \
           linux-build/YTDownloader-Linux.tar.gz \
           windows-build/YTDownloader.exe \
           SHA256SUMS \
           SHA256SUMS.sig \
           SHA256SUMS.pem \
-          --title "v${{ inputs.version }}" \
-          --notes "$(cat <<'NOTES'
-        ## YTDownloader v${{ inputs.version }}
-
-        ### Downloads
-        | Platform | File |
-        |----------|------|
-        | Windows | `YTDownloader.exe` |
-        | Linux | `YTDownloader-Linux.tar.gz` |
-
-        ### Setup
-        - **Windows**: Download `YTDownloader.exe` and run it directly
-        - **Linux**: Extract and run `./YTDownloader`
-
-        See [README](https://github.com/jj-repository/YoutubeDownloader#readme) for full documentation.
-        NOTES
-        )"
+          --title "v${VERSION}" \
+          --notes "$BODY"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VERSION: ${{ inputs.version }}

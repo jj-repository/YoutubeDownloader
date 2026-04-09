@@ -49,7 +49,6 @@ class ClipboardManager(QObject):
         self.clipboard_stop_event = threading.Event()  # set = stopped
         self.clipboard_stop_event.set()  # initially stopped
         self.clipboard_auto_downloading = False
-        self._shutting_down = False
         self._clipboard_backend: str | None = None
         self.klipper_interface = None  # set by main window if dbus available
 
