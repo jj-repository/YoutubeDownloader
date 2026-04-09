@@ -12,7 +12,7 @@ Last updated: 2026-04-08 (audit 9)
 **Audit 7**: 50 raw (5 agents) → 44 unique after dedup, 39 fixed (2 iterations), 5 deferred
 **Post-audit cleanup**: 17 deferred items fixed (6 refactors, 3 performance, 2 DevOps, 9 test gaps + dependency tests), 28 new tests (340 total)
 **Audit 8**: 15 raw (5 agents) → 15 unique (1 dup removed), 15 fixed (1 iteration), 0 deferred (339 tests, was 340 — net -1 from merged tests)
-**Audit 9**: 30 raw (5 agents) → 30 unique, 23 fixed (1 iteration), 7 deferred (353 tests, was 339 — net +14 from strengthened tests)
+**Audit 9**: 30 raw (5 agents) → 30 unique, 24 fixed (1 iteration), 6 deferred (353 tests, was 339 — net +14 from strengthened tests)
 
 ## Remaining Issues
 
@@ -32,8 +32,6 @@ Last updated: 2026-04-08 (audit 9)
 - **P-L4**: `view_upload_history` reads entire file into QTextEdit — one-time cost per dialog open, 500 lines max. [low]
 - **P-L5**: `on_slider_change` fires per-pixel without debounce for text updates — preview already debounced 500ms. [low]
 - **P-L6**: `_restore_clipboard_urls` re-validates persisted URLs at startup — acceptable at 500 max. [low]
-- **DO-M1**: `softprops/action-gh-release` uses Node.js 20 (EOL 2026-06-02) — waiting on upstream v3. [medium]
-
 ### Test coverage gaps (remaining)
 - **TQ-8** [medium]: `test_cancellation_during_data_download` xfail masks real gap (mock urlopen interaction flaky)
 - **TQ-10–20** [medium/low]: Various smaller coverage gaps in update_manager, download_manager, upload_manager

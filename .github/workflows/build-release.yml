@@ -256,28 +256,29 @@ jobs:
       run: cosign sign-blob --yes SHA256SUMS --output-signature SHA256SUMS.sig --output-certificate SHA256SUMS.pem
 
     - name: Create Release
-      uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
-      with:
-        tag_name: v${{ inputs.version }}
-        files: |
-          linux-build/YTDownloader-Linux.tar.gz
-          windows-build/YTDownloader.exe
-          SHA256SUMS
-          SHA256SUMS.sig
-          SHA256SUMS.pem
-        body: |
-          ## YTDownloader v${{ inputs.version }}
+      run: |
+        gh release create "v${{ inputs.version }}" \
+          linux-build/YTDownloader-Linux.tar.gz \
+          windows-build/YTDownloader.exe \
+          SHA256SUMS \
+          SHA256SUMS.sig \
+          SHA256SUMS.pem \
+          --title "v${{ inputs.version }}" \
+          --notes "$(cat <<'NOTES'
+        ## YTDownloader v${{ inputs.version }}
 
-          ### Downloads
-          | Platform | File |
-          |----------|------|
-          | Windows | `YTDownloader.exe` |
-          | Linux | `YTDownloader-Linux.tar.gz` |
+        ### Downloads
+        | Platform | File |
+        |----------|------|
+        | Windows | `YTDownloader.exe` |
+        | Linux | `YTDownloader-Linux.tar.gz` |
 
-          ### Setup
-          - **Windows**: Download `YTDownloader.exe` and run it directly
-          - **Linux**: Extract and run `./YTDownloader`
+        ### Setup
+        - **Windows**: Download `YTDownloader.exe` and run it directly
+        - **Linux**: Extract and run `./YTDownloader`
 
-          See [README](https://github.com/jj-repository/YoutubeDownloader#readme) for full documentation.
+        See [README](https://github.com/jj-repository/YoutubeDownloader#readme) for full documentation.
+        NOTES
+        )"
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
