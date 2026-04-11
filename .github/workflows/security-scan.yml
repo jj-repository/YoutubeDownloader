@@ -1,0 +1,157 @@
+name: Security Scan
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect languages
+        id: detect
+        run: |
+          DIFF_FILES=$(git diff --name-only origin/main...HEAD 2>/dev/null || git diff --name-only HEAD~1)
+          echo "has_rust=$(echo "$DIFF_FILES" | grep -qE '\.rs$' && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_ts=$(echo "$DIFF_FILES" | grep -qE '\.(ts|js|tsx|jsx)$' && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_py=$(echo "$DIFF_FILES" | grep -qE '\.py$' && echo true || echo false)" >> $GITHUB_OUTPUT
+
+      - name: Critical files check
+        run: |
+          echo "## Critical Files" >> $GITHUB_STEP_SUMMARY
+          CRITICAL_PATTERNS=(
+            '\.github/workflows/'
+            'Cargo\.toml'
+            'package\.json'
+            'requirements\.txt'
+            'Dockerfile'
+            '\.env'
+          )
+          DIFF_FILES=$(git diff --name-only origin/main...HEAD 2>/dev/null || git diff --name-only HEAD~1)
+          FOUND=false
+          for pattern in "${CRITICAL_PATTERNS[@]}"; do
+            MATCHES=$(echo "$DIFF_FILES" | grep -E "$pattern" || true)
+            if [ -n "$MATCHES" ]; then
+              echo "- **Modified:** $MATCHES" >> $GITHUB_STEP_SUMMARY
+              FOUND=true
+            fi
+          done
+          if [ "$FOUND" = false ]; then
+            echo "No critical files modified." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Dangerous patterns — Rust
+        if: steps.detect.outputs.has_rust == 'true'
+        run: |
+          echo "## Rust Patterns" >> $GITHUB_STEP_SUMMARY
+          DIFF=$(git diff origin/main...HEAD -- '*.rs' 2>/dev/null || git diff HEAD~1 -- '*.rs')
+          PATTERNS=(
+            'Command::new'
+            'unsafe\s*\{'
+            '\.unwrap\(\)'
+            'panic!\('
+            'todo!\('
+            'std::process::exit'
+            'std::env::set_var'
+          )
+          FOUND=false
+          for pat in "${PATTERNS[@]}"; do
+            COUNT=$(echo "$DIFF" | grep -cE "^\+.*${pat}" || true)
+            if [ "$COUNT" -gt 0 ]; then
+              echo "- \`${pat}\` added $COUNT time(s)" >> $GITHUB_STEP_SUMMARY
+              FOUND=true
+            fi
+          done
+          if [ "$FOUND" = false ]; then
+            echo "No dangerous Rust patterns found." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Dangerous patterns — TypeScript/JavaScript
+        if: steps.detect.outputs.has_ts == 'true'
+        run: |
+          echo "## TypeScript/JavaScript Patterns" >> $GITHUB_STEP_SUMMARY
+          DIFF=$(git diff origin/main...HEAD -- '*.ts' '*.js' '*.tsx' '*.jsx' 2>/dev/null || git diff HEAD~1 -- '*.ts' '*.js' '*.tsx' '*.jsx')
+          PATTERNS=(
+            'eval\('
+            'Function\('
+            'child_process'
+            'exec\('
+            'execSync\('
+            'dangerouslySetInnerHTML'
+            '__proto__'
+            'innerHTML\s*='
+          )
+          FOUND=false
+          for pat in "${PATTERNS[@]}"; do
+            COUNT=$(echo "$DIFF" | grep -cE "^\+.*${pat}" || true)
+            if [ "$COUNT" -gt 0 ]; then
+              echo "- \`${pat}\` added $COUNT time(s)" >> $GITHUB_STEP_SUMMARY
+              FOUND=true
+            fi
+          done
+          if [ "$FOUND" = false ]; then
+            echo "No dangerous JS/TS patterns found." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Dangerous patterns — Python
+        if: steps.detect.outputs.has_py == 'true'
+        run: |
+          echo "## Python Patterns" >> $GITHUB_STEP_SUMMARY
+          DIFF=$(git diff origin/main...HEAD -- '*.py' 2>/dev/null || git diff HEAD~1 -- '*.py')
+          PATTERNS=(
+            'eval\('
+            'exec\('
+            'subprocess\.call'
+            'os\.system\('
+            '__import__'
+            'pickle\.load'
+            'yaml\.load\('
+            'shell=True'
+          )
+          FOUND=false
+          for pat in "${PATTERNS[@]}"; do
+            COUNT=$(echo "$DIFF" | grep -cE "^\+.*${pat}" || true)
+            if [ "$COUNT" -gt 0 ]; then
+              echo "- \`${pat}\` added $COUNT time(s)" >> $GITHUB_STEP_SUMMARY
+              FOUND=true
+            fi
+          done
+          if [ "$FOUND" = false ]; then
+            echo "No dangerous Python patterns found." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: New dependency check
+        run: |
+          echo "## New Dependencies" >> $GITHUB_STEP_SUMMARY
+          DIFF=$(git diff origin/main...HEAD 2>/dev/null || git diff HEAD~1)
+          # Cargo.toml new deps
+          CARGO_DEPS=$(echo "$DIFF" | grep -E '^\+.*=.*\{.*version' -- || true)
+          if [ -n "$CARGO_DEPS" ]; then
+            echo "### Cargo.toml" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$CARGO_DEPS" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+          # package.json new deps
+          PKG_DEPS=$(echo "$DIFF" | grep -E '^\+.*"(dependencies|devDependencies)"' -A 50 | grep -E '^\+\s+"[^"]+":' || true)
+          if [ -n "$PKG_DEPS" ]; then
+            echo "### package.json" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$PKG_DEPS" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -z "$CARGO_DEPS" ] && [ -z "$PKG_DEPS" ]; then
+            echo "No new dependencies added." >> $GITHUB_STEP_SUMMARY
+          fi
