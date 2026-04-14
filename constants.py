@@ -71,7 +71,7 @@ MAX_CLIPBOARD_URLS = 500
 CLIPBOARD_URL_LIST_HEIGHT = 150
 
 # Version and Update
-APP_VERSION = "5.22"
+APP_VERSION = "5.23"
 GITHUB_REPO = "jj-repository/YoutubeDownloader"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
