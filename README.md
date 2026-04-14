@@ -274,7 +274,7 @@ Check this file for detailed error messages and debugging information.
 
 ## 🔄 Changelog
 
-### Version 5.21 (Latest)
+### Version 5.22 (Latest)
 - **Modular Architecture**: Main file split from ~7600 to ~3750 lines; business logic extracted to 7 manager modules
 - **10MB Mode**: Auto-selects resolution and bitrate to keep files under 10MB (two-pass encoding, GPU acceleration)
 - **Hardware Encoding**: VAAPI/NVENC detection and fallback for faster encodes
