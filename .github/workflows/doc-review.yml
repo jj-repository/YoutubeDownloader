@@ -1,0 +1,96 @@
+name: Documentation Review
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doc-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check documentation completeness
+        run: |
+          FILES=$(git diff --name-only origin/main...HEAD 2>/dev/null || git diff --name-only HEAD~1)
+          DIFF=$(git diff origin/main...HEAD 2>/dev/null || git diff HEAD~1)
+          ISSUES=""
+
+          # Skip if only test files changed
+          NON_TEST=$(echo "$FILES" | grep -vE '^tests?/' || true)
+          if [ -z "$NON_TEST" ]; then
+            echo "## Documentation Review" >> $GITHUB_STEP_SUMMARY
+            echo "Only test files changed — skipped." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          # 1. CHANGELOG check: user-facing source files changed but no CHANGELOG update
+          SRC_CHANGED=$(echo "$FILES" | grep -E '\.(py|rs|js|ts|tsx|jsx|c|h|cpp)$' | grep -vE '^tests?/' || true)
+          HAS_CHANGELOG=$(echo "$FILES" | grep -qi 'changelog' && echo true || echo false)
+          if [ -n "$SRC_CHANGED" ] && [ "$HAS_CHANGELOG" = false ] && [ -f "CHANGELOG.md" ]; then
+            ISSUES="${ISSUES}\n- Source files changed but CHANGELOG.md not updated"
+          fi
+
+          # 2. Version bump check: Cargo.toml or package.json version changed but no tag/changelog
+          if echo "$DIFF" | grep -qE '^\+.*"?version"?\s*[:=]'; then
+            if [ "$HAS_CHANGELOG" = false ] && [ -f "CHANGELOG.md" ]; then
+              ISSUES="${ISSUES}\n- Version bumped but CHANGELOG.md not updated"
+            fi
+          fi
+
+          # 3. New CLI flags/commands: added clap/argparse args but README not updated
+          NEW_CLI=$(echo "$DIFF" | grep -cE '^\+.*(\.arg\(|\.subcommand\(|add_argument\(|\.command\()' || true)
+          README_CHANGED=$(echo "$FILES" | grep -qi 'readme' && echo true || echo false)
+          if [ "$NEW_CLI" -gt 0 ] && [ "$README_CHANGED" = false ]; then
+            ISSUES="${ISSUES}\n- New CLI arguments/commands added but README not updated"
+          fi
+
+          # 4. New public functions/structs in Rust without doc comments
+          NEW_PUB=$(echo "$DIFF" | grep -cE '^\+\s*pub\s+(fn|struct|enum|trait)\s' || true)
+          NEW_DOCS=$(echo "$DIFF" | grep -cE '^\+\s*///' || true)
+          if [ "$NEW_PUB" -gt 3 ] && [ "$NEW_DOCS" -eq 0 ]; then
+            ISSUES="${ISSUES}\n- ${NEW_PUB} new public items added without any doc comments"
+          fi
+
+          # 5. Workflow files changed — flag for review
+          WF_CHANGED=$(echo "$FILES" | grep -E '\.github/workflows/' || true)
+          if [ -n "$WF_CHANGED" ]; then
+            ISSUES="${ISSUES}\n- CI workflow files modified — verify they work as intended"
+          fi
+
+          # 6. Dependency file changed without lockfile update
+          if echo "$FILES" | grep -qE 'Cargo\.toml$' && ! echo "$FILES" | grep -q 'Cargo\.lock'; then
+            ISSUES="${ISSUES}\n- Cargo.toml changed but Cargo.lock not updated (run cargo build)"
+          fi
+          if echo "$FILES" | grep -qE 'package\.json$' && ! echo "$FILES" | grep -qE '(package-lock|pnpm-lock|bun\.lock)'; then
+            ISSUES="${ISSUES}\n- package.json changed but lockfile not updated"
+          fi
+
+          # 7. .claude/ topic files: if overview.md exists and version-bearing files changed
+          if echo "$DIFF" | grep -qE '^\+.*version\s*[:=]' && [ -f ".claude/overview.md" ]; then
+            OVERVIEW_CHANGED=$(echo "$FILES" | grep -q '.claude/overview.md' && echo true || echo false)
+            if [ "$OVERVIEW_CHANGED" = false ]; then
+              ISSUES="${ISSUES}\n- Version changed but .claude/overview.md not updated"
+            fi
+          fi
+
+          # Report
+          echo "## Documentation Review" >> $GITHUB_STEP_SUMMARY
+          if [ -z "$ISSUES" ]; then
+            echo "All checks passed." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Issues Found" >> $GITHUB_STEP_SUMMARY
+            echo -e "$ISSUES" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "::warning::Documentation may need updates — see job summary"
+          fi
