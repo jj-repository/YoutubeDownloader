@@ -41,6 +41,8 @@ _SANITIZE_TABLE = str.maketrans("", "", "/\\\x00$`|;&<>(){}[]!*?~^\x7f")
 
 def sanitize_filename(filename: str) -> str:
     """Sanitize filename to prevent path traversal and command injection."""
+    if not isinstance(filename, str):
+        return ""
     if not filename:
         return ""
 
