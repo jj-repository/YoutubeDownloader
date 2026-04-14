@@ -6224,8 +6224,6 @@ class TestApplyUpdateFrozenWindowsHappyPath:
                 raise OSError("File in use")
             return original_rename(self_path, target)
 
-        import subprocess as sp
-
         with (
             patch("urllib.request.urlopen", return_value=mock_resp),
             patch.object(update_mgr, "_get_expected_sha256", return_value=actual_sha),
