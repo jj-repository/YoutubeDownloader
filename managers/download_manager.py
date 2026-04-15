@@ -1138,7 +1138,12 @@ class DownloadManager(QObject):
 
         start_hms_file = seconds_to_hms(start_time).replace(":", "-")
         end_hms_file = seconds_to_hms(end_time).replace(":", "-")
-        format_spec = f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
+        # Prefer m4a audio (fMP4) for SIDX-based precise byte-range seeking.
+        # WebM audio uses estimated byte ranges that are inaccurate for long videos.
+        format_spec = (
+            f"bestvideo[height<={height}]+bestaudio[ext=m4a]/"
+            f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
+        )
         temp_dir = tempfile.mkdtemp(prefix="ytdl_10mb_")
         temp_file = os.path.join(temp_dir, "trimmed_segment.mp4")
 
@@ -1204,7 +1209,12 @@ class DownloadManager(QObject):
 
         start_hms_file = seconds_to_hms(start_time).replace(":", "-")
         end_hms_file = seconds_to_hms(end_time).replace(":", "-")
-        format_spec = f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
+        # Prefer m4a audio (fMP4) for SIDX-based precise byte-range seeking.
+        # WebM audio uses estimated byte ranges that are inaccurate for long videos.
+        format_spec = (
+            f"bestvideo[height<={height}]+bestaudio[ext=m4a]/"
+            f"bestvideo[height<={height}]+bestaudio/best[height<={height}]"
+        )
         _dp = ui_state["download_path"] if ui_state else ""
         if custom_name:
             final_base = custom_name
