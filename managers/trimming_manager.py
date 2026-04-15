@@ -237,8 +237,7 @@ class TrimmingManager(QObject):
             logger.info(f"Local file duration: {self.video_duration}s")
 
         except subprocess.CalledProcessError as e:
-            error_msg = f"Failed to read video file:\n{e.stderr if e.stderr else str(e)}"
-            self.sig_show_messagebox.emit("error", "Error", error_msg)
+            self.sig_show_messagebox.emit("error", "Error", "Failed to read video file.")
             self.sig_update_status.emit("Failed to read file", "red")
             logger.error(f"ffprobe error: {e}")
         except ValueError as e:
@@ -246,8 +245,7 @@ class TrimmingManager(QObject):
             self.sig_update_status.emit("Invalid video file format", "red")
             logger.error(f"Duration parsing error: {e}")
         except Exception as e:
-            err_msg = f"Failed to read file:\n{e}"
-            self.sig_show_messagebox.emit("error", "Error", err_msg)
+            self.sig_show_messagebox.emit("error", "Error", "Failed to read file.")
             self.sig_update_status.emit("Failed to read file", "red")
             logger.exception(f"Unexpected error reading local file: {e}")
         finally:

@@ -59,6 +59,13 @@ PROGRESS_REGEX = re.compile(r"(\d+\.?\d*)%")
 SPEED_REGEX = re.compile(r"(\d+\.?\d*\s*[KMG]iB/s)")
 ETA_REGEX = re.compile(r"ETA\s+(\d{2}:\d{2}(?::\d{2})?)")
 
+_SIGNED_URL_RE = re.compile(r"https?://\S+[?&](sig|signature|token|expire|key|auth)\w*=\S+", re.I)
+
+
+def _scrub_signed_urls(text: str) -> str:
+    """Replace signed/tokenized URLs in text with a placeholder."""
+    return _SIGNED_URL_RE.sub("<signed-url-redacted>", text)
+
 
 class DownloadManager(QObject):
     """Manages download orchestration, command building, and trimmed downloads.
@@ -501,6 +508,10 @@ class DownloadManager(QObject):
                 break
             if box_type == b"sidx":
                 sidx_end = pos + box_size
+                # Minimum SIDX header: 8 (box) + 4 (ver+flags) + 4 (ref_id)
+                #   + 4 (timescale) + 8 (v0: ept+offset) + 2 (reserved) + 2 (ref_count) = 32
+                if sidx_end > len(data) or box_size < 32:
+                    return None
                 p = pos + 8  # skip size + type
                 version = data[p]
                 p += 4  # version(1) + flags(3)
@@ -510,13 +521,19 @@ class DownloadManager(QObject):
                 if timescale == 0:
                     return None
                 if version == 0:
+                    if p + 8 > sidx_end:
+                        return None
                     p += 4  # earliest_presentation_time
                     first_offset = struct.unpack(">I", data[p : p + 4])[0]
                     p += 4
                 else:
+                    if p + 16 > sidx_end:
+                        return None
                     p += 8  # earliest_presentation_time (64-bit)
                     first_offset = struct.unpack(">Q", data[p : p + 8])[0]
                     p += 8
+                if p + 4 > sidx_end:
+                    return None
                 p += 2  # reserved
                 ref_count = struct.unpack(">H", data[p : p + 2])[0]
                 p += 2
@@ -569,6 +586,8 @@ class DownloadManager(QObject):
         Reads in chunks and checks is_downloading between them so the
         user can cancel during slow CDN responses (e.g. 10-hour videos).
         """
+        import io
+
         requested_size = end - start + 1
         if requested_size > self._HTTP_RANGE_MAX_SIZE:
             raise ValueError(
@@ -576,22 +595,21 @@ class DownloadManager(QObject):
             )
         req = urllib.request.Request(url)
         req.add_header("Range", f"bytes={start}-{end}")
-        chunks = []
-        expected_size = requested_size
+        buf = io.BytesIO()
         total_read = 0
         with urllib.request.urlopen(req, timeout=DOWNLOAD_PROGRESS_TIMEOUT_TRIM // 10) as resp:
             while True:
                 if not self.is_downloading:
-                    return b"".join(chunks)
+                    return buf.getvalue()
                 chunk = resp.read(256 * 1024)
                 if not chunk:
                     break
                 total_read += len(chunk)
-                if total_read > expected_size * 2:
-                    raise RuntimeError(f"Response exceeded expected size ({expected_size} bytes)")
-                chunks.append(chunk)
+                if total_read > requested_size * 2:
+                    raise RuntimeError(f"Response exceeded expected size ({requested_size} bytes)")
+                buf.write(chunk)
                 self.last_progress_time = time.time()
-        return b"".join(chunks)
+        return buf.getvalue()
 
     def _download_stream_segment(
         self,
@@ -697,7 +715,7 @@ class DownloadManager(QObject):
         self.update_status(f"Downloading {label}...", "blue")
         req = urllib.request.Request(stream_url)
         req.add_header("Range", f"bytes={data_start}-{data_end}")
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=DOWNLOAD_PROGRESS_TIMEOUT_TRIM // 10) as resp:
             with open(output_path, "wb", buffering=256 * 1024) as f:
                 f.write(init_data)
                 downloaded = 0
@@ -908,28 +926,31 @@ class DownloadManager(QObject):
 
     def _monitor_download_timeout_tick(self) -> None:
         """Single timeout check (called by GUI QTimer each interval)."""
-        if not self.is_downloading:
-            return
+        with self.download_lock:
+            if not self.is_downloading:
+                return
+            start_time = self.download_start_time
+            progress_time = self.last_progress_time
+            has_progress = self._download_has_progress
+            trim_active = self._trim_download_active
 
         current_time = time.time()
 
-        if self.download_start_time and not self._download_has_progress:
-            elapsed = int(current_time - self.download_start_time)
+        if start_time and not has_progress:
+            elapsed = int(current_time - start_time)
             self.update_status(f"Preparing download... ({elapsed}s elapsed)", "blue")
 
-        if self.download_start_time:
-            elapsed = current_time - self.download_start_time
+        if start_time:
+            elapsed = current_time - start_time
             if elapsed > DOWNLOAD_TIMEOUT:
                 logger.error(f"Download exceeded absolute timeout ({DOWNLOAD_TIMEOUT}s)")
                 self._timeout_download("Download timeout (60 min limit exceeded)")
                 return
 
-        if self.last_progress_time:
-            time_since_progress = current_time - self.last_progress_time
+        if progress_time:
+            time_since_progress = current_time - progress_time
             progress_timeout = (
-                DOWNLOAD_PROGRESS_TIMEOUT_TRIM
-                if self._trim_download_active
-                else DOWNLOAD_PROGRESS_TIMEOUT
+                DOWNLOAD_PROGRESS_TIMEOUT_TRIM if trim_active else DOWNLOAD_PROGRESS_TIMEOUT
             )
             if time_since_progress > progress_timeout:
                 timeout_min = progress_timeout // 60
@@ -995,9 +1016,10 @@ class DownloadManager(QObject):
                     break
 
                 if line.startswith("ERROR:") or "[error]" in line.lower():
+                    scrubbed = _scrub_signed_urls(line.strip())
                     if len(error_lines) < 100:
-                        error_lines.append(line.strip())
-                    logger.warning(f"yt-dlp: {line.strip()}")
+                        error_lines.append(scrubbed)
+                    logger.warning(f"yt-dlp: {scrubbed}")
 
                 if "[download]" in line or "Downloading" in line:
                     self._download_has_progress = True
@@ -1502,12 +1524,11 @@ class DownloadManager(QObject):
                 logger.error(f"Permission error: {e}")
         except OSError as e:
             if self.is_downloading:
-                error_msg = f"OS error: {e}"
-                self.update_status(error_msg, "red")
+                self.update_status("OS error during download", "red")
                 logger.error(f"OS error during download: {e}")
         except Exception as e:
             if self.is_downloading:
-                self.update_status(f"Error: {e}", "red")
+                self.update_status("Unexpected error during download", "red")
                 logger.exception(f"Unexpected error during download: {e}")
 
         finally:
@@ -1537,6 +1558,16 @@ class DownloadManager(QObject):
         """
         try:
             self._download_has_progress = True
+
+            # SEC-L6-b: validate and canonicalize local file path
+            real_path = Path(filepath).resolve()
+            if not real_path.is_file():
+                self.update_status("File does not exist", "red")
+                self.sig_reset_buttons.emit()
+                with self.download_lock:
+                    self.is_downloading = False
+                return
+            filepath = str(real_path)
 
             # Local audio files are always processed as audio-only
             audio_extensions = {".mp3", ".aac", ".m4a", ".wav"}

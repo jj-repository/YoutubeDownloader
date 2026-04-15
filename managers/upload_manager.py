@@ -57,6 +57,23 @@ class UploadManager(QObject):
         # Trim upload history at startup to prevent unbounded growth
         self._trim_history_on_startup()
 
+    @staticmethod
+    def _atomic_write_lines(path, lines):
+        """Write lines to file atomically via temp-file + rename."""
+        import tempfile
+
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+            os.replace(tmp_path, path)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
     def _trim_history_on_startup(self):
         """Cap upload history file at 500 lines on startup."""
         try:
@@ -65,8 +82,7 @@ class UploadManager(QObject):
             with open(UPLOAD_HISTORY_FILE, "r", encoding="utf-8") as f:
                 lines = f.readlines()
             if len(lines) > 500:
-                with open(UPLOAD_HISTORY_FILE, "w", encoding="utf-8") as f:
-                    f.writelines(lines[-500:])
+                self._atomic_write_lines(UPLOAD_HISTORY_FILE, lines[-500:])
                 logger.info(f"Trimmed upload history from {len(lines)} to 500 entries at startup")
         except Exception as e:
             logger.error(f"Error trimming upload history at startup: {e}")
@@ -262,6 +278,7 @@ class UploadManager(QObject):
         """Append an upload link to the history file, trimming when needed."""
         try:
             UPLOAD_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+            need_trim = False
             with self.upload_lock:
                 with open(UPLOAD_HISTORY_FILE, "a", encoding="utf-8") as f:
                     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -269,15 +286,17 @@ class UploadManager(QObject):
                 self._upload_save_count += 1
                 if self._upload_save_count >= 100:
                     self._upload_save_count = 0
-                    try:
-                        with open(UPLOAD_HISTORY_FILE, "r", encoding="utf-8") as f:
-                            lines = f.readlines()
-                        if len(lines) > 1000:
-                            with open(UPLOAD_HISTORY_FILE, "w", encoding="utf-8") as f:
-                                f.writelines(lines[-500:])
-                            logger.info("Trimmed upload history to last 500 entries")
-                    except Exception as trim_err:
-                        logger.error(f"Error trimming upload history: {trim_err}")
+                    need_trim = True
+            # Trim outside lock to avoid blocking other writers during I/O
+            if need_trim:
+                try:
+                    with open(UPLOAD_HISTORY_FILE, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                    if len(lines) > 1000:
+                        self._atomic_write_lines(UPLOAD_HISTORY_FILE, lines[-500:])
+                        logger.info("Trimmed upload history to last 500 entries")
+                except Exception as trim_err:
+                    logger.error(f"Error trimming upload history: {trim_err}")
             logger.info(f"Saved upload link to history: {link}")
         except Exception as e:
             logger.error(f"Error saving upload link: {e}")

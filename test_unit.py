@@ -2382,8 +2382,10 @@ class TestDownloadLocalFile:
         download_mgr.is_downloading = True
         download_mgr.video_duration = 120
 
-        # Create a mock audio file path
-        audio_file = str(tmp_path / "test.mp3")
+        # Create a mock audio file
+        audio_path = tmp_path / "test.mp3"
+        audio_path.write_bytes(b"\x00" * 1024)
+        audio_file = str(audio_path)
 
         ui_state = self._make_ui_state(quality="none (Audio only)", audio_only=True)
         captured_cmd = []
@@ -2415,7 +2417,9 @@ class TestDownloadLocalFile:
         download_mgr.is_downloading = True
         download_mgr.video_duration = 120
 
-        video_file = str(tmp_path / "test.mp4")
+        video_path = tmp_path / "test.mp4"
+        video_path.write_bytes(b"\x00" * 1024)
+        video_file = str(video_path)
         ui_state = self._make_ui_state(
             quality="720",
             trim_enabled=True,
@@ -2454,7 +2458,9 @@ class TestDownloadLocalFile:
         download_mgr.is_downloading = True
         download_mgr.video_duration = 120
 
-        video_file = str(tmp_path / "test.mp4")
+        video_path = tmp_path / "test.mp4"
+        video_path.write_bytes(b"\x00" * 1024)
+        video_file = str(video_path)
         ui_state = self._make_ui_state(quality="720", keep_below_10mb=True)
 
         with patch.object(
@@ -3986,11 +3992,13 @@ class TestEncodingStderrThreadTimeout:
 class TestDownloadLocalFileErrors:
     """Test download_local_file error paths."""
 
-    def test_ffmpeg_not_found(self, download_mgr):
+    def test_ffmpeg_not_found(self, download_mgr, tmp_path):
         """FileNotFoundError should report ffmpeg not found."""
         from unittest.mock import patch
 
         download_mgr.is_downloading = True
+        input_file = tmp_path / "input.mp4"
+        input_file.write_bytes(b"\x00" * 1024)
 
         with (
             patch.object(download_mgr, "update_status") as mock_status,
@@ -4000,17 +4008,19 @@ class TestDownloadLocalFileErrors:
                 side_effect=FileNotFoundError("ffmpeg not found"),
             ),
         ):
-            download_mgr.download_local_file("/tmp/input.mp4")
+            download_mgr.download_local_file(str(input_file))
 
         # Should mention ffmpeg in the status
         status_calls = [str(c) for c in mock_status.call_args_list]
         assert any("ffmpeg" in s.lower() for s in status_calls)
 
-    def test_generic_exception_handled(self, download_mgr):
+    def test_generic_exception_handled(self, download_mgr, tmp_path):
         """Generic exceptions should be caught and reported."""
         from unittest.mock import patch
 
         download_mgr.is_downloading = True
+        input_file = tmp_path / "input.mp4"
+        input_file.write_bytes(b"\x00" * 1024)
 
         with (
             patch.object(download_mgr, "update_status") as mock_status,
@@ -4020,7 +4030,7 @@ class TestDownloadLocalFileErrors:
                 side_effect=RuntimeError("unexpected"),
             ),
         ):
-            download_mgr.download_local_file("/tmp/input.mp4")
+            download_mgr.download_local_file(str(input_file))
 
         status_calls = [str(c) for c in mock_status.call_args_list]
         assert any("error" in s.lower() or "unexpected" in s.lower() for s in status_calls)
@@ -6506,7 +6516,9 @@ class TestDownloadLocalFileVideoEncode:
         download_mgr.is_downloading = True
         download_mgr.video_duration = 120
 
-        video_file = str(tmp_path / "test.mp4")
+        video_path = tmp_path / "test.mp4"
+        video_path.write_bytes(b"\x00" * 1024)
+        video_file = str(video_path)
         ui_state = self._make_ui_state(quality="720")
 
         captured_cmd = []
@@ -6538,7 +6550,9 @@ class TestDownloadLocalFileVideoEncode:
         download_mgr.is_downloading = True
         download_mgr.video_duration = 120
 
-        video_file = str(tmp_path / "test.mp4")
+        video_path = tmp_path / "test.mp4"
+        video_path.write_bytes(b"\x00" * 1024)
+        video_file = str(video_path)
         ui_state = self._make_ui_state(quality="720", volume_raw=150)
 
         captured_cmd = []

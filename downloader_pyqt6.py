@@ -13,7 +13,6 @@ import sys
 import tempfile
 import threading
 import time
-import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -101,6 +100,14 @@ if sys.platform != "win32":
 # Configure logging
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
 
+# SEC-L5: create log file with restrictive permissions (owner-only) before handler opens it
+if not LOG_FILE.exists():
+    _old_umask = os.umask(0o177)
+    try:
+        LOG_FILE.touch(mode=0o600)
+    finally:
+        os.umask(_old_umask)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -113,6 +120,14 @@ logger = logging.getLogger(__name__)
 
 _PLAYLIST_ITEM_RE = re.compile(r"downloading item (\d+) of (\d+)")
 _EXTRACTING_URL_RE = re.compile(r"Extracting URL:\s+(\S+)")
+
+
+def _open_url(url: str) -> None:
+    """Open a URL in the default browser via QDesktopServices (not env-controllable)."""
+    from PyQt6.QtCore import QUrl
+    from PyQt6.QtGui import QDesktopServices
+
+    QDesktopServices.openUrl(QUrl(url))
 
 
 def _excepthook(exc_type, exc_value, exc_tb):
@@ -250,6 +265,11 @@ def _make_checkbox_images():
     p.end()
     chk.save(os.path.join(_checkbox_temp_dir, "cb_chk.png"))
 
+    # P-L2: register atexit handler so temp dir is cleaned even on crash/kill
+    import atexit
+
+    atexit.register(lambda d=_checkbox_temp_dir: shutil.rmtree(d, ignore_errors=True))
+
     return _checkbox_temp_dir
 
 
@@ -379,11 +399,19 @@ class YouTubeDownloader(QMainWindow):
         except Exception:
             pass
 
-        # Restore saved window geometry if available
+        # Restore saved window geometry if available (SEC-L2: validate against screen bounds)
         _geo = self._config.get("window_geometry")
         if _geo:
             try:
                 self.restoreGeometry(bytes.fromhex(_geo))
+                # Validate restored geometry is sane: on-screen and positive size
+                geo = self.geometry()
+                screen = self.screen()
+                if screen:
+                    avail = screen.availableGeometry()
+                    if geo.width() < 100 or geo.height() < 100 or not avail.intersects(geo):
+                        self.resize(900, 700)
+                        self.move(avail.center() - self.rect().center())
             except Exception:
                 pass
 
@@ -1243,9 +1271,7 @@ class YouTubeDownloader(QMainWindow):
         layout.addWidget(self.check_updates_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 
         readme_btn = _colored_btn("Readme", BLUE)
-        readme_btn.clicked.connect(
-            lambda: webbrowser.open(f"https://github.com/{GITHUB_REPO}#readme")
-        )
+        readme_btn.clicked.connect(lambda: _open_url(f"https://github.com/{GITHUB_REPO}#readme"))
         layout.addWidget(readme_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 
         layout.addSpacing(12)
@@ -1307,21 +1333,19 @@ class YouTubeDownloader(QMainWindow):
         # Button row — accent-colored like SwornTweaks
         btn_row = QHBoxLayout()
         readme_btn = _colored_btn("Readme", BLUE)
-        readme_btn.clicked.connect(
-            lambda: webbrowser.open(f"https://github.com/{GITHUB_REPO}#readme")
-        )
+        readme_btn.clicked.connect(lambda: _open_url(f"https://github.com/{GITHUB_REPO}#readme"))
         btn_row.addWidget(readme_btn)
 
         self._report_bug_btn = _colored_btn("Report Bug", YELLOW, text_color="#1e1e1e")
         self._report_bug_btn.clicked.connect(
-            lambda: webbrowser.open(
+            lambda: _open_url(
                 f"https://github.com/{GITHUB_REPO}/issues/new?template=bug_report.yml"
             )
         )
         btn_row.addWidget(self._report_bug_btn)
 
         log_btn = QPushButton("Open Log Folder")
-        log_btn.clicked.connect(lambda: webbrowser.open(str(APP_DATA_DIR)))
+        log_btn.clicked.connect(lambda: self._open_folder(str(APP_DATA_DIR)))
         btn_row.addWidget(log_btn)
 
         btn_row.addStretch()
@@ -1526,6 +1550,7 @@ class YouTubeDownloader(QMainWindow):
         """Reset download/stop buttons to idle state (called on GUI thread via signal)."""
         self.download_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        self._download_timeout_timer.stop()
 
     def _do_show_messagebox(self, msg_type: str, title: str, message: str):
         """Show a message box (called on GUI thread via signal)."""
@@ -1570,7 +1595,7 @@ class YouTubeDownloader(QMainWindow):
 
         def open_releases():
             dialog.accept()
-            webbrowser.open(GITHUB_RELEASES_URL)
+            _open_url(GITHUB_RELEASES_URL)
 
         update_btn.clicked.connect(update_now)
         releases_btn.clicked.connect(open_releases)
@@ -2787,11 +2812,11 @@ class YouTubeDownloader(QMainWindow):
         path = normalized_path
 
         if not os.path.exists(path):
-            QMessageBox.critical(self, "Error", f"Path does not exist: {path}")
+            QMessageBox.critical(self, "Error", "Path does not exist.")
             return None
 
         if not os.path.isdir(path):
-            QMessageBox.critical(self, "Error", f"Path is not a directory: {path}")
+            QMessageBox.critical(self, "Error", "Path is not a directory.")
             return None
 
         test_file = os.path.join(path, ".ytdl_write_test")
@@ -2800,7 +2825,8 @@ class YouTubeDownloader(QMainWindow):
                 f.write("test")
             os.remove(test_file)
         except OSError as e:
-            QMessageBox.critical(self, "Error", f"Path is not writable:\n{path}\n\n{e}")
+            logger.error(f"Path not writable: {path}: {e}")
+            QMessageBox.critical(self, "Error", "Path is not writable.")
             return None
 
         return path
@@ -2815,8 +2841,9 @@ class YouTubeDownloader(QMainWindow):
 
     def _open_folder(self, path):
         """Open a folder in the system file manager."""
+        path = os.path.realpath(path)
         if not os.path.isdir(path):
-            QMessageBox.warning(self, "Error", f"Directory does not exist:\n{path}")
+            QMessageBox.warning(self, "Error", "Directory does not exist.")
             return
         try:
             if sys.platform == "win32":
@@ -2838,7 +2865,8 @@ class YouTubeDownloader(QMainWindow):
                     stderr=subprocess.DEVNULL,
                 )
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to open folder:\n{e}")
+            logger.error(f"Failed to open folder {path}: {e}")
+            QMessageBox.critical(self, "Error", "Failed to open folder.")
 
     def open_clipboard_folder(self):
         """Open clipboard mode download folder."""

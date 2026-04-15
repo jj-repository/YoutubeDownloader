@@ -5,15 +5,24 @@ line-length = 100
 select = ["E", "F", "W", "I", "B", "UP", "S"]
 ignore = [
     "E501",   # line too long — handled by formatter
-    "S108",   # hardcoded temp file — tempfile.mkdtemp/gettempdir is intentional
-    "S110",   # try-except-pass — used for best-effort cleanup throughout
-    "S310",   # audit URL open — all URLs are validated/hardcoded
-    "S603",   # subprocess call with shell=False — intentional throughout
-    "S606",   # start process without shell — os.startfile is Windows-only and safe
-    "S607",   # partial executable path — yt-dlp/ffmpeg resolved at startup
     "UP015",  # redundant open mode — keep explicit "r" for clarity
 ]
 
 [lint.per-file-ignores]
-"test_*.py" = ["F811", "S101", "S106"]  # allow redefined names, assert, hardcoded passwords in tests
-"downloader_pyqt6.py" = ["E402"]  # imports after conditional dbus/pyperclip try-except blocks
+"test_*.py" = ["F811", "S101", "S106", "S108"]  # allow redefined names, assert, hardcoded passwords, tmp paths in tests
+"downloader_pyqt6.py" = [
+    "E402",  # imports after conditional dbus/pyperclip try-except blocks
+    "S108",  # hardcoded temp file — tempfile.mkdtemp/gettempdir is intentional
+    "S110",  # try-except-pass — used for best-effort cleanup
+    "S310",  # audit URL open — all URLs are validated/hardcoded
+    "S603",  # subprocess call with shell=False — intentional
+    "S606",  # start process without shell — os.startfile is Windows-only
+    "S607",  # partial executable path — yt-dlp/ffmpeg resolved at startup
+]
+"managers/*.py" = [
+    "S108",  # hardcoded temp file — tempfile.mkdtemp/gettempdir is intentional
+    "S110",  # try-except-pass — used for best-effort cleanup
+    "S310",  # audit URL open — all URLs are validated/hardcoded
+    "S603",  # subprocess call with shell=False — intentional
+    "S607",  # partial executable path — yt-dlp/ffmpeg resolved at startup
+]
