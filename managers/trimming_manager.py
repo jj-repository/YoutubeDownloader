@@ -37,8 +37,8 @@ class TrimmingManager(QObject):
     sig_update_status = pyqtSignal(str, str)  # message, color
     sig_show_messagebox = pyqtSignal(str, str, str)  # type, title, message
     sig_run_on_gui = pyqtSignal(object)  # callable for GUI thread
-    sig_duration_fetched = pyqtSignal(float, str)  # duration_seconds, video_title_or_empty
-    sig_local_duration_fetched = pyqtSignal(float, str)  # duration_seconds, video_title
+    sig_duration_fetched = pyqtSignal(int, str)  # duration_seconds, video_title_or_empty
+    sig_local_duration_fetched = pyqtSignal(int, str)  # duration_seconds, video_title
     sig_preview_ready = pyqtSignal(object, str)  # QPixmap, position ("start"|"end")
     sig_fetch_done = pyqtSignal()  # fetch button re-enable
 
@@ -57,7 +57,7 @@ class TrimmingManager(QObject):
         self.temp_dir = temp_dir
 
         # Video metadata state
-        self.video_duration: float = 0
+        self.video_duration: int = 0
         self.video_title: str | None = None
         self.current_video_url: str | None = None
 

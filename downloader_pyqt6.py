@@ -1686,7 +1686,7 @@ class YouTubeDownloader(QMainWindow):
     # -- Trimming manager signal slots --
     def _on_duration_fetched(self, duration, video_title):
         """Handle successful duration fetch from TrimmingManager."""
-        self.video_duration = duration
+        self.video_duration = int(duration)
         self.video_title = video_title or None
         self._update_duration_ui(video_title or None)
         url = self.url_entry.text().strip()
@@ -1694,7 +1694,7 @@ class YouTubeDownloader(QMainWindow):
 
     def _on_local_duration_fetched(self, duration, video_title):
         """Handle successful local file duration fetch."""
-        self.video_duration = duration
+        self.video_duration = int(duration)
         self.video_title = video_title or None
         self._update_duration_ui_local(video_title)
 
