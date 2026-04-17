@@ -1,6 +1,8 @@
 name: Build & Release
 
 on:
+  push:
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       version:
@@ -27,6 +29,7 @@ jobs:
       contents: read
     steps:
       - name: Validate version format
+        if: github.event_name == 'workflow_dispatch'
         env:
           VERSION: ${{ inputs.version }}
         run: |
@@ -41,6 +44,7 @@ jobs:
           fetch-tags: true
 
       - name: Check version matches code
+        if: github.event_name == 'workflow_dispatch'
         env:
           VERSION: ${{ inputs.version }}
         run: |
@@ -51,6 +55,7 @@ jobs:
           fi
 
       - name: Check tag does not exist
+        if: github.event_name == 'workflow_dispatch'
         env:
           VERSION: ${{ inputs.version }}
         run: |
@@ -288,4 +293,4 @@ jobs:
           --notes "$BODY"
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        VERSION: ${{ inputs.version }}
+        VERSION: ${{ inputs.version || github.ref_name }}

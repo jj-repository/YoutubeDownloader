@@ -1,0 +1,30 @@
+name: Auto Tag on Version Bump
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - constants.py
+
+jobs:
+  auto-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+      - name: Extract version
+        id: v
+        run: |
+          VERSION=$(grep -E '^APP_VERSION\s*=' constants.py | head -1 | sed "s/.*APP_VERSION\s*=\s*['\"]//;s/['\"].*//")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          git tag | grep -qx "v$VERSION" && echo "is_new=false" >> $GITHUB_OUTPUT || echo "is_new=true" >> $GITHUB_OUTPUT
+      - name: Create and push tag
+        if: steps.v.outputs.is_new == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "v${{ steps.v.outputs.version }}"
+          git push origin "v${{ steps.v.outputs.version }}"
