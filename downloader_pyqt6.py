@@ -1869,7 +1869,7 @@ class YouTubeDownloader(QMainWindow):
 
     def _load_auto_check_updates_setting(self):
         """Load auto-check updates setting from config."""
-        return self._config.get("auto_check_updates", True)
+        return self._config.get("auto_check_updates", False)
 
     def _save_config_key(self, key, value):
         """Update a single key in the config file (debounced to avoid GUI stall)."""
