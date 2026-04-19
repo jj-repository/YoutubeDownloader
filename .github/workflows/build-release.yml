@@ -294,3 +294,14 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         VERSION: ${{ inputs.version || github.ref_name }}
+
+    - name: Prepend download disclaimer to release notes
+      run: |
+        TAG="v${VERSION}"
+        DISCLAIMER=$'## 📥 Downloads\n\n**Just grab one file:**\n- **Windows** → `YTDownloader.exe`\n- **Linux** → `YTDownloader-Linux.tar.gz`\n\nThe `SHA256SUMS` files are optional checksums for verifying the download — you don\'t need them to use the app.\n\n---\n\n'
+        BODY=$(gh release view "$TAG" --json body -q .body)
+        printf '%s%s' "$DISCLAIMER" "$BODY" > /tmp/release_notes.md
+        gh release edit "$TAG" --notes-file /tmp/release_notes.md
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        VERSION: ${{ inputs.version || github.ref_name }}
