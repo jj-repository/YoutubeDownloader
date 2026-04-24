@@ -1,5 +1,5 @@
 yt-dlp>=2026.2.21,<2027.0.0
 PyQt6>=6.5.0,<7.0.0
-catboxpy>=0.1.0,<1.0.0
-dbus-python>=1.2.0; sys_platform == 'linux'
-pyperclip>=1.8.0,<2.0.0
+catboxpy>=0.1.1.1,<1.0.0
+dbus-python>=1.4.0; sys_platform == 'linux'
+pyperclip>=1.11.0,<2.0.0
