@@ -359,6 +359,36 @@ def _colored_btn(
 
 
 # ---------------------------------------------------------------------------
+#  Drag-and-drop page widget
+# ---------------------------------------------------------------------------
+
+
+class _UploaderPage(QWidget):
+    """Uploader tab page that accepts file drag-and-drop."""
+
+    files_dropped = pyqtSignal(list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        urls = event.mimeData().urls()
+        paths = [u.toLocalFile() for u in urls if u.isLocalFile() and u.toLocalFile()]
+        if paths:
+            self.files_dropped.emit(paths)
+            event.acceptProposedAction()
+
+
+# ---------------------------------------------------------------------------
 #  Main Window
 # ---------------------------------------------------------------------------
 
@@ -665,10 +695,11 @@ class YouTubeDownloader(QMainWindow):
         layout.addStretch()
         self._trimmer_page = page
 
-        page = QWidget()
+        page = _UploaderPage()
         layout = QVBoxLayout(page)
         self.setup_uploader_ui(layout)
         layout.addStretch()
+        page.files_dropped.connect(self._add_files_to_uploader_queue)
         self._uploader_page = page
 
     def _build_tabs(self):
@@ -1167,6 +1198,10 @@ class YouTubeDownloader(QMainWindow):
         desc = QLabel("Upload local video files to Catbox.moe streaming service.")
         desc.setStyleSheet("color: gray; font-size: 9pt;")
         layout.addWidget(desc)
+
+        drop_hint = QLabel("Tip: drag & drop files anywhere on this tab to add them to the queue.")
+        drop_hint.setStyleSheet("color: gray; font-size: 9pt; font-style: italic;")
+        layout.addWidget(drop_hint)
 
         layout.addWidget(self._hsep())
 
@@ -3291,21 +3326,27 @@ class YouTubeDownloader(QMainWindow):
         )
 
         if file_paths:
-            for file_path in file_paths:
-                file_size_mb = os.path.getsize(file_path) / BYTES_PER_MB
-                if file_size_mb > CATBOX_MAX_SIZE_MB:
-                    QMessageBox.warning(
-                        self,
-                        "File Too Large",
-                        f"Skipped: {os.path.basename(file_path)}\n"
-                        f"File size ({file_size_mb:.1f} MB) exceeds "
-                        f"200MB limit.",
-                    )
-                    continue
+            self._add_files_to_uploader_queue(file_paths)
 
-                if self.upload_mgr.add_to_queue(file_path):
-                    self._add_file_to_uploader_queue(file_path)
-                    logger.info(f"Added file to upload queue: {file_path}")
+    def _add_files_to_uploader_queue(self, file_paths):
+        """Validate and enqueue files (used by both browse and drag-drop)."""
+        for file_path in file_paths:
+            if not file_path or not os.path.isfile(file_path):
+                continue
+            file_size_mb = os.path.getsize(file_path) / BYTES_PER_MB
+            if file_size_mb > CATBOX_MAX_SIZE_MB:
+                QMessageBox.warning(
+                    self,
+                    "File Too Large",
+                    f"Skipped: {os.path.basename(file_path)}\n"
+                    f"File size ({file_size_mb:.1f} MB) exceeds "
+                    f"200MB limit.",
+                )
+                continue
+
+            if self.upload_mgr.add_to_queue(file_path):
+                self._add_file_to_uploader_queue(file_path)
+                logger.info(f"Added file to upload queue: {file_path}")
 
     def _add_file_to_uploader_queue(self, file_path):
         """Add a file to the upload queue with UI widget."""

@@ -1,6 +1,6 @@
 # Overview
 
-v5.17 — Downloads video/audio from YouTube and supported sites.
+v5.27 — Downloads video/audio from YouTube and supported sites.
 
 ## Features
 - Quality selection with file size preview

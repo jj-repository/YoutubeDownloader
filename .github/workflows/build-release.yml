@@ -143,7 +143,7 @@ jobs:
     - name: Build executable (Linux)
       if: runner.os == 'Linux'
       run: |
-        pyinstaller --onefile --name YTDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --add-data "icon.png:." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets downloader_pyqt6.py
+        pyinstaller --onefile --name YTDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --add-data "icon.png:." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets --hidden-import=requests --hidden-import=catboxpy --hidden-import=catboxpy.catbox downloader_pyqt6.py
 
     - name: Download and bundle ffmpeg (Windows)
       if: runner.os == 'Windows'
@@ -188,7 +188,7 @@ jobs:
     - name: Build executable (Windows)
       if: runner.os == 'Windows'
       run: |
-        pyinstaller --onefile --name YTDownloader --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets downloader_pyqt6.py
+        pyinstaller --onefile --name YTDownloader --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets --hidden-import=requests --hidden-import=catboxpy --hidden-import=catboxpy.catbox downloader_pyqt6.py
 
     - name: Validate build output (Linux)
       if: runner.os == 'Linux'
