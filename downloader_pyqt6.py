@@ -388,6 +388,43 @@ class _UploaderPage(QWidget):
             event.acceptProposedAction()
 
 
+class _FileDropLineEdit(QLineEdit):
+    """QLineEdit that emits file_dropped(path) when a local file is dropped on it."""
+
+    file_dropped = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    @staticmethod
+    def _has_local_file(event):
+        md = event.mimeData()
+        return md.hasUrls() and any(u.isLocalFile() for u in md.urls())
+
+    def dragEnterEvent(self, event):
+        if self._has_local_file(event):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if self._has_local_file(event):
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        for u in event.mimeData().urls():
+            if u.isLocalFile():
+                path = u.toLocalFile()
+                if path:
+                    self.file_dropped.emit(path)
+                    event.acceptProposedAction()
+                    return
+        super().dropEvent(event)
+
+
 # ---------------------------------------------------------------------------
 #  Main Window
 # ---------------------------------------------------------------------------
@@ -721,9 +758,10 @@ class YouTubeDownloader(QMainWindow):
         layout.addWidget(lbl)
 
         url_row = QHBoxLayout()
-        self.url_entry = QLineEdit()
-        self.url_entry.setPlaceholderText("Paste URL or browse a local file")
+        self.url_entry = _FileDropLineEdit()
+        self.url_entry.setPlaceholderText("Paste URL, drop a file, or browse")
         self.url_entry.textChanged.connect(self.on_url_change)
+        self.url_entry.file_dropped.connect(self._apply_local_file)
         url_row.addWidget(self.url_entry, stretch=1)
         self.browse_file_btn = QPushButton("Browse Local File")
         self.browse_file_btn.clicked.connect(self.browse_local_file)
@@ -3596,19 +3634,23 @@ class YouTubeDownloader(QMainWindow):
         )
 
         if filepath:
-            self.url_entry.clear()
-            self.url_entry.setText(filepath)
-            audio_extensions = {".mp3", ".aac", ".m4a", ".wav"}
-            if Path(filepath).suffix.lower() in audio_extensions:
-                self.audio_only_check.setChecked(True)
-                self.mode_label.setText(f"Mode: Local Audio | {Path(filepath).name}")
-            else:
-                self.audio_only_check.setChecked(False)
-                self.mode_label.setText(f"Mode: Local File | {Path(filepath).name}")
-            self.mode_label.setStyleSheet("color: green; font-size: 9pt;")
-            # Clear filename field for new file
-            self.filename_entry.clear()
-            logger.info(f"Local file selected: {filepath}")
+            self._apply_local_file(filepath)
+
+    def _apply_local_file(self, filepath: str):
+        """Set URL field to a local file path and update mode/audio state."""
+        self.url_entry.clear()
+        self.url_entry.setText(filepath)
+        audio_extensions = {".mp3", ".aac", ".m4a", ".wav"}
+        if Path(filepath).suffix.lower() in audio_extensions:
+            self.audio_only_check.setChecked(True)
+            self.mode_label.setText(f"Mode: Local Audio | {Path(filepath).name}")
+        else:
+            self.audio_only_check.setChecked(False)
+            self.mode_label.setText(f"Mode: Local File | {Path(filepath).name}")
+        self.mode_label.setStyleSheet("color: green; font-size: 9pt;")
+        # Clear filename field for new file
+        self.filename_entry.clear()
+        logger.info(f"Local file selected: {filepath}")
 
     # ===================================================================
     #  Download entry-point
