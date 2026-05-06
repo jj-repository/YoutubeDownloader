@@ -284,6 +284,12 @@ class TestSanitizeFilename:
     def test_unicode_preserved(self):
         assert "日本語" in sanitize_filename("日本語ビデオ.mp4")
 
+    def test_removes_windows_reserved_chars(self):
+        # `:` triggers NTFS Alternate Data Stream — silently empty file
+        result = sanitize_filename('Summarize: a fast CLI for "any" URL')
+        assert ":" not in result
+        assert '"' not in result
+
 
 class TestValidateVolume:
     """Test validate_volume from production code."""
