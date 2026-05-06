@@ -3655,6 +3655,9 @@ class YouTubeDownloader(QMainWindow):
         logger.info(f"Starting download for URL: {url}")
 
         with self.download_mgr.download_lock:
+            if self.download_mgr.is_downloading:
+                logger.warning("Download already in progress, ignoring concurrent request")
+                return
             self.download_mgr.is_downloading = True
             self.download_mgr.download_start_time = time.time()
             self.download_mgr.last_progress_time = time.time()

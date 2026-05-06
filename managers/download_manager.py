@@ -846,6 +846,10 @@ class DownloadManager(QObject):
                 return False
             source_file = merged
 
+        if not self.is_downloading:
+            logger.warning("Download cancelled during merge, skipping trim")
+            return False
+
         # Precise trim on local file
         # Data starts at ~v_start seconds; we want start_time..end_time
         ss_offset = start_time - v_start
