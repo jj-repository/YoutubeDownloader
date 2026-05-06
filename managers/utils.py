@@ -36,7 +36,7 @@ if sys.platform == "win32":
 # ===================================================================
 
 
-_SANITIZE_TABLE = str.maketrans("", "", "/\\\x00$`|;&<>(){}[]!*?~^\x7f:\"")
+_SANITIZE_TABLE = str.maketrans("", "", '/\\\x00$`|;&<>(){}[]!*?~^\x7f:"')
 
 
 def sanitize_filename(filename: str) -> str:
