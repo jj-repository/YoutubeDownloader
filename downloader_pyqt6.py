@@ -658,9 +658,6 @@ class YouTubeDownloader(QMainWindow):
 
         self._apply_theme()
 
-        # Restore persisted clipboard URLs
-        self._restore_clipboard_urls()
-
         # Clipboard polling timer (replaces tkinter root.after loop)
         self._clipboard_timer = QTimer(self)
         self._clipboard_timer.setInterval(CLIPBOARD_POLL_INTERVAL_MS)
@@ -694,6 +691,9 @@ class YouTubeDownloader(QMainWindow):
         self._download_timeout_timer = QTimer(self)
         self._download_timeout_timer.setInterval(TIMEOUT_CHECK_INTERVAL * 1000)
         self._download_timeout_timer.timeout.connect(self._check_download_timeout)
+
+        # Restore persisted clipboard URLs (must be after all timers are created)
+        self._restore_clipboard_urls()
 
         # Check for updates on startup if enabled
         if self._load_auto_check_updates_setting():
@@ -2058,17 +2058,17 @@ class YouTubeDownloader(QMainWindow):
     # ==================================================================
 
     def start_clipboard_monitoring(self):
-        """Start clipboard monitoring using QTimer polling."""
+        """Start clipboard monitoring using Qt dataChanged signal + QTimer fallback."""
         with self.clipboard_mgr.clipboard_lock:
             if self.clipboard_mgr.clipboard_monitoring:
                 return
             self.clipboard_mgr.clipboard_monitoring = True
-            logger.info("Clipboard monitoring started (QTimer polling)")
-            try:
-                content = QApplication.clipboard().text()
-                self.clipboard_mgr.clipboard_last_content = content.strip() if content else ""
-            except Exception:
-                self.clipboard_mgr.clipboard_last_content = ""
+            logger.info("Clipboard monitoring started (signal + timer fallback)")
+            self.clipboard_mgr.clipboard_last_content = ""
+        try:
+            QApplication.clipboard().dataChanged.connect(self._poll_clipboard)
+        except Exception:
+            pass
         self._clipboard_timer.start()
 
     def stop_clipboard_monitoring(self):
@@ -2078,10 +2078,14 @@ class YouTubeDownloader(QMainWindow):
                 return
             self.clipboard_mgr.clipboard_monitoring = False
             logger.info("Clipboard monitoring stopped")
+        try:
+            QApplication.clipboard().dataChanged.disconnect(self._poll_clipboard)
+        except TypeError:
+            pass
         self._clipboard_timer.stop()
 
     def _poll_clipboard(self):
-        """Poll clipboard for new YouTube URLs (called by QTimer on GUI thread)."""
+        """Check clipboard for new YouTube URLs (called by dataChanged signal or QTimer fallback)."""
         if not self.clipboard_mgr.clipboard_monitoring:
             return
 

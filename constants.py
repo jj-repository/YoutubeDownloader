@@ -17,7 +17,7 @@ SLIDER_LENGTH = 400
 PREVIEW_DEBOUNCE_MS = 500
 UI_INITIAL_DELAY_MS = 100
 AUTO_UPLOAD_DELAY_MS = 500
-CLIPBOARD_POLL_INTERVAL_MS = 500
+CLIPBOARD_POLL_INTERVAL_MS = 2000  # safety-net fallback; primary detection via dataChanged signal
 
 # Process and download timeouts (seconds)
 PROCESS_TERMINATE_TIMEOUT = 3
@@ -71,7 +71,7 @@ MAX_CLIPBOARD_URLS = 500
 CLIPBOARD_URL_LIST_HEIGHT = 150
 
 # Version and Update
-APP_VERSION = "5.30"
+APP_VERSION = "5.31"
 GITHUB_REPO = "jj-repository/YoutubeDownloader"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
