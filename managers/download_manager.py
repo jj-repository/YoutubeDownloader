@@ -77,6 +77,7 @@ class DownloadManager(QObject):
     sig_update_status = pyqtSignal(str, str)
     sig_reset_buttons = pyqtSignal()
     sig_show_messagebox = pyqtSignal(str, str, str)
+    # Must be connected from the main (GUI) thread — emits a callable to run there.
     sig_run_on_gui = pyqtSignal(object)
     sig_enable_upload = pyqtSignal(str)
 
@@ -578,7 +579,7 @@ class DownloadManager(QObject):
                 raise RuntimeError(f"Rejected non-HTTPS stream URL: {u[:80]}")
         return (urls[0], urls[1]) if len(urls) >= 2 else (urls[0], None)
 
-    _HTTP_RANGE_MAX_SIZE = 512 * 1024  # 512KB — enough for SIDX/moof headers
+    _HTTP_RANGE_MAX_SIZE = 4 * 1024 * 1024  # 4MB — enough for SIDX on 10-hour videos
 
     def _http_range_read(self, url: str, start: int, end: int) -> bytes:
         """Download a byte range from a URL.
@@ -634,7 +635,8 @@ class DownloadManager(QObject):
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             raise RuntimeError(
                 f"Network error downloading {label}: {e}\n\n"
-                f"This can happen with very long videos. Try again or use a shorter trim range."
+                "For very long videos (2h+) the index header may be large — "
+                "Try again or use a shorter trim range."
             ) from e
 
     def _download_stream_segment_inner(
@@ -658,8 +660,9 @@ class DownloadManager(QObject):
         target_start = max(0, start_time - pad_before)
         target_end = min(dur, end_time + pad_after)
 
-        # Download header (enough for init + SIDX/Cues)
-        header_size = min(clen, 512 * 1024)  # 512KB
+        # Download header (enough for init + SIDX/Cues).
+        # 4 MB covers SIDX boxes on 10-hour videos at typical segment counts.
+        header_size = min(clen, self._HTTP_RANGE_MAX_SIZE)
         self.update_status(f"Fetching {label} index...", "blue")
         self.last_progress_time = time.time()
         header_data = self._http_range_read(stream_url, 0, header_size - 1)

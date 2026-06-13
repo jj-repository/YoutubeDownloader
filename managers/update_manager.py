@@ -34,6 +34,8 @@ from managers.utils import _subprocess_kwargs
 logger = logging.getLogger(__name__)
 
 _TAG_RE = re.compile(r"^v?\d+\.\d+(\.\d+)?$")
+_ASSET_WIN = "YTDownloader.exe"
+_ASSET_LINUX = "YTDownloader-Linux.tar.gz"
 
 
 class UpdateManager(QObject):
@@ -552,7 +554,7 @@ class UpdateManager(QObject):
         # Verify SHA-256 (mandatory — abort if checksum unavailable)
         expected_hash = None
         if release_data:
-            expected_hash = self._get_expected_sha256(release_data, "YTDownloader.exe", headers)
+            expected_hash = self._get_expected_sha256(release_data, _ASSET_WIN, headers)
         if not expected_hash:
             new_exe.unlink(missing_ok=True)
             raise RuntimeError(
@@ -563,11 +565,11 @@ class UpdateManager(QObject):
         if actual_hash != expected_hash:
             new_exe.unlink(missing_ok=True)
             raise RuntimeError(
-                f"SHA-256 verification failed for YTDownloader.exe!\n"
+                f"SHA-256 verification failed for {_ASSET_WIN}!\n"
                 f"Expected: {expected_hash[:16]}...\n"
                 f"Got: {actual_hash[:16]}..."
             )
-        logger.info("SHA-256 verification passed for YTDownloader.exe")
+        logger.info(f"SHA-256 verification passed for {_ASSET_WIN}")
 
         # Rename dance: running.exe -> .old, .new -> running.exe
         try:
@@ -769,9 +771,9 @@ class UpdateManager(QObject):
             str or None: The browser_download_url for the matching asset
         """
         if sys.platform == "win32":
-            target = "YTDownloader.exe"
+            target = _ASSET_WIN
         else:
-            target = "YTDownloader-Linux.tar.gz"
+            target = _ASSET_LINUX
 
         for asset in release_data.get("assets", []):
             if asset.get("name") == target:

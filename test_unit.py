@@ -3098,7 +3098,10 @@ class TestEncodeCommands:
         assert "2" in captured_cmds[1][captured_cmds[1].index("-pass") + 1]
 
     def test_single_pass_trim_args(self):
-        """Trim args (-ss, -to) should be included when start/end times are provided."""
+        """Trim args (-ss, -t) should be included when start/end times are provided.
+
+        -ss appears before -i (input-side seeking) and -t carries the duration.
+        """
         from unittest.mock import patch
 
         enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder="h264_nvenc")
@@ -3121,14 +3124,20 @@ class TestEncodeCommands:
             )
 
         assert "-ss" in captured_cmd
-        assert "-to" in captured_cmd
+        assert "-t" in captured_cmd
         ss_idx = captured_cmd.index("-ss")
         assert captured_cmd[ss_idx + 1] == str(10.0)
-        to_idx = captured_cmd.index("-to")
-        assert captured_cmd[to_idx + 1] == str(70.0)
+        # -ss must appear before -i (input-side seeking)
+        i_idx = captured_cmd.index("-i")
+        assert ss_idx < i_idx
+        t_idx = captured_cmd.index("-t")
+        assert captured_cmd[t_idx + 1] == str(70.0 - 10.0)
 
     def test_two_pass_trim_args(self):
-        """encode_two_pass should include -ss/-to in both passes when provided."""
+        """encode_two_pass should include -ss/-t in both passes when provided.
+
+        -ss before -i (input-side seeking), -t carries the duration.
+        """
         from unittest.mock import patch
 
         enc = EncodingService(ffmpeg_path="ffmpeg", hw_encoder=None)
@@ -3152,7 +3161,12 @@ class TestEncodeCommands:
 
         for cmd in captured_cmds:
             assert "-ss" in cmd
-            assert "-to" in cmd
+            assert "-t" in cmd
+            ss_idx = cmd.index("-ss")
+            i_idx = cmd.index("-i")
+            assert ss_idx < i_idx  # input-side seek
+            t_idx = cmd.index("-t")
+            assert cmd[t_idx + 1] == str(35.0 - 5.0)
 
     def test_single_pass_no_trim_without_times(self):
         """Without start/end times, -ss and -to should not appear."""
@@ -3721,6 +3735,10 @@ class TestApplyUpdateSourceRollback:
         assert (modules_dir / "constants.py").read_bytes() == original_content
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="symlink creation requires SeCreateSymbolicLinkPrivilege on Windows",
+)
 class TestFrozenLinuxSecurityGuards:
     """Test symlink and tar traversal defenses in _apply_update_frozen_linux."""
 

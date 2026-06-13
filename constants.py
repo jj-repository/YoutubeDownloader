@@ -39,7 +39,7 @@ RETRY_DELAY = 2
 # Video/Audio encoding settings
 VIDEO_CRF = 23
 AUDIO_BITRATE = "128k"
-VOLUME_CHANGE_THRESHOLD = 0.15  # Skip re-encoding if volume within ±0.15 of 1.0
+VOLUME_CHANGE_THRESHOLD = 0.02  # Skip re-encoding if volume within ±0.02 of 1.0
 BUFFER_SIZE = "128K"
 CHUNK_SIZE = "10M"
 CONCURRENT_FRAGMENTS = "8"

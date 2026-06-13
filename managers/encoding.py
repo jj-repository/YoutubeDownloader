@@ -273,9 +273,11 @@ class EncodingService:
         input_args = [self.ffmpeg_path, "-y"]
         if self.hw_encoder == "h264_vaapi" and self.vaapi_device:
             input_args.extend(["-vaapi_device", self.vaapi_device])
+        if start_time is not None and end_time is not None:
+            input_args.extend(["-ss", str(start_time)])  # input-side seek: fast keyframe jump
         input_args.extend(["-i", input_file])
         if start_time is not None and end_time is not None:
-            input_args.extend(["-ss", str(start_time), "-to", str(end_time)])
+            input_args.extend(["-t", str(end_time - start_time)])
 
         vf_args = self.build_vf_args(scale_height)
         enc_args = self.get_video_encoder_args(mode="bitrate", target_bitrate=target_bitrate)
@@ -309,9 +311,12 @@ class EncodingService:
             tempfile.gettempdir(), f"ytdl_2pass_{os.getpid()}_{int(time.time())}"
         )
 
-        input_args = [self.ffmpeg_path, "-y", "-i", input_file]
+        input_args = [self.ffmpeg_path, "-y"]
         if start_time is not None and end_time is not None:
-            input_args.extend(["-ss", str(start_time), "-to", str(end_time)])
+            input_args.extend(["-ss", str(start_time)])  # input-side seek: fast keyframe jump
+        input_args.extend(["-i", input_file])
+        if start_time is not None and end_time is not None:
+            input_args.extend(["-t", str(end_time - start_time)])
 
         vf_args = ["-vf", f"scale=-2:{scale_height}"] if scale_height else []
         maxrate = int(target_bitrate * 1.5)
