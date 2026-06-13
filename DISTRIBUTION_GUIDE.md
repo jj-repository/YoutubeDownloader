@@ -92,4 +92,4 @@ Your friend doesn't need to know Python, set up virtual environments, install ff
 
 ## For Windows Users
 
-Send them **`YTDownloader.exe`** instead. Just download and run it directly. All dependencies are bundled.
+Send them **`Downloader.exe`** instead. Just download and run it directly. All dependencies are bundled.

@@ -445,8 +445,8 @@ class YouTubeDownloader(QMainWindow):
     # ------------------------------------------------------------------
     def __init__(self):
         super().__init__()
-        logger.info("Initializing YoutubeDownloader (PyQt6)")
-        self.setWindowTitle("YoutubeDownloader")
+        logger.info("Initializing Downloader (PyQt6)")
+        self.setWindowTitle("Downloader")
 
         if sys.platform == "win32":
             self.resize(650, 710)

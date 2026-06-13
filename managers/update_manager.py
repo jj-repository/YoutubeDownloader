@@ -34,8 +34,8 @@ from managers.utils import _subprocess_kwargs
 logger = logging.getLogger(__name__)
 
 _TAG_RE = re.compile(r"^v?\d+\.\d+(\.\d+)?$")
-_ASSET_WIN = "YTDownloader.exe"
-_ASSET_LINUX = "YTDownloader-Linux.tar.gz"
+_ASSET_WIN = "Downloader.exe"
+_ASSET_LINUX = "Downloader-Linux.tar.gz"
 
 
 class UpdateManager(QObject):
@@ -682,7 +682,7 @@ class UpdateManager(QObject):
         expected_hash = None
         if release_data:
             expected_hash = self._get_expected_sha256(
-                release_data, "YTDownloader-Linux.tar.gz", headers
+                release_data, "Downloader-Linux.tar.gz", headers
             )
         if not expected_hash:
             os.unlink(tar_tmp_path)
@@ -694,7 +694,7 @@ class UpdateManager(QObject):
         if actual_hash != expected_hash:
             os.unlink(tar_tmp_path)
             raise RuntimeError(
-                f"SHA-256 verification failed for YTDownloader-Linux.tar.gz!\n"
+                f"SHA-256 verification failed for Downloader-Linux.tar.gz!\n"
                 f"Expected: {expected_hash[:16]}...\n"
                 f"Got: {actual_hash[:16]}..."
             )
@@ -713,12 +713,12 @@ class UpdateManager(QObject):
                         continue
                     if member.issym() or member.islnk():
                         continue
-                    if member.isfile() and "YTDownloader" in member.name:
+                    if member.isfile() and "Downloader" in member.name:
                         binary_member = member
                         break
 
                 if not binary_member:
-                    raise RuntimeError("Could not find YTDownloader binary in archive.")
+                    raise RuntimeError("Could not find Downloader binary in archive.")
 
                 # Extract binary via streaming (avoids loading entire binary into memory)
                 f = tar.extractfile(binary_member)

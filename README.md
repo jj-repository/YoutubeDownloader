@@ -69,8 +69,8 @@ A professional YouTube video downloader with advanced trimming capabilities, cli
 
 **📦 Zero installation required!** Download the pre-built executable for your platform:
 
-- **Windows**: Download `YTDownloader.exe` and run it directly
-- **Linux**: Download `YoutubeDownloader-Linux.tar.gz`, extract, and run `./YoutubeDownloader`
+- **Windows**: Download `Downloader.exe` and run it directly
+- **Linux**: Download `Downloader-Linux.tar.gz`, extract, and run `./Downloader`
 
 All dependencies (ffmpeg, ffprobe, yt-dlp) are bundled inside the executable. Just download and run - no additional software needed!
 

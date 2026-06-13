@@ -143,7 +143,7 @@ jobs:
     - name: Build executable (Linux)
       if: runner.os == 'Linux'
       run: |
-        pyinstaller --onefile --name YTDownloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --add-data "icon.png:." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets --hidden-import=requests --hidden-import=catboxpy --hidden-import=catboxpy.catbox downloader_pyqt6.py
+        pyinstaller --onefile --name Downloader --windowed --add-binary "ffmpeg:." --add-binary "ffprobe:." --add-binary "yt-dlp:." --add-data "takodachi.webp:." --add-data "icon.png:." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets --hidden-import=requests --hidden-import=catboxpy --hidden-import=catboxpy.catbox downloader_pyqt6.py
 
     - name: Download and bundle ffmpeg (Windows)
       if: runner.os == 'Windows'
@@ -188,22 +188,22 @@ jobs:
     - name: Build executable (Windows)
       if: runner.os == 'Windows'
       run: |
-        pyinstaller --onefile --name YTDownloader --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets --hidden-import=requests --hidden-import=catboxpy --hidden-import=catboxpy.catbox downloader_pyqt6.py
+        pyinstaller --onefile --name Downloader --windowed --icon=icon.ico --add-binary "ffmpeg.exe;." --add-binary "ffprobe.exe;." --add-binary "yt-dlp.exe;." --add-data "takodachi.webp;." --add-data "icon.png;." --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.QtWidgets --hidden-import=requests --hidden-import=catboxpy --hidden-import=catboxpy.catbox downloader_pyqt6.py
 
     - name: Validate build output (Linux)
       if: runner.os == 'Linux'
       run: |
-        test -f dist/YTDownloader || { echo "::error::Linux executable not created"; exit 1; }
-        test -x dist/YTDownloader || { echo "::error::Linux executable not executable"; exit 1; }
-        file dist/YTDownloader | grep -q "ELF" || { echo "::error::Invalid executable format"; exit 1; }
-        echo "Linux build OK: $(du -h dist/YTDownloader | cut -f1)"
+        test -f dist/Downloader || { echo "::error::Linux executable not created"; exit 1; }
+        test -x dist/Downloader || { echo "::error::Linux executable not executable"; exit 1; }
+        file dist/Downloader | grep -q "ELF" || { echo "::error::Invalid executable format"; exit 1; }
+        echo "Linux build OK: $(du -h dist/Downloader | cut -f1)"
 
     - name: Validate build output (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
-        if (-not (Test-Path dist/YTDownloader.exe)) { throw "Windows executable not created" }
-        $size = (Get-Item dist/YTDownloader.exe).Length
+        if (-not (Test-Path dist/Downloader.exe)) { throw "Windows executable not created" }
+        $size = (Get-Item dist/Downloader.exe).Length
         if ($size -lt 1000000) { throw "Windows executable suspiciously small ($size bytes)" }
         Write-Host "Windows build OK: $([math]::Round($size/1MB, 1)) MB"
 
@@ -211,16 +211,16 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         mkdir -p release
-        cp dist/YTDownloader release/
-        chmod +x release/YTDownloader
-        tar -czf YTDownloader-Linux.tar.gz -C release .
+        cp dist/Downloader release/
+        chmod +x release/Downloader
+        tar -czf Downloader-Linux.tar.gz -C release .
 
     - name: Upload Linux artifact
       if: runner.os == 'Linux'
       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
       with:
         name: linux-build
-        path: YTDownloader-Linux.tar.gz
+        path: Downloader-Linux.tar.gz
         retention-days: 1
 
     - name: Upload Windows artifact
@@ -228,7 +228,7 @@ jobs:
       uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
       with:
         name: windows-build
-        path: dist/YTDownloader.exe
+        path: dist/Downloader.exe
         retention-days: 1
 
   create-release:
@@ -248,16 +248,16 @@ jobs:
 
     - name: Verify artifacts exist
       run: |
-        test -s linux-build/YTDownloader-Linux.tar.gz || { echo "::error::Linux artifact missing or empty"; exit 1; }
-        test -s windows-build/YTDownloader.exe || { echo "::error::Windows artifact missing or empty"; exit 1; }
+        test -s linux-build/Downloader-Linux.tar.gz || { echo "::error::Linux artifact missing or empty"; exit 1; }
+        test -s windows-build/Downloader.exe || { echo "::error::Windows artifact missing or empty"; exit 1; }
         echo "Artifacts OK:"
-        ls -lh linux-build/YTDownloader-Linux.tar.gz windows-build/YTDownloader.exe
+        ls -lh linux-build/Downloader-Linux.tar.gz windows-build/Downloader.exe
 
     - name: Generate SHA256SUMS
       run: |
         # Binary artifacts (cd into each dir so sha256sum outputs bare filenames)
-        (cd linux-build && sha256sum YTDownloader-Linux.tar.gz) > SHA256SUMS
-        (cd windows-build && sha256sum YTDownloader.exe) >> SHA256SUMS
+        (cd linux-build && sha256sum Downloader-Linux.tar.gz) > SHA256SUMS
+        (cd windows-build && sha256sum Downloader.exe) >> SHA256SUMS
         # Source files (for source-mode self-update verification)
         sha256sum downloader_pyqt6.py constants.py managers/*.py >> SHA256SUMS
 
@@ -270,24 +270,24 @@ jobs:
       run: |
         VERSION="${VERSION#v}"
         BODY="$(cat <<NOTES
-        ## YTDownloader v${VERSION}
+        ## Downloader v${VERSION}
 
         ### Downloads
         | Platform | File |
         |----------|------|
-        | Windows | \`YTDownloader.exe\` |
-        | Linux | \`YTDownloader-Linux.tar.gz\` |
+        | Windows | \`Downloader.exe\` |
+        | Linux | \`Downloader-Linux.tar.gz\` |
 
         ### Setup
-        - **Windows**: Download \`YTDownloader.exe\` and run it directly
-        - **Linux**: Extract and run \`./YTDownloader\`
+        - **Windows**: Download \`Downloader.exe\` and run it directly
+        - **Linux**: Extract and run \`./Downloader\`
 
         See [README](https://github.com/jj-repository/YoutubeDownloader#readme) for full documentation.
         NOTES
         )"
         gh release create "v${VERSION}" \
-          linux-build/YTDownloader-Linux.tar.gz \
-          windows-build/YTDownloader.exe \
+          linux-build/Downloader-Linux.tar.gz \
+          windows-build/Downloader.exe \
           SHA256SUMS \
           SHA256SUMS.bundle \
           --title "v${VERSION}" \
@@ -300,7 +300,7 @@ jobs:
       run: |
         VERSION="${VERSION#v}"
         TAG="v${VERSION}"
-        DISCLAIMER=$'## 📥 Downloads\n\n**Just grab one file:**\n- **Windows** → `YTDownloader.exe`\n- **Linux** → `YTDownloader-Linux.tar.gz`\n\nThe `SHA256SUMS` files are optional checksums for verifying the download — you don\'t need them to use the app.\n\n---\n\n'
+        DISCLAIMER=$'## 📥 Downloads\n\n**Just grab one file:**\n- **Windows** → `Downloader.exe`\n- **Linux** → `Downloader-Linux.tar.gz`\n\nThe `SHA256SUMS` files are optional checksums for verifying the download — you don\'t need them to use the app.\n\n---\n\n'
         BODY=$(gh release view "$TAG" --json body -q .body)
         printf '%s%s' "$DISCLAIMER" "$BODY" > /tmp/release_notes.md
         gh release edit "$TAG" --notes-file /tmp/release_notes.md

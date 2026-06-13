@@ -3759,7 +3759,7 @@ class TestFrozenLinuxSecurityGuards:
 
         real_file = tmp_path / "real_binary"
         real_file.write_bytes(b"binary")
-        symlink = tmp_path / "YTDownloader"
+        symlink = tmp_path / "Downloader"
         symlink.symlink_to(real_file)
 
         headers = {"User-Agent": "test"}
@@ -3776,7 +3776,7 @@ class TestFrozenLinuxSecurityGuards:
         binary_content = bytes(i % 251 * (i + 7) % 256 for i in range(8192))
         tar_buffer = io.BytesIO()
         with tarfile.open(fileobj=tar_buffer, mode="w:gz") as tar:
-            info = tarfile.TarInfo(name="YTDownloader")
+            info = tarfile.TarInfo(name="Downloader")
             info.size = len(binary_content)
             tar.addfile(info, io.BytesIO(binary_content))
         tar_bytes = tar_buffer.getvalue()
@@ -3818,13 +3818,13 @@ class TestFrozenLinuxSecurityGuards:
             evil.size = 4
             tar.addfile(evil, io.BytesIO(b"evil"))
             # Legit member
-            good = tarfile.TarInfo(name="YTDownloader")
+            good = tarfile.TarInfo(name="Downloader")
             good.size = len(binary_content)
             tar.addfile(good, io.BytesIO(binary_content))
         tar_bytes = tar_buffer.getvalue()
         real_sha = hashlib.sha256(tar_bytes).hexdigest()
 
-        exe_path = tmp_path / "YTDownloader"
+        exe_path = tmp_path / "Downloader"
         exe_path.write_bytes(b"old")
 
         dl_resp = MagicMock()
@@ -4155,12 +4155,12 @@ class TestGetUpdateAssetUrl:
         release = {
             "assets": [
                 {
-                    "name": "YTDownloader.exe",
-                    "browser_download_url": "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader.exe",
+                    "name": "Downloader.exe",
+                    "browser_download_url": "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/Downloader.exe",
                 },
                 {
-                    "name": "YTDownloader-Linux.tar.gz",
-                    "browser_download_url": "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader-Linux.tar.gz",
+                    "name": "Downloader-Linux.tar.gz",
+                    "browser_download_url": "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/Downloader-Linux.tar.gz",
                 },
             ]
         }
@@ -4169,7 +4169,7 @@ class TestGetUpdateAssetUrl:
             result = update_mgr._get_update_asset_url(release)
         assert (
             result
-            == "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader.exe"
+            == "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/Downloader.exe"
         )
 
     def test_finds_linux_asset(self, update_mgr):
@@ -4178,12 +4178,12 @@ class TestGetUpdateAssetUrl:
         release = {
             "assets": [
                 {
-                    "name": "YTDownloader.exe",
-                    "browser_download_url": "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader.exe",
+                    "name": "Downloader.exe",
+                    "browser_download_url": "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/Downloader.exe",
                 },
                 {
-                    "name": "YTDownloader-Linux.tar.gz",
-                    "browser_download_url": "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader-Linux.tar.gz",
+                    "name": "Downloader-Linux.tar.gz",
+                    "browser_download_url": "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/Downloader-Linux.tar.gz",
                 },
             ]
         }
@@ -4192,7 +4192,7 @@ class TestGetUpdateAssetUrl:
             result = update_mgr._get_update_asset_url(release)
         assert (
             result
-            == "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader-Linux.tar.gz"
+            == "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/Downloader-Linux.tar.gz"
         )
 
     def test_missing_asset_returns_none(self, update_mgr):
@@ -4232,7 +4232,7 @@ class TestIsOnedirFrozen:
         with patch("managers.update_manager.sys") as mock_sys:
             mock_sys.frozen = True
             mock_sys._MEIPASS = "/tmp/random_temp_dir"
-            mock_sys.executable = str(tmp_path / "YTDownloader")
+            mock_sys.executable = str(tmp_path / "Downloader")
             result = update_mgr._is_onedir_frozen()
         assert result is False
 
@@ -4244,7 +4244,7 @@ class TestIsOnedirFrozen:
         with patch("managers.update_manager.sys") as mock_sys:
             mock_sys.frozen = True
             mock_sys._MEIPASS = app_dir
-            mock_sys.executable = str(tmp_path / "myapp" / "YTDownloader")
+            mock_sys.executable = str(tmp_path / "myapp" / "Downloader")
             result = update_mgr._is_onedir_frozen()
         assert result is True
 
@@ -4460,7 +4460,7 @@ class TestUpdateManagerTagValidation:
     def test_valid_download_url(self):
         from managers.update_manager import UpdateManager
 
-        url = "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/YTDownloader.exe"
+        url = "https://github.com/jj-repository/YoutubeDownloader/releases/download/v5.19/Downloader.exe"
         assert UpdateManager._validate_download_url(url) is True
 
     def test_invalid_download_url(self):
@@ -4664,7 +4664,7 @@ class TestGetUpdateAssetUrlRejectsExternalUrl:
         release = {
             "assets": [
                 {
-                    "name": "YTDownloader.exe",
+                    "name": "Downloader.exe",
                     "browser_download_url": "https://evil.com/malware.exe",
                 },
             ]
@@ -4833,7 +4833,7 @@ class TestApplyUpdateFrozenWindows:
         ):
             with pytest.raises(RuntimeError, match="SHA-256 verification unavailable"):
                 update_mgr._apply_update_frozen_windows(
-                    "https://github.com/test/test/releases/download/v1/YTDownloader.exe",
+                    "https://github.com/test/test/releases/download/v1/Downloader.exe",
                     {},
                     exe_path,
                     release_data={"assets": []},
@@ -4859,7 +4859,7 @@ class TestApplyUpdateFrozenWindows:
         ):
             with pytest.raises(RuntimeError, match="too small"):
                 update_mgr._apply_update_frozen_windows(
-                    "https://github.com/test/test/releases/download/v1/YTDownloader.exe",
+                    "https://github.com/test/test/releases/download/v1/Downloader.exe",
                     {},
                     exe_path,
                 )
@@ -4887,7 +4887,7 @@ class TestApplyUpdateFrozenWindows:
         ):
             with pytest.raises(RuntimeError, match="SHA-256 verification failed"):
                 update_mgr._apply_update_frozen_windows(
-                    "https://github.com/test/test/releases/download/v1/YTDownloader.exe",
+                    "https://github.com/test/test/releases/download/v1/Downloader.exe",
                     {},
                     exe_path,
                     release_data={"assets": []},
@@ -6216,7 +6216,7 @@ class TestApplyUpdateFrozenWindowsHappyPath:
             patch.object(type(update_mgr), "sig_update_status", create=True),
         ):
             update_mgr._apply_update_frozen_windows(
-                "https://github.com/test/test/releases/download/v1/YTDownloader.exe",
+                "https://github.com/test/test/releases/download/v1/Downloader.exe",
                 {},
                 exe_path,
                 release_data={"assets": []},
@@ -6269,7 +6269,7 @@ class TestApplyUpdateFrozenWindowsHappyPath:
             patch("managers.update_manager.os.getpid", return_value=99999),
         ):
             update_mgr._apply_update_frozen_windows(
-                "https://github.com/test/test/releases/download/v1/YTDownloader.exe",
+                "https://github.com/test/test/releases/download/v1/Downloader.exe",
                 {},
                 exe_path,
                 release_data={"assets": []},

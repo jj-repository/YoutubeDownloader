@@ -1,4 +1,4 @@
-"""YoutubeDownloader Constants Module
+"""Downloader Constants Module
 
 Contains all application constants for configuration, timeouts, validation limits,
 and UI settings.
@@ -71,7 +71,7 @@ MAX_CLIPBOARD_URLS = 500
 CLIPBOARD_URL_LIST_HEIGHT = 150
 
 # Version and Update
-APP_VERSION = "5.32"
+APP_VERSION = "5.33"
 GITHUB_REPO = "jj-repository/YoutubeDownloader"
 GITHUB_RELEASES_URL = f"https://github.com/{GITHUB_REPO}/releases"
 GITHUB_API_LATEST = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -79,16 +79,15 @@ GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}"
 
 # File paths for persistence
 if sys.platform == "win32":
-    APP_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "YoutubeDownloader"
+    APP_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Downloader"
 else:
     APP_DATA_DIR = (
-        Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
-        / "youtubedownloader"
+        Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))) / "downloader"
     )
 UPLOAD_HISTORY_FILE = APP_DATA_DIR / "upload_history.txt"
 CLIPBOARD_URLS_FILE = APP_DATA_DIR / "clipboard_urls.json"
 CONFIG_FILE = APP_DATA_DIR / "config.json"
-LOG_FILE = APP_DATA_DIR / "youtubedownloader.log"
+LOG_FILE = APP_DATA_DIR / "downloader.log"
 
 # Theme colors
 THEMES = {
