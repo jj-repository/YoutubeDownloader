@@ -689,13 +689,18 @@ class StreamManager:
 
         if _is_bsto(season_url):
             ep_pat = re.compile(r'href="(/serie/[^/]+/\d+/\d+-[^"]+)"')
-            ep_key = lambda u: int(re.search(r"/(\d+)-[^/]+/?$", u).group(1))
+
+            def ep_key(u: str) -> int:
+                return int(re.search(r"/(\d+)-[^/]+/?$", u).group(1))
+
         else:
             ep_pat = re.compile(
                 r'href="(/(?:anime|serie)/stream/[^/]+/'
                 r'(?:staffel-\d+/episode-\d+|filme/film-\d+))"'
             )
-            ep_key = lambda u: int(re.search(r"\d+$", u).group())
+
+            def ep_key(u: str) -> int:  # type: ignore[no-redef]
+                return int(re.search(r"\d+$", u).group())
 
         seen: set[str] = set()
         episodes: list[str] = []
@@ -790,8 +795,8 @@ class StreamManager:
 
         lang_key = {"German": "1", "English": "2", "German Sub": "3"}.get(language, "1")
 
-        # Fetch provider links
-        links_resp = _get(
+        # Fetch provider links — GET result unused; POST is done below via urllib
+        _get(
             f"{base}/request/links",
             {**headers_ajax, "Content-Type": "application/x-www-form-urlencoded"},
         )
@@ -1023,8 +1028,8 @@ class StreamManager:
                 universal_newlines=True,
                 bufsize=1,
             )
-        except FileNotFoundError:
-            raise RuntimeError("ffmpeg not found in PATH")
+        except FileNotFoundError as e:
+            raise RuntimeError("ffmpeg not found in PATH") from e
 
         tail: list[str] = []
         for line in proc.stdout:

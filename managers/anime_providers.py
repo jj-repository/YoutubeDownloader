@@ -13,8 +13,6 @@ import re
 import time
 import urllib.parse
 import urllib.request
-from pathlib import Path
-from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 

@@ -23,6 +23,7 @@ ignore = [
     "S108",  # hardcoded temp file — tempfile.mkdtemp/gettempdir is intentional
     "S110",  # try-except-pass — used for best-effort cleanup
     "S310",  # audit URL open — all URLs are validated/hardcoded
+    "S311",  # non-crypto random — used for UI simulation (mouse movement), not security
     "S603",  # subprocess call with shell=False — intentional
     "S607",  # partial executable path — yt-dlp/ffmpeg resolved at startup
 ]

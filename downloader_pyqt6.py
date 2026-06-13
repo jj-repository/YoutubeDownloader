@@ -83,7 +83,6 @@ from managers.clipboard_manager import ClipboardManager
 from managers.download_manager import PROGRESS_REGEX, DownloadManager
 from managers.encoding import EncodingService
 from managers.stream_manager import (
-    SITE_CATEGORIES,
     StreamManager,
     get_site_category,
     is_stream_episode_url,
@@ -97,7 +96,6 @@ from managers.trimming_manager import TrimmingManager
 from managers.update_manager import UpdateManager
 from managers.upload_manager import UploadManager
 from managers.utils import _subprocess_kwargs
-
 
 # Try to import dbus for KDE Klipper integration (Linux only)
 DBUS_AVAILABLE = False
@@ -3032,7 +3030,7 @@ class YouTubeDownloader(QMainWindow):
                     return True
 
                 # ffmpeg returned non-zero — retry if attempts remain
-                last_exc = RuntimeError(f"ffmpeg exited with non-zero status")
+                last_exc = RuntimeError("ffmpeg exited with non-zero status")
 
             except Exception as e:
                 last_exc = e
