@@ -82,10 +82,22 @@ from managers import utils
 from managers.clipboard_manager import ClipboardManager
 from managers.download_manager import PROGRESS_REGEX, DownloadManager
 from managers.encoding import EncodingService
+from managers.stream_manager import (
+    SITE_CATEGORIES,
+    StreamManager,
+    get_site_category,
+    is_stream_episode_url,
+    is_stream_season_url,
+    parse_trim_seconds,
+    stream_episode_num,
+    stream_season_num,
+    stream_series_name,
+)
 from managers.trimming_manager import TrimmingManager
 from managers.update_manager import UpdateManager
 from managers.upload_manager import UploadManager
 from managers.utils import _subprocess_kwargs
+
 
 # Try to import dbus for KDE Klipper integration (Linux only)
 DBUS_AVAILABLE = False
@@ -568,6 +580,8 @@ class YouTubeDownloader(QMainWindow):
         self.clipboard_mgr.sig_show_messagebox.connect(self._do_show_messagebox)
         self.clipboard_mgr.sig_run_on_gui.connect(self._do_run_on_gui)
 
+        self.stream_mgr = StreamManager()
+
         self.download_mgr = DownloadManager(
             ytdlp_path=self.ytdlp_path,
             ffmpeg_path=self.ffmpeg_path,
@@ -782,7 +796,7 @@ class YouTubeDownloader(QMainWindow):
         self.quality_combo = QComboBox()
         self.quality_combo.setEditable(False)
         self.quality_combo.addItems(
-            ["1440", "1080", "720", "480", "360", "240", "none (Audio only)"]
+            ["2160", "1440", "1080", "720", "480", "360", "240", "none (Audio only)"]
         )
         self.quality_combo.setCurrentText("480")
         self.quality_combo.currentIndexChanged.connect(self.on_quality_change)
@@ -1104,7 +1118,7 @@ class YouTubeDownloader(QMainWindow):
         self.clipboard_quality_combo = QComboBox()
         self.clipboard_quality_combo.setEditable(False)
         self.clipboard_quality_combo.addItems(
-            ["1440", "1080", "720", "480", "360", "240", "none (Audio only)"]
+            ["2160", "1440", "1080", "720", "480", "360", "240", "none (Audio only)"]
         )
         self.clipboard_quality_combo.setCurrentText("1080")
         settings_row.addWidget(self.clipboard_quality_combo)
@@ -1122,7 +1136,7 @@ class YouTubeDownloader(QMainWindow):
         pl_row = QHBoxLayout()
         pl_row.setContentsMargins(20, 0, 0, 0)
         self.clipboard_full_playlist_check = QCheckBox(
-            "Full Playlist Download (download all videos when given a playlist link)"
+            "Full Playlist Download (download all videos when given a playlist link)  (YT Only)"
         )
         pl_row.addWidget(self.clipboard_full_playlist_check)
         pl_row.addStretch()
@@ -1134,8 +1148,90 @@ class YouTubeDownloader(QMainWindow):
         self.clipboard_audio_only_check = QCheckBox("Audio only, no video")
         self.clipboard_audio_only_check.stateChanged.connect(self._on_clipboard_audio_only_toggle)
         audio_row.addWidget(self.clipboard_audio_only_check)
+        audio_row.addSpacing(20)
+        audio_row.addWidget(QLabel("Volume:"))
+        self.clipboard_volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.clipboard_volume_slider.setRange(0, 200)
+        self.clipboard_volume_slider.setValue(100)
+        self.clipboard_volume_slider.setFixedWidth(120)
+        self.clipboard_volume_slider.valueChanged.connect(self._on_clipboard_volume_change)
+        audio_row.addWidget(self.clipboard_volume_slider)
+        self.clipboard_volume_entry = QLineEdit("100")
+        self.clipboard_volume_entry.setFixedWidth(45)
+        self.clipboard_volume_entry.returnPressed.connect(self._on_clipboard_volume_entry_change)
+        audio_row.addWidget(self.clipboard_volume_entry)
+        audio_row.addWidget(QLabel("%"))
         audio_row.addStretch()
         layout.addLayout(audio_row)
+
+        # Stream settings (aniworld.to / s.to)
+        layout.addWidget(self._hsep())
+        stream_hdr = QLabel(
+            "Stream Settings  (aniworld.to / s.to / bs.to / cine-to.com / hdfilme / allanime.day / animepahe.ru)"
+        )
+        stream_hdr.setStyleSheet(stream_hdr.styleSheet() + "font-size: 11px; font-weight: bold;")
+        layout.addWidget(stream_hdr)
+
+        stream_row = QHBoxLayout()
+        stream_row.setContentsMargins(20, 0, 0, 0)
+        stream_row.addWidget(QLabel("Anime sites:"))
+        self.stream_lang_anime_combo = QComboBox()
+        self.stream_lang_anime_combo.addItems(["German", "English", "Japanese"])
+        self.stream_lang_anime_combo.setCurrentText("German")
+        self.stream_lang_anime_combo.setToolTip(
+            "Language for anime sites (aniworld.to, …)\n"
+            "German = German dub  |  English = English sub (JP audio)  |  Japanese = original JP"
+        )
+        self.stream_lang_anime_combo.currentIndexChanged.connect(self._on_site_lang_changed)
+        stream_row.addWidget(self.stream_lang_anime_combo)
+        stream_row.addSpacing(20)
+        stream_row.addWidget(QLabel("Shows/Movies:"))
+        self.stream_lang_shows_combo = QComboBox()
+        self.stream_lang_shows_combo.addItems(["German", "English", "Japanese"])
+        self.stream_lang_shows_combo.setCurrentText("English")
+        self.stream_lang_shows_combo.setToolTip(
+            "Language for show/movie sites (s.to, bs.to, …)\n"
+            "Japanese falls back to English when unavailable"
+        )
+        self.stream_lang_shows_combo.currentIndexChanged.connect(self._on_site_lang_changed)
+        stream_row.addWidget(self.stream_lang_shows_combo)
+        stream_row.addSpacing(20)
+        stream_row.addWidget(QLabel("Provider:"))
+        self.stream_provider_combo = QComboBox()
+        self.stream_provider_combo.addItems(["Auto", "VOE", "Vidmoly", "Vidoza"])
+        stream_row.addWidget(self.stream_provider_combo)
+        stream_row.addStretch()
+        layout.addLayout(stream_row)
+
+        # Restore persisted category language defaults
+        _clang = self._config.get("category_language_defaults", {})
+        if _clang.get("anime"):
+            self.stream_lang_anime_combo.blockSignals(True)
+            self.stream_lang_anime_combo.setCurrentText(_clang["anime"])
+            self.stream_lang_anime_combo.blockSignals(False)
+        if _clang.get("shows"):
+            self.stream_lang_shows_combo.blockSignals(True)
+            self.stream_lang_shows_combo.setCurrentText(_clang["shows"])
+            self.stream_lang_shows_combo.blockSignals(False)
+
+        trim_row = QHBoxLayout()
+        trim_row.setContentsMargins(20, 0, 0, 0)
+        trim_row.addWidget(QLabel("Trim start:"))
+        self.stream_trim_start = QLineEdit()
+        self.stream_trim_start.setFixedWidth(55)
+        self.stream_trim_start.setPlaceholderText("0:00")
+        self.stream_trim_start.setToolTip("Time to cut from the beginning (mm:ss or seconds)")
+        trim_row.addWidget(self.stream_trim_start)
+        trim_row.addSpacing(16)
+        trim_row.addWidget(QLabel("Trim end:"))
+        self.stream_trim_end = QLineEdit()
+        self.stream_trim_end.setFixedWidth(55)
+        self.stream_trim_end.setPlaceholderText("0:00")
+        self.stream_trim_end.setToolTip("Time to cut from the end (mm:ss or seconds)")
+        trim_row.addWidget(self.stream_trim_end)
+        trim_row.addWidget(QLabel("(mm:ss)"))
+        trim_row.addStretch()
+        layout.addLayout(trim_row)
 
         # Output folder
         layout.addWidget(self._hsep())
@@ -1166,6 +1262,21 @@ class YouTubeDownloader(QMainWindow):
         url_hdr_row.addWidget(clear_btn)
         layout.addLayout(url_hdr_row)
 
+        # Manual URL entry
+        manual_row = QHBoxLayout()
+        self.clipboard_manual_entry = QLineEdit()
+        self.clipboard_manual_entry.setPlaceholderText(
+            "Paste a URL here and press Add  (episode, season, YouTube, playlist…)"
+        )
+        self.clipboard_manual_entry.returnPressed.connect(self._add_manual_url)
+        manual_row.addWidget(self.clipboard_manual_entry)
+        add_btn = QPushButton("Add")
+        add_btn.setFixedWidth(60)
+        add_btn.clicked.connect(self._add_manual_url)
+        manual_row.addWidget(add_btn)
+
+        layout.addLayout(manual_row)
+
         # Scrollable URL list (QScrollArea + QWidget + QVBoxLayout)
         self.clipboard_url_scroll = QScrollArea()
         self.clipboard_url_scroll.setObjectName("urlListScroll")
@@ -1189,6 +1300,12 @@ class YouTubeDownloader(QMainWindow):
         self.clipboard_download_btn.setEnabled(False)
         self.clipboard_download_btn.clicked.connect(self.start_clipboard_downloads)
         ctrl_row.addWidget(self.clipboard_download_btn)
+
+        self.clipboard_retry_btn = QPushButton("Retry Failed")
+        self.clipboard_retry_btn.setEnabled(False)
+        self.clipboard_retry_btn.setToolTip("Reset all failed URLs to pending and re-download")
+        self.clipboard_retry_btn.clicked.connect(self._retry_failed_urls)
+        ctrl_row.addWidget(self.clipboard_retry_btn)
 
         self.clipboard_stop_btn = QPushButton("Stop")
         self.clipboard_stop_btn.setEnabled(False)
@@ -1822,6 +1939,31 @@ class YouTubeDownloader(QMainWindow):
         self.volume_slider.blockSignals(False)
         self.volume_entry.setText(str(val))
 
+    def _on_site_lang_changed(self):
+        """Persist category language defaults when either combo changes."""
+        self._save_config_key(
+            "category_language_defaults",
+            {
+                "anime": self.stream_lang_anime_combo.currentText(),
+                "shows": self.stream_lang_shows_combo.currentText(),
+            },
+        )
+
+    def _on_clipboard_volume_change(self, value: int):
+        self.clipboard_volume_entry.blockSignals(True)
+        self.clipboard_volume_entry.setText(str(value))
+        self.clipboard_volume_entry.blockSignals(False)
+
+    def _on_clipboard_volume_entry_change(self):
+        try:
+            val = max(0, min(200, int(self.clipboard_volume_entry.text())))
+        except (ValueError, TypeError):
+            val = 100
+        self.clipboard_volume_slider.blockSignals(True)
+        self.clipboard_volume_slider.setValue(val)
+        self.clipboard_volume_slider.blockSignals(False)
+        self.clipboard_volume_entry.setText(str(val))
+
     @property
     def volume_value(self):
         """Get volume as a float 0.0 - 2.0 (for business logic compatibility)."""
@@ -2121,10 +2263,38 @@ class YouTubeDownloader(QMainWindow):
                             )
                             self._auto_download_single_url(clipboard_content)
                 else:
-                    logger.debug(f"Clipboard content not a valid YouTube URL: {message}")
+                    # Check for aniworld.to / s.to stream URLs
+                    if is_stream_episode_url(clipboard_content):
+                        url_exists = clipboard_content in self.clipboard_url_widgets
+                        if not url_exists:
+                            self._add_url_to_clipboard_list(clipboard_content)
+                            logger.info(f"Stream episode URL detected: {clipboard_content}")
+                            if self.clipboard_auto_download_check.isChecked():
+                                self._auto_download_single_url(clipboard_content)
+                    elif is_stream_season_url(clipboard_content):
+                        logger.info(f"Stream season URL detected: {clipboard_content}")
+                        self.thread_pool.submit(self._expand_season_url, clipboard_content)
+                    else:
+                        logger.debug(f"Clipboard content not a valid YouTube URL: {message}")
 
         except Exception as e:
             logger.error(f"Error polling clipboard: {e}")
+
+    def _add_manual_url(self):
+        """Handle Add button / Enter press on the manual URL entry field."""
+        url = self.clipboard_manual_entry.text().strip()
+        if not url:
+            return
+        self.clipboard_manual_entry.clear()
+        if is_stream_season_url(url):
+            self.thread_pool.submit(self._expand_season_url, url)
+        elif is_stream_episode_url(url):
+            if url not in self.clipboard_url_widgets:
+                self._add_url_to_clipboard_list(url)
+        else:
+            # YouTube, generic URL — add directly; yt-dlp will validate at download time
+            if url not in self.clipboard_url_widgets:
+                self._add_url_to_clipboard_list(url)
 
     def _add_url_to_clipboard_list(self, url):
         """Add URL to clipboard list with UI widget."""
@@ -2196,6 +2366,9 @@ class YouTubeDownloader(QMainWindow):
                     if url in self.clipboard_url_widgets:
                         del self.clipboard_url_widgets[url]
                     list_is_empty = len(self.clipboard_mgr.clipboard_url_list) == 0
+                    # Reset so the same URL can be re-detected from clipboard
+                    if self.clipboard_mgr.clipboard_last_content == url:
+                        self.clipboard_mgr.clipboard_last_content = ""
                     break
 
         if widget_to_destroy:
@@ -2228,6 +2401,7 @@ class YouTubeDownloader(QMainWindow):
             self.clipboard_mgr.failed_count = 0
             self.clipboard_mgr.downloading_count = 0
             self.clipboard_url_widgets.clear()
+            self.clipboard_mgr.clipboard_last_content = ""  # allow re-detection of same URLs
 
         for widget in widgets_to_destroy:
             widget.deleteLater()
@@ -2286,8 +2460,16 @@ class YouTubeDownloader(QMainWindow):
             "quality": self.clipboard_quality_combo.currentText(),
             "full_playlist": self.clipboard_full_playlist_check.isChecked(),
             "audio_only": self.clipboard_audio_only_check.isChecked(),
+            "volume_raw": self.clipboard_volume_slider.value(),
             "speed_limit": self.clipboard_speed_limit_entry.text().strip(),
             "download_path": self.clipboard_mgr.clipboard_download_path,
+            "category_language_defaults": {
+                "anime": self.stream_lang_anime_combo.currentText(),
+                "shows": self.stream_lang_shows_combo.currentText(),
+            },
+            "stream_provider": self.stream_provider_combo.currentText(),
+            "stream_trim_start": self.stream_trim_start.text().strip(),
+            "stream_trim_end": self.stream_trim_end.text().strip(),
         }
 
     def start_clipboard_downloads(self):
@@ -2321,8 +2503,9 @@ class YouTubeDownloader(QMainWindow):
     def _process_clipboard_queue(self, clip_state=None):
         """Process clipboard download queue (runs in worker thread).
 
-        Uses a single yt-dlp --batch-file process for multiple non-playlist URLs.
-        Falls back to per-URL processing for playlist URLs or single URLs.
+        Stream URLs (aniworld/s.to/bs.to) are always handled sequentially via ffmpeg.
+        Pure-YT queues use a single yt-dlp --batch-file for speed.
+        Mixed queues fall back to sequential so each URL hits the correct handler.
         """
         with self.clipboard_mgr.clipboard_lock:
             pending_urls = [
@@ -2336,13 +2519,17 @@ class YouTubeDownloader(QMainWindow):
             return
 
         full_playlist = clip_state.get("full_playlist", False) if clip_state else False
-        has_playlists = full_playlist and any(utils.is_playlist_url(u) for u in pending_urls)
 
-        # Batch mode: multiple non-playlist URLs
-        if len(pending_urls) > 1 and not has_playlists:
-            self._process_clipboard_queue_batch(pending_urls, clip_state, total_count)
+        has_stream = any(is_stream_episode_url(u) for u in pending_urls)
+        yt_urls = [u for u in pending_urls if not is_stream_episode_url(u)]
+        has_yt_playlists = full_playlist and any(utils.is_playlist_url(u) for u in yt_urls)
+
+        if has_stream:
+            # Mixed or all-stream: sequential routes each URL correctly
+            self._process_clipboard_queue_sequential(pending_urls, clip_state, total_count)
+        elif len(yt_urls) > 1 and not has_yt_playlists:
+            self._process_clipboard_queue_batch(yt_urls, clip_state, total_count)
         else:
-            # Per-URL fallback for single URL or playlist mode
             self._process_clipboard_queue_sequential(pending_urls, clip_state, total_count)
 
         self._safe_after(0, self._finish_clipboard_downloads)
@@ -2401,16 +2588,17 @@ class YouTubeDownloader(QMainWindow):
                 quality = "none"
             audio_only = quality.startswith("none") or clip_state.get("audio_only", False)
             _cdp = clip_state["download_path"] if clip_state else ""
+            _vol = (clip_state.get("volume_raw", 100) / 100.0) if clip_state else 1.0
 
             if audio_only:
-                output_path = os.path.join(_cdp, "%(title)s.%(ext)s")
+                output_path = os.path.join(_cdp, "YTDownloads", "%(title)s.%(ext)s")
                 cmd = self.download_mgr.build_batch_audio_ytdlp_command(
-                    batch_file_path, output_path, volume=1.0
+                    batch_file_path, output_path, volume=_vol
                 )
             else:
-                output_path = os.path.join(_cdp, f"%(title)s_{quality}p.%(ext)s")
+                output_path = os.path.join(_cdp, "YTDownloads", f"%(title)s_{quality}p.%(ext)s")
                 cmd = self.download_mgr.build_batch_video_ytdlp_command(
-                    batch_file_path, output_path, quality, volume=1.0
+                    batch_file_path, output_path, quality, volume=_vol
                 )
 
             # Speed limit — insert before --batch-file
@@ -2566,6 +2754,10 @@ class YouTubeDownloader(QMainWindow):
         Args:
             clip_state: Dict of clipboard widget values snapshot from GUI thread.
         """
+        # Route aniworld / s.to episode URLs to the stream handler
+        if is_stream_episode_url(url):
+            return self._download_stream_url(url, clip_state)
+
         process = None
         try:
             if not clip_state:
@@ -2591,25 +2783,30 @@ class YouTubeDownloader(QMainWindow):
 
             # Build output path template
             _cdp = clip_state["download_path"]
+            _vol = clip_state.get("volume_raw", 100) / 100.0
             if audio_only:
                 if download_as_playlist:
-                    output_path = os.path.join(_cdp, "%(playlist_index)s-%(title)s.%(ext)s")
+                    output_path = os.path.join(
+                        _cdp, "%(playlist_title)s", "%(playlist_index)s-%(title)s.%(ext)s"
+                    )
                 else:
-                    output_path = os.path.join(_cdp, "%(title)s.%(ext)s")
+                    output_path = os.path.join(_cdp, "YTDownloads", "%(title)s.%(ext)s")
             else:
                 if download_as_playlist:
                     output_path = os.path.join(
-                        _cdp, f"%(playlist_index)s-%(title)s_{quality}p.%(ext)s"
+                        _cdp,
+                        "%(playlist_title)s",
+                        f"%(playlist_index)s-%(title)s_{quality}p.%(ext)s",
                     )
                 else:
-                    output_path = os.path.join(_cdp, f"%(title)s_{quality}p.%(ext)s")
+                    output_path = os.path.join(_cdp, "YTDownloads", f"%(title)s_{quality}p.%(ext)s")
 
             # Build yt-dlp command
             if audio_only:
-                cmd = self.download_mgr.build_audio_ytdlp_command(url, output_path, volume=1.0)
+                cmd = self.download_mgr.build_audio_ytdlp_command(url, output_path, volume=_vol)
             else:
                 cmd = self.download_mgr.build_video_ytdlp_command(
-                    url, output_path, quality, volume=1.0
+                    url, output_path, quality, volume=_vol
                 )
 
             if url_is_playlist and not full_playlist_enabled:
@@ -2729,6 +2926,160 @@ class YouTubeDownloader(QMainWindow):
             if process:
                 utils.safe_process_cleanup(process)
 
+    # ------------------------------------------------------------------
+    # Stream download helpers (aniworld.to / s.to)
+    # ------------------------------------------------------------------
+
+    def _download_stream_url(self, url: str, clip_state: dict | None) -> bool:
+        """Download a single aniworld/s.to episode via ffmpeg. Runs in worker thread.
+
+        Retries once automatically on failure (network hiccup / temporary error).
+        """
+        if not clip_state:
+            clip_state = {"download_path": self.clipboard_mgr.clipboard_download_path}
+
+        # Category-based language: anime sites vs shows/movies
+        category = get_site_category(url)
+        cat_defaults = clip_state.get("category_language_defaults", {})
+        language = cat_defaults.get(category, "German" if category == "anime" else "English")
+
+        provider = clip_state.get("stream_provider", "Auto")
+        download_path = clip_state.get("download_path", self.clipboard_mgr.clipboard_download_path)
+        volume = clip_state.get("volume_raw", 100) / 100.0
+
+        raw_quality = clip_state.get("quality", "1080")
+        try:
+            target_height = int(raw_quality)
+        except (ValueError, TypeError):
+            target_height = 1080
+
+        max_attempts = 2
+        last_exc: Exception | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                if attempt > 1:
+                    self._safe_after(
+                        0,
+                        lambda a=attempt: self.update_clipboard_status(
+                            f"Retrying (attempt {a})…", "orange"
+                        ),
+                    )
+                    time.sleep(3)
+
+                self._safe_after(0, lambda: self.clipboard_progress.setRange(0, 0))
+                self._safe_after(
+                    0, lambda: self.update_clipboard_status("Extracting stream URL…", "blue")
+                )
+
+                stream_url, referer = self.stream_mgr.get_stream(url, language, provider)
+                stream_url = self.stream_mgr.select_hls_quality(stream_url, target_height)
+
+                sname = stream_series_name(url)
+                snum = stream_season_num(url)
+                enum = stream_episode_num(url)
+                # kinox.to movies: snum=0, enum=0 → save as plain title
+                if snum == 0 and enum == 0:
+                    fname = f"{sname}.mkv"
+                    out_dir = Path(download_path) / "Movies"
+                else:
+                    fname = f"{sname} S{snum:02d}E{enum:03d}.mkv"
+                    out_dir = Path(download_path) / sname
+                out_dir.mkdir(parents=True, exist_ok=True)
+                out_path = out_dir / fname
+
+                self._safe_after(
+                    0,
+                    lambda f=fname: self.update_clipboard_status(f"Downloading {f}…", "blue"),
+                )
+
+                def _speed_cb(speed: str, bitrate: str, f=fname) -> None:
+                    parts = []
+                    if speed:
+                        parts.append(f"{speed}")
+                    if bitrate:
+                        parts.append(bitrate)
+                    suffix = "  " + " | ".join(parts) if parts else ""
+                    self._safe_after(
+                        0,
+                        lambda s=f"Downloading {f}…{suffix}": self.update_clipboard_status(
+                            s, "blue"
+                        ),
+                    )
+
+                success = self.stream_mgr.run_ffmpeg(
+                    stream_url,
+                    referer,
+                    out_path,
+                    stop_event=self.clipboard_mgr.clipboard_stop_event,
+                    volume=volume,
+                    status_cb=_speed_cb,
+                )
+
+                if success:
+                    start_trim = parse_trim_seconds(clip_state.get("stream_trim_start", ""))
+                    end_trim = parse_trim_seconds(clip_state.get("stream_trim_end", ""))
+                    if (start_trim > 0 or end_trim > 0) and out_path.exists():
+                        self._safe_after(0, lambda: self.clipboard_progress.setRange(0, 0))
+                        self._safe_after(
+                            0, lambda: self.update_clipboard_status("Trimming…", "blue")
+                        )
+                        self.stream_mgr.trim_file(out_path, start_trim, end_trim)
+
+                self._safe_after(0, lambda: self.clipboard_progress.setRange(0, 100))
+                if success:
+                    self._safe_after(0, lambda: self.clipboard_progress.setValue(100))
+                    return True
+
+                # ffmpeg returned non-zero — retry if attempts remain
+                last_exc = RuntimeError(f"ffmpeg exited with non-zero status")
+
+            except Exception as e:
+                last_exc = e
+                if self.clipboard_mgr.clipboard_stop_event.is_set():
+                    break
+                logger.warning(f"Stream attempt {attempt} failed for {url}: {e}")
+
+        # All attempts exhausted
+        err_msg = str(last_exc) if last_exc else "Unknown error"
+        logger.error(f"Stream download failed after {max_attempts} attempts: {url}: {err_msg}")
+        self._safe_after(0, lambda m=err_msg: self.update_clipboard_status(f"Error: {m}", "red"))
+        self._safe_after(0, lambda: self.clipboard_progress.setRange(0, 100))
+        return False
+
+    def _expand_season_url(self, season_url: str) -> None:
+        """Fetch episode list for a season URL and show confirmation dialog (worker thread)."""
+        try:
+            episodes = self.stream_mgr.get_season_episodes(season_url)
+            if not episodes:
+                logger.warning(f"No episodes found for season URL: {season_url}")
+                return
+            name = stream_series_name(season_url)
+            snum = stream_season_num(season_url)
+            self._safe_after(0, lambda: self._confirm_season_add(season_url, episodes, name, snum))
+        except Exception as e:
+            logger.error(f"Failed to fetch season episodes for {season_url}: {e}")
+
+    def _confirm_season_add(self, season_url: str, episodes: list, name: str, snum: int) -> None:
+        """Show confirmation dialog then add season episodes to the queue (GUI thread)."""
+        count = len(episodes)
+        result = QMessageBox.question(
+            self,
+            "Add Season to Queue",
+            f"{name} — Season {snum}\n{count} episodes\n\n"
+            f"Save to: {self.clipboard_mgr.clipboard_download_path}\n\n"
+            f"Add all to download queue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            logger.info("Season download cancelled by user")
+            return
+        for ep_url in episodes:
+            if ep_url not in self.clipboard_url_widgets:
+                self._add_url_to_clipboard_list(ep_url)
+        if self.clipboard_auto_download_check.isChecked():
+            self.start_clipboard_downloads()
+
     def _finish_clipboard_downloads(self):
         """Clean up after batch downloads complete."""
         self.clipboard_mgr.clipboard_stop_event.set()
@@ -2738,6 +3089,7 @@ class YouTubeDownloader(QMainWindow):
             failed = self.clipboard_mgr.failed_count
 
         self.clipboard_download_btn.setEnabled(has_urls)
+        self.clipboard_retry_btn.setEnabled(failed > 0)
         self.clipboard_stop_btn.setEnabled(False)
 
         if failed > 0:
@@ -2746,6 +3098,19 @@ class YouTubeDownloader(QMainWindow):
             self.update_clipboard_status(f"All downloads complete! ({completed} videos)", "green")
 
         logger.info(f"Clipboard batch download finished: {completed} completed, {failed} failed")
+
+    def _retry_failed_urls(self):
+        """Reset all failed URLs to pending and restart the download queue."""
+        with self.clipboard_mgr.clipboard_lock:
+            failed_urls = [
+                item["url"]
+                for item in self.clipboard_mgr.clipboard_url_list
+                if item["status"] == "failed"
+            ]
+        for url in failed_urls:
+            self._update_url_status(url, "pending")
+        self.clipboard_retry_btn.setEnabled(False)
+        self.start_clipboard_downloads()
 
     def stop_clipboard_downloads(self):
         """Stop clipboard batch downloads and auto-downloads."""
