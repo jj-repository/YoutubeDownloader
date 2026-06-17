@@ -88,9 +88,19 @@ _ALLANIME_PAT = re.compile(r"^https?://(?:www\.)?allanime\.[a-z]+/anime/[^/]+")
 # animepahe: show page treated as season
 _ANIMEPAHE_PAT = re.compile(r"^https?://(?:www\.)?animepahe\.[a-z]+/anime/[^/?#]+/?$")
 
+# aniworld.to / s.to canonical URLs carry a "/stream/" segment, but s.to URLs
+# copied from the browser address bar omit it. Insert it when missing so both
+# forms are accepted and fetched against the canonical page.
+_STREAM_INSERT_PAT = re.compile(r"^(https://(?:aniworld\.to|s\.to)/(?:anime|serie))/(?!stream/)")
+
+
+def normalize_stream_url(url: str) -> str:
+    """Insert the '/stream/' segment for aniworld/s.to URLs that lack it."""
+    return _STREAM_INSERT_PAT.sub(r"\1/stream/", url.strip())
+
 
 def is_stream_episode_url(url: str) -> bool:
-    u = url.strip()
+    u = normalize_stream_url(url)
     if u.startswith("allanime://") or u.startswith("animepahe://"):
         return True
     return bool(
@@ -102,7 +112,7 @@ def is_stream_episode_url(url: str) -> bool:
 
 
 def is_stream_season_url(url: str) -> bool:
-    u = url.strip()
+    u = normalize_stream_url(url)
     return bool(
         _SEASON_PAT.match(u)
         or _BSTO_SEASON_PAT.match(u)

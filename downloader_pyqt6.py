@@ -87,6 +87,7 @@ from managers.stream_manager import (
     get_site_category,
     is_stream_episode_url,
     is_stream_season_url,
+    normalize_stream_url,
     parse_trim_seconds,
     stream_episode_num,
     stream_season_num,
@@ -2262,6 +2263,8 @@ class YouTubeDownloader(QMainWindow):
                             self._auto_download_single_url(clipboard_content)
                 else:
                     # Check for aniworld.to / s.to stream URLs
+                    # Normalize so browser-copied s.to URLs (missing /stream/) work.
+                    clipboard_content = normalize_stream_url(clipboard_content)
                     if is_stream_episode_url(clipboard_content):
                         url_exists = clipboard_content in self.clipboard_url_widgets
                         if not url_exists:
@@ -2280,7 +2283,7 @@ class YouTubeDownloader(QMainWindow):
 
     def _add_manual_url(self):
         """Handle Add button / Enter press on the manual URL entry field."""
-        url = self.clipboard_manual_entry.text().strip()
+        url = normalize_stream_url(self.clipboard_manual_entry.text())
         if not url:
             return
         self.clipboard_manual_entry.clear()
